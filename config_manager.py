@@ -28,6 +28,9 @@ class ConfigManager:
 
     def _load_config(self) -> dict[str, Any]:
         """加载配置"""
+        if hasattr(self.plugin, "config") and self.plugin.config:
+            return self.plugin.config
+
         try:
             config_data = asyncio.run(
                 self.plugin.get_kv_data("config", self.DEFAULT_CONFIG)
