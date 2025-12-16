@@ -91,26 +91,37 @@ class FileGeneratorPlugin(Star):
 
     def _check_permission(self, event: AstrMessageEvent) -> bool:
         """检查用户是否有权限使用插件"""
-        # 如果不需要管理员权限，直接通过
-        if not self.config_mgr.get("require_admin", False):
-            # 检查白名单
-            whitelist = self.config_mgr.get("whitelist_users", [])
-            if not whitelist:  # 白名单为空，所有人可用
-                return True
+        # 获取配置
+        require_admin = self.config_mgr.get("require_admin", False)
+        whitelist_config = self.config_mgr.get("whitelist_users", "")
 
-            # 检查用户是否在白名单中
-            user_id = event.get_sender_id()
-            if user_id in whitelist:
-                return True
+        # 处理白名单数据
+        if isinstance(whitelist_config, list):
+            # 兼容旧配置或直接列表格式
+            whitelist = [str(u) for u in whitelist_config]
+        elif isinstance(whitelist_config, str) and whitelist_config.strip():
+            # 处理 WebUI 传来的多行文本 (每行一个ID)
+            whitelist = [
+                line.strip()
+                for line in whitelist_config.replace("\r\n", "\n").split("\n")
+                if line.strip()
+            ]
 
-            logger.info(f"[文件生成器] 用户 {user_id} 不在白名单中")
-            return False
-
-        # 需要管理员权限
-        if event.is_admin():
+        # 如果不需要管理员且白名单为空，则所有人可用
+        if not require_admin and not whitelist:
             return True
 
-        logger.info(f"[文件生成器] 用户 {event.get_sender_id()} 无管理员权限")
+        user_id = str(event.get_sender_id())
+
+        # 检查白名单
+        if user_id in whitelist:
+            return True
+
+        # 检查管理员权限
+        if require_admin and event.is_admin():
+            return True
+
+        logger.info(f"[文件生成器] 用户 {user_id} 无权限使用 (不在白名单且非管理员)")
         return False
 
     def _is_bot_mentioned(self, event: AstrMessageEvent) -> bool:
