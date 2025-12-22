@@ -2,31 +2,19 @@
     "trigger_settings": {
         "description": "触发设置",
         "type": "object",
-        "hint": "控制机器人响应生成文件的场景",
+        "hint": "控制机器人何时允许调用文件工具",
         "items": {
-            "auto_detect_in_private": {
-                "description": "私聊自动检测",
-                "type": "bool",
-                "hint": "私聊时是否自动分析每一句话来生成文件",
-                "default": true
-            },
-            "auto_detect_in_group": {
-                "description": "群聊自动检测",
-                "type": "bool",
-                "hint": "群聊时是否自动分析每一句话",
-                "default": false
-            },
             "require_at_in_group": {
-                "description": "群聊需要@机器人",
+                "description": "群聊需要@/引用机器人",
                 "type": "bool",
-                "hint": "群聊中是否只有被@时才触发文件生成",
+                "hint": "开启后，群聊中仅在@/引用机器人时模型才会获得文件操作能力。这能有效防止模型在群聊中误触发工具并节省Token。",
                 "default": true
             },
-            "min_message_length": {
-                "description": "最小消息长度",
-                "type": "int",
-                "hint": "消息长度少于此值时不进行AI分析，节省Token",
-                "default": 15
+            "reply_to_user": {
+                "description": "回复/引用用户",
+                "type": "bool",
+                "hint": "发送生成的文件时，是否引用用户的原始消息或@用户。",
+                "default": true
             }
         }
     },
@@ -38,26 +26,26 @@
             "require_admin": {
                 "description": "仅管理员可用",
                 "type": "bool",
-                "hint": "是否限制只有 AstrBot 管理员才能生成文件",
+                "hint": "是否限制只有管理员才能调用文件工具",
                 "default": false
             },
             "whitelist_users": {
                 "description": "用户白名单",
-                "type": "text",
-                "hint": "指定允许使用插件的用户QQ号，每行一个（留空表示允许所有人/或由管理员开关控制）",
-                "default": ""
+                "type": "list",
+                "hint": "允许使用插件的用户ID,每行一个。",
+                "default": []
             }
         }
     },
     "feature_settings": {
         "description": "功能开关",
         "type": "object",
-        "hint": "启用或禁用特定文件类型的生成",
+        "hint": "启用或禁用特定功能",
         "items": {
             "enable_office_files": {
                 "description": "启用 Office 文件",
                 "type": "bool",
-                "hint": "是否允许生成 Word/Excel/PPT 文件（需要安装对应依赖库）",
+                "hint": "是否允许生成Word/Excel/PPT文件。",
                 "default": true
             }
         }
