@@ -1,6 +1,6 @@
-name: astrbot_plugin_file_generator
-display_name: 文件生成器
-desc: 让Bot能够根据对话内容生成文件（代码、文本等）并发送给用户
+name: astrbot_plugin_file_operation_tool
+display_name: llm文件管理
+desc: 一个赋予大型语言模型读取、写入和管理文件能力的插件。
 version: v1.0.0
 author: Clhikari
-repo: https://github.com/Clhikari/astrbot_plugin_file_generator
+repo: https://github.com/Clhikari/astrbot_plugin_file_operation_tool
