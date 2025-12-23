@@ -31,7 +31,8 @@ pip install python-docx openpyxl python-pptx
 1. `list_files`: 查看当前工作区的所有文件详情。
 2. `read_file`: 读取文本类文件的内容。
 3. `write_file`: 创建、更新或生成各种格式的文件（含 Office）。
-4. `delete_file`: 永久删除指定文件。
+4. `delete_file`: 永久删除指定文件.
+5. `convert_file`: 转换文件格式（未实现）。
 
 ## 📝 开发日志
 
