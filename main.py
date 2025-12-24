@@ -26,11 +26,11 @@ class FileOperationPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.plugin_data_path = (
-            Path(get_astrbot_data_path()) / "plugins_file_operation_tool"
-        )
 
-        Store_files = strself.plugin_data_path + "Store files"
+        self.plugin_data_path = (
+            Path(get_astrbot_data_path()) / "plugins_file_operation_tool" / "files"
+        )
+        self.plugin_data_path.mkdir(parents=True, exist_ok=True)
 
         self.file_gen = FileGenerator(self.plugin_data_path)
         self.office_gen = OfficeGenerator(self.plugin_data_path)
@@ -151,6 +151,7 @@ class FileOperationPlugin(Star):
                     return f"内容:\n{f.read()}"
             return "该文件为二进制格式，无法直接读取。"
         except Exception as e:
+            await event.send(MessageChain().message("文件不存在，请检车"))
             return f"读取失败: {e}"
 
     @llm_tool(name="write_file")
@@ -163,12 +164,14 @@ class FileOperationPlugin(Star):
     ) -> str:
         """在机器人工作区中创建或更新文件。"""
         if not self._check_permission(event):
-            return "拒绝访问：权限不足。"
+            await event.send(MessageChain().message("拒绝访问：权限不足"))
 
         if file_type.lower() in ["word", "excel", "powerpoint"] and not self.config.get(
             "feature_settings", {}
         ).get("enable_office_files", True):
-            return "错误：当前配置禁用了 Office 文件生成功能。"
+            await event.send(
+                MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
+            )
 
         file_info = {
             "type": file_type.lower(),
