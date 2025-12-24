@@ -41,6 +41,9 @@ pip install python-docx openpyxl python-pptx
 - **动态注入机制**：实现了基于场景和权限的工具动态隐藏逻辑（`on_llm_request`），在非必要场景下不向模型暴露文件工具。
 - **安全加固**：完善了群聊触发逻辑，增加了对“引用/回复机器人消息”的判定支持。
 
+### [2025-12-24] 修正office导包
+ - 今天只改了一个小bug，没什么空写(
+
 ### [早期版本] 初始功能实现
 - 支持基础的文本文件读写。
 - 集成 `file_generator` 和 `office_generator` 底层引擎。
