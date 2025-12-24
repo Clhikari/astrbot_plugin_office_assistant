@@ -27,9 +27,7 @@ class FileOperationPlugin(Star):
         super().__init__(context)
         self.config = config
 
-        self.plugin_data_path = (
-            Path(get_astrbot_data_path()) / "plugins_file_operation_tool" / "files"
-        )
+        self.plugin_data_path = Path(__file__).parent / "files"
         self.plugin_data_path.mkdir(parents=True, exist_ok=True)
 
         self.file_gen = FileGenerator(self.plugin_data_path)
