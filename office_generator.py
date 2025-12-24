@@ -2,6 +2,10 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from docx import Document
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
+from pptx import Presentation
 import importlib.util
 
 from astrbot.api import logger
@@ -92,8 +96,6 @@ class OfficeGenerator:
 
     async def _generate_word(self, file_path: Path, content: dict):
         """生成Word文档"""
-        from docx import Document
-
         doc = Document()
 
         # 添加标题
@@ -125,9 +127,6 @@ class OfficeGenerator:
 
     async def _generate_excel(self, file_path: Path, content: dict):
         """生成Excel表格"""
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment, PatternFill
-
         wb = Workbook()
 
         # 删除默认sheet
@@ -163,8 +162,6 @@ class OfficeGenerator:
 
     async def _generate_powerpoint(self, file_path: Path, content: dict):
         """生成PowerPoint演示文稿"""
-        from pptx import Presentation
-
         prs = Presentation()
 
         # 添加幻灯片
