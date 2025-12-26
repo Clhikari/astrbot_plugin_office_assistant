@@ -11,9 +11,9 @@
                 "default": true
             },
             "reply_to_user": {
-                "description": "回复/引用用户",
+                "description": "发送文件时@用户",
                 "type": "bool",
-                "hint": "发送生成的文件时，是否引用用户的原始消息或@用户。",
+                "hint": "发送生成的文件时，是否@用户。",
                 "default": true
             }
         }
@@ -32,7 +32,7 @@
             "whitelist_users": {
                 "description": "用户白名单",
                 "type": "list",
-                "hint": "允许使用插件的用户ID,每行一个。",
+                "hint": "允许使用插件的用户ID，每行一个。留空则允许所有用户（受管理员设置约束）。",
                 "default": []
             }
         }
@@ -43,10 +43,35 @@
         "hint": "启用或禁用特定功能",
         "items": {
             "enable_office_files": {
-                "description": "启用 Office 文件",
+                "description": "启用 Office 文件生成",
                 "type": "bool",
-                "hint": "是否允许生成Word/Excel/PPT文件。",
+                "hint": "是否允许生成 Word/Excel/PPT 文件。",
                 "default": true
+            }
+        }
+    },
+    "file_settings": {
+        "description": "文件限制",
+        "type": "object",
+        "hint": "控制文件操作的限制",
+        "items": {
+            "max_file_size_mb": {
+                "description": "最大文件大小(MB)",
+                "type": "int",
+                "hint": "允许读取/发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
+                "default": 50
+            },
+            "max_read_text_kb": {
+                "description": "文本预览大小(KB)",
+                "type": "int",
+                "hint": "读取文本文件时的最大预览大小，单位为 KB。超出部分会被截断。",
+                "default": 100
+            },
+            "allowed_extensions": {
+                "description": "允许的文件扩展名",
+                "type": "list",
+                "hint": "允许操作的文件扩展名列表。留空则允许所有类型。例如: txt, docx, xlsx, pdf",
+                "default": []
             }
         }
     }
