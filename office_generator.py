@@ -1,11 +1,15 @@
 import json
 from pathlib import Path
+import asyncio
 from datetime import datetime
 from typing import Optional
 from docx import Document
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
+from astrbot.api.event import AstrMessageEvent
+from astrbot.core.message.message_event_result import MessageChain
 from pptx import Presentation
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 
 from astrbot.api import logger
@@ -17,6 +21,14 @@ class OfficeGenerator:
     def __init__(self, data_path: Path):
         self.data_path = data_path
         self.support = self._check_support()
+        self._executor = ThreadPoolExecutor(max_workers=2)
+
+    async def _generate_word(self, file_path: Path, content: dict):
+        """生成Word文档"""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            self._executor, self._generate_word_sync, file_path, content
+        )
 
     def _check_support(self) -> dict[str, bool]:
         """检查Office库支持"""
@@ -42,10 +54,14 @@ class OfficeGenerator:
 
         return support
 
-    async def generate(self, file_type: str, file_info: dict) -> Optional[Path]:
+    async def generate(self, event: AstrMessageEvent, file_type: str, file_info: dict) -> Optional[Path]:
         """生成Office文件"""
         if not self.support.get(file_type, False):
-            logger.warning(f"[文件生成器] {file_type}文件生成不支持，缺少相关库")
+            await event.send(
+                MessageChain().message(
+                    f"[文件生成器] {file_type}文件生成不支持，缺少相关库"
+                )
+            )
             return None
 
         try:
@@ -94,7 +110,7 @@ class OfficeGenerator:
             return {"slides": [{"title": "内容", "content": [text]}]}
         return {}
 
-    async def _generate_word(self, file_path: Path, content: dict):
+    async def _generate_word_sync(self, file_path: Path, content: dict):
         """生成Word文档"""
         doc = Document()
 
