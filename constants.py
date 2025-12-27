@@ -61,8 +61,6 @@ TEXT_SUFFIXES = frozenset(
     }
 )
 
-IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"})
-
 # 默认值
 DEFAULT_MAX_FILE_SIZE_MB = 50
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
