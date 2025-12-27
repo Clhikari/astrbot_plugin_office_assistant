@@ -1,12 +1,13 @@
 import base64
 import importlib
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from pptx import Presentation
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger, llm_tool, AstrBotConfig
 from astrbot.api.provider import ProviderRequest
-from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
+from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.message.components import At, Reply
 import astrbot.api.message_components as Comp
@@ -14,31 +15,15 @@ import astrbot.api.message_components as Comp
 # 导入底层生成器
 from .office_generator import OfficeGenerator
 from .utils import format_file_size
-
-TEXT_SUFFIXES = frozenset(
-    {
-        ".txt",
-        ".md",
-        ".py",
-        ".js",
-        ".ts",
-        ".json",
-        ".csv",
-        ".html",
-        ".css",
-        ".yaml",
-        ".yml",
-        ".xml",
-        ".sql",
-        ".sh",
-        ".bat",
-        ".c",
-        ".cpp",
-        ".java",
-    }
+from .constants import (
+    DEFAULT_MAX_FILE_SIZE_MB,
+    FILE_TOOLS,
+    OFFICE_LIBS,
+    OFFICE_SUFFIXES,
+    OFFICE_TYPE_MAP,
+    OfficeType,
+    TEXT_SUFFIXES,
 )
-
-MAX_TEXT_READ = 200 * 1024  # 200 KB
 
 
 class FileOperationPlugin(Star):
@@ -53,8 +38,8 @@ class FileOperationPlugin(Star):
 
         self.office_gen = OfficeGenerator(self.plugin_data_path)
 
-        self.FILE_TOOLS = ["list_files", "read_file", "write_file", "delete_file"]
         self._office_libs = self._check_office_libs()
+        self._executor = ThreadPoolExecutor(max_workers=2)
         logger.info(f"[文件管理] 插件加载完成。数据目录: {self.plugin_data_path}")
 
     def _check_permission(self, event: AstrMessageEvent) -> bool:
@@ -109,13 +94,9 @@ class FileOperationPlugin(Star):
     def _check_office_libs(self) -> dict:
         """检查并缓存 Office 库的可用性"""
         libs = {}
-        lib_names = {
-            "docx": "python-docx",
-            "openpyxl": "openpyxl",
-            "pptx": "python-pptx",
-        }
-        for module_name, package_name in lib_names.items():
+        for office_type in OFFICE_LIBS:
             try:
+                module_name, package_name = OFFICE_LIBS[office_type]
                 libs[module_name] = importlib.import_module(module_name)
                 logger.debug(f"[文件管理] {package_name} 已加载")
             except ImportError:
@@ -123,40 +104,58 @@ class FileOperationPlugin(Star):
                 logger.warning(f"[文件管理] {package_name} 未安装")
         return libs
 
+    async def _read_file_as_base64(
+        self, file_path: Path, chunk_size: int = 64 * 1024
+    ) -> str:
+        """
+        异步分块读取文件并转为 Base64
+
+        Args:
+            file_path: 文件路径
+            chunk_size: 每次读取的块大小，默认 64KB
+                        (Base64 编码要求输入是 3 的倍数，64KB = 65536 是 3 的倍数)
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, self._read_file_as_base64_sync, file_path, chunk_size
+        )
+
+    def _read_file_as_base64_sync(self, file_path: Path, chunk_size: int) -> str:
+        """同步分块读取文件并转为 Base64"""
+        # 确保 chunk_size 是 3 的倍数
+        chunk_size = (chunk_size // 3) * 3
+
+        # 防御性检查：确保chunk_size有效
+        if chunk_size <= 0:
+            chunk_size = 64 * 1024
+
+        encoded_chunks = []
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                encoded_chunks.append(base64.b64encode(chunk).decode("utf-8"))
+
+        return "".join(encoded_chunks)
+
     def _get_max_file_size(self) -> int:
         """获取最大文件大小（字节）"""
-        mb = self.config.get("file_settings", {}).get("max_file_size_mb", 50)
+        mb = self.config.get("file_settings", {}).get(
+            "max_file_size_mb", DEFAULT_MAX_FILE_SIZE_MB
+        )
         return mb * 1024 * 1024
-
-    def _get_max_read_text_size(self) -> int:
-        """获取文本预览最大大小（字节）"""
-        kb = self.config.get("file_settings", {}).get("max_read_text_kb", 100)
-        return kb * 1024
-
-    def _get_allowed_extensions(self) -> set:
-        """获取允许的扩展名集合"""
-        extensions = self.config.get("file_settings", {}).get("allowed_extensions", [])
-        if not extensions:
-            return set()  # 空集合表示允许所有
-        # 确保扩展名以点开头
-        return {f".{ext.lower().lstrip('.')}" for ext in extensions}
-
-    def _is_extension_allowed(self, filename: str) -> bool:
-        """检查文件扩展名是否允许"""
-        allowed = self._get_allowed_extensions()
-        if not allowed:  # 空集合 = 允许所有
-            return True
-        suffix = Path(filename).suffix.lower()
-        return suffix in allowed
 
     @filter.on_llm_request()
     async def before_llm_chat(self, event: AstrMessageEvent, req: ProviderRequest):
         """动态控制工具可见性"""
         trigger_cfg = self.config.get("trigger_settings", {})
-
-        is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         should_expose = True
-
+        is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
+        is_friend = MessageType.FRIEND_MESSAGE
+        # 私聊判断
+        if is_friend:
+            return
         # 权限拦截
         if not self._check_permission(event):
             should_expose = False
@@ -169,7 +168,7 @@ class FileOperationPlugin(Star):
             should_expose = False
 
         if not should_expose and req.func_tool:
-            for tool_name in self.FILE_TOOLS:
+            for tool_name in FILE_TOOLS:
                 req.func_tool.remove_tool(tool_name)
 
     @llm_tool(name="list_files")
@@ -180,11 +179,10 @@ class FileOperationPlugin(Star):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
             return "拒绝访问：权限不足"
         try:
-            office_suffixes = {".docx", ".xlsx", ".pptx"}
             files = [
                 f
                 for f in self.plugin_data_path.glob("*")
-                if f.is_file() and f.suffix.lower() in office_suffixes
+                if f.is_file() and f.suffix.lower() in OFFICE_SUFFIXES
             ]
             if not files:
                 msg = "文件库当前没有 Office 文件"
@@ -206,64 +204,39 @@ class FileOperationPlugin(Star):
 
     @llm_tool(name="read_file")
     async def read_file(self, event: AstrMessageEvent, filename: str) -> str | None:
-        """读取并查看文件内容。"""
+        """读取文件内容并返回给 LLM 处理。LLM 会根据用户的请求（如总结、分析、提取信息等）对文件内容进行相应处理。"""
         if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return ""
+            return "错误：拒绝访问，权限不足"
         valid, file_path, error = self._validate_path(filename)
         if not valid:
-            await event.send(MessageChain().message(f"❌ {error}"))
-            return error
+            return f"错误：{error}"
         if not file_path.exists():
-            await event.send(MessageChain().message("文件不存在，请检查"))
-            return ""
-        if not self._is_extension_allowed(filename):
-            await event.send(MessageChain().message("❌ 不支持的文件类型"))
-            return "错误：不支持的文件类型"
+            return f"错误：文件 '{filename}' 不存在"
 
         file_size = file_path.stat().st_size
         max_size = self._get_max_file_size()
         if file_size > max_size:
             size_str = format_file_size(file_size)
             max_str = format_file_size(max_size)
-            await event.send(
-                MessageChain().message(f"❌ 文件过大 ({size_str})，限制 {max_str}")
-            )
             return f"错误：文件大小 {size_str} 超过限制 {max_str}"
         try:
             suffix = file_path.suffix.lower()
-                # 文本文件：使用流式读取并限制最大读取量以防止内存耗尽
-            if suffix in {".txt", ".md", ".json", ".csv", ".log", ".py", ".js", ".html", ".css", ".xml", ".yaml", ".yml"}:
-                max_text = self._get_max_read_text_size()
+            file_size = file_path.stat().st_size
+            # 文本文件：使用流式读取并限制最大读取量以防止内存耗尽
+            if suffix in TEXT_SUFFIXES:
                 try:
-                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                        content = f.read(max_text + 1)
-
-                    if len(content) > max_text:
-                        content = content[:max_text]
-                        truncated = True
-                    else:
-                        truncated = False
-
-                    result = f"📄 文件: {filename}\n"
-                    result += f"📏 大小: {format_file_size(file_size)}\n"
-                    if truncated:
-                        result += f"⚠️ 内容已截断（显示前 {format_file_size(max_text)}）\n"
-                    result += f"{'─' * 30}\n{content}"
-
-                    await event.send(MessageChain().message(result[:100]))
-                    return result
+                    content = file_path.read_text(encoding="utf-8", errors="replace")
+                    return f"[文件: {filename}, 大小: {format_file_size(file_size)}]\n{content}"
 
                 except Exception as e:
                     logger.error(f"读取文件失败: {e}")
-                    return f"读取失败: {e}"
+                    return f"错误：读取文件失败 - {e}"
 
             # Office 文件：尝试提取文本（若未安装对应解析库，则提示为二进制）
-            office_suffixes = {".docx", ".xlsx", ".pptx"}
-            if suffix in office_suffixes:
+            if suffix == ".docx" and self._office_libs.get("docx"):
                 extracted = None
-                try:  # ← 添加 try 块
-                    if suffix == ".docx" and self._office_libs.get("docx"):
+                try:
+                    if suffix == OfficeType.WORD and self._office_libs.get("docx"):
                         from docx import Document
 
                         doc = Document(file_path)
@@ -280,41 +253,41 @@ class FileOperationPlugin(Star):
                                 texts.append(
                                     "\t".join("" if v is None else str(v) for v in row)
                                 )
-                                if len("\n".join(texts)) > MAX_TEXT_READ:
+                                if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
                                     break
-                            if len("\n".join(texts)) > MAX_TEXT_READ:
+                            if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
                                 break
                         extracted = "\n".join(texts)
                     elif suffix == ".pptx" and self._office_libs.get("pptx"):
+                        from pptx import Presentation
+
                         prs = Presentation(file_path)
                         texts = []
                         for slide in prs.slides:
                             for shape in slide.shapes:
                                 if hasattr(shape, "text"):
                                     texts.append(shape.text)
-                                if len("\n".join(texts)) > MAX_TEXT_READ:
+                                if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
                                     break
-                            if len("\n".join(texts)) > MAX_TEXT_READ:
+                            if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
                                 break
                         extracted = "\n".join(texts)
                 except Exception as exc:
                     logger.warning(f"Office 文本提取失败: {exc}", exc_info=True)
 
                 if extracted:
-                    if len(extracted) > MAX_TEXT_READ:
-                        extracted = extracted[:MAX_TEXT_READ] + "\n\n...（已截断）..."
-                    await event.send(MessageChain().message(f"提取内容:\n{extracted}"))
-                    return extracted
+                    if len(extracted) > DEFAULT_MAX_FILE_SIZE_MB:
+                        extracted = (
+                            extracted[:DEFAULT_MAX_FILE_SIZE_MB]
+                            + "\n\n...（内容已截断）..."
+                        )
+                    result = f"[文件信息] 文件名: {filename}, 类型: {suffix}, 大小: {format_file_size(file_size)}\n[文件内容]\n{extracted}"
+                    return result
 
-                await event.send(
-                    MessageChain().message(
-                        "该文件为二进制格式或未安装解析库，无法直接读取。"
-                    )
-                )
-                return "该文件为二进制格式，无法直接读取。"
+                return f"错误：文件 '{filename}' 为二进制格式或未安装对应解析库，无法读取内容"
         except Exception as e:
-            await event.send(MessageChain().message("文件不存在，请检查"))
-            return f"读取失败: {e}"
+            logger.error(f"读取文件失败: {e}")
+            return f"错误：读取文件失败 - {e}"
 
     @llm_tool(name="write_file")
     async def write_file(
@@ -322,21 +295,21 @@ class FileOperationPlugin(Star):
         event: AstrMessageEvent,
         filename: str,
         content: str,
-        file_type: str = "text",
+        file_type: str = "word",
     ):
         """在机器人工作区中创建或更新文件（仅支持 Office 文件）。"""
         filename = Path(filename).name
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-
         file_type_lower = file_type.lower()
-        # 目前仅支持 Office 文件的生成
-        if file_type_lower not in ["word", "excel", "powerpoint"]:
+        office_type = OFFICE_TYPE_MAP.get(file_type_lower)
+        if not office_type:
             await event.send(
                 MessageChain().message(
-                    "❌ 错误：当前仅支持 Office 文件（word/excel/powerpoint）生成。"
+                    f"❌ 不支持的类型，可选：{', '.join(OFFICE_TYPE_MAP.keys())}"
                 )
             )
+            return
 
         if not self.config.get("feature_settings", {}).get("enable_office_files", True):
             await event.send(
@@ -354,14 +327,21 @@ class FileOperationPlugin(Star):
             else:
                 return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
+        module_name = OFFICE_LIBS[office_type][0]
+        if not self._office_libs.get(module_name):
+            package_name = OFFICE_LIBS[office_type][1]
+            await event.send(
+                MessageChain().message(f"❌ 需要安装 {package_name} 才能生成此类型文件")
+            )
+            return
         file_info = {
-            "type": file_type_lower,
+            "type": office_type,
             "filename": filename,
             "content": content,
         }
         try:
             file_path = await self.office_gen.generate(
-                event, file_info["type"], file_info
+                event, file_info["type"], filename, file_info
             )
             if file_path and file_path.exists():
                 file_size = file_path.stat().st_size
@@ -373,22 +353,21 @@ class FileOperationPlugin(Star):
                     size_str = format_file_size(file_size)
                     max_str = format_file_size(max_size)
                     await event.send(
-                        MessageChain().message(f"❌ 生成的文件过大 ({size_str})，超过限制 {max_str}")
+                        MessageChain().message(
+                            f"❌ 生成的文件过大 ({size_str})，超过限制 {max_str}"
+                        )
                     )
-
-                with open(file_path, "rb") as f:
-                    b64_str = base64.b64encode(f.read()).decode("utf-8")
+                b64_str = await self._read_file_as_base64(file_path)
 
                 use_reply = self.config.get("trigger_settings", {}).get(
                     "reply_to_user", True
                 )
-                is_at = Comp.At(qq=event.get_sender_id()) if use_reply else None
                 chain = [
                     Comp.Plain(f"✅ 文件已处理成功：{file_path.name}"),
-                    is_at,
                     Comp.File(file=f"base64://{b64_str}", name=file_path.name),
                 ]
-
+                if use_reply:
+                    chain.append(Comp.At(qq=event.get_sender_id()))
                 yield event.chain_result(chain)
                 await event.send(
                     MessageChain().message(f"✅ 文件已处理成功：{file_path.name}")

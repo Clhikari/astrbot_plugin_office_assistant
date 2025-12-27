@@ -60,18 +60,6 @@
                 "type": "int",
                 "hint": "允许读取/发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
                 "default": 50
-            },
-            "max_read_text_kb": {
-                "description": "文本预览大小(KB)",
-                "type": "int",
-                "hint": "读取文本文件时的最大预览大小，单位为 KB。超出部分会被截断。",
-                "default": 100
-            },
-            "allowed_extensions": {
-                "description": "允许的文件扩展名",
-                "type": "list",
-                "hint": "允许操作的文件扩展名列表。留空则允许所有类型。例如: txt, docx, xlsx, pdf",
-                "default": []
             }
         }
     }

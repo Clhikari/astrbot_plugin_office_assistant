@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 import asyncio
 from datetime import datetime
-from typing import Optional
 from docx import Document
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
@@ -13,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 
 from astrbot.api import logger
-
+from .constants import OfficeType, OFFICE_EXTENSIONS, OFFICE_LIBS
 
 class OfficeGenerator:
     """Office文件生成器"""
@@ -23,84 +22,93 @@ class OfficeGenerator:
         self.support = self._check_support()
         self._executor = ThreadPoolExecutor(max_workers=2)
 
+    # 定义映射表
+    _GENERATORS = {
+        OfficeType.WORD: "_generate_word",
+        OfficeType.EXCEL: "_generate_excel",
+        OfficeType.POWERPOINT: "_generate_powerpoint",
+    }
+
     async def _generate_word(self, file_path: Path, content: dict):
-        """生成Word文档"""
+        """异步生成 Word"""
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             self._executor, self._generate_word_sync, file_path, content
         )
 
-    def _check_support(self) -> dict[str, bool]:
+    async def _generate_excel(self, file_path: Path, content: dict):
+        """异步生成 Excel"""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            self._executor, self._generate_excel_sync, file_path, content
+        )
+
+    async def _generate_powerpoint(self, file_path: Path, content: dict):
+        """异步生成 PPT"""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            self._executor, self._generate_ppt_sync, file_path, content
+        )
+    def _check_support(self) -> dict[OfficeType, bool]:
         """检查Office库支持"""
-        support = {
-            "word": False,
-            "excel": False,
-            "powerpoint": False,
-        }
+        support = {}
 
-        modules = {
-            "word": ("docx", "python-docx"),
-            "excel": ("openpyxl", "openpyxl"),
-            "powerpoint": ("pptx", "python-pptx"),
-        }
+        for office_type in OfficeType:
+            module_name, package_name = OFFICE_LIBS[office_type]
+            available = importlib.util.find_spec(module_name) is not None
+            support[office_type] = available
 
-        for file_type, (module_name, package_name) in modules.items():
-            if importlib.util.find_spec(module_name) is not None:
-                support[file_type] = True
-            else:
-                logger.warning(
-                    f"[文件生成器] {package_name}未安装，{file_type.capitalize()}文件生成不可用"
-                )
+            if not available:
+                logger.warning(f"[文件生成器] {package_name} 未安装")
 
         return support
 
-    async def generate(self, event: AstrMessageEvent, file_type: str, file_info: dict) -> Optional[Path]:
+    async def generate(
+        self,
+        event: AstrMessageEvent,
+        office_type: OfficeType,
+        filename: str,
+        content: dict,
+    ):
         """生成Office文件"""
-        if not self.support.get(file_type, False):
+        if not self.support.get(office_type, False):
             await event.send(
                 MessageChain().message(
-                    f"[文件生成器] {file_type}文件生成不支持，缺少相关库"
+                    f"[文件生成器] {office_type}文件生成不支持，缺少相关库"
                 )
             )
-            return None
+            return ""
 
         try:
-            filename = file_info.get("filename", f"{file_type}_file")
-            content = file_info.get("content", {})
+            filename = content.get("filename", f"{office_type}_file")
+            content = content.get("content", {})
 
             # 解析content
             if isinstance(content, str):
                 try:
                     content = json.loads(content)
                 except:
-                    content = self._create_default_content(file_type, content)
+                    content = self._create_default_content(office_type, content)
 
             # 清理文件名并添加扩展名
             filename = self._sanitize_filename(filename)
-            extensions = {"word": ".docx", "excel": ".xlsx", "powerpoint": ".pptx"}
-            extension = extensions[file_type]
+            extension = OFFICE_EXTENSIONS[office_type]
 
             if not filename.endswith(extension):
                 filename = filename + extension
 
             file_path = self._get_unique_filepath(filename)
-
-            # 根据类型生成文件
-            if file_type == "word":
-                await self._generate_word(file_path, content)
-            elif file_type == "excel":
-                await self._generate_excel(file_path, content)
-            elif file_type == "powerpoint":
-                await self._generate_powerpoint(file_path, content)
+            generator = getattr(self, self._GENERATORS[office_type])
+            await generator(file_path, content)
 
             logger.info(f"[文件生成器] Office文件已生成: {file_path}")
             return file_path
 
         except Exception as e:
             logger.error(f"[文件生成器] 生成Office文件失败: {e}", exc_info=True)
-            return None
+            return ""
 
-    def _create_default_content(self, file_type: str, text: str) -> dict:
+    def _create_default_content(self, file_type: OfficeType, text: str) -> dict:
         """创建默认的内容结构"""
         if file_type == "word":
             return {"paragraphs": [text]}
@@ -141,7 +149,7 @@ class OfficeGenerator:
 
         doc.save(str(file_path))
 
-    async def _generate_excel(self, file_path: Path, content: dict):
+    async def _generate_excel_sync(self, file_path: Path, content: dict):
         """生成Excel表格"""
         wb = Workbook()
 
@@ -176,7 +184,7 @@ class OfficeGenerator:
 
         wb.save(str(file_path))
 
-    async def _generate_powerpoint(self, file_path: Path, content: dict):
+    async def _generate_ppt_sync(self, file_path: Path, content: dict):
         """生成PowerPoint演示文稿"""
         prs = Presentation()
 
