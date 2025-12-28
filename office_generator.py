@@ -87,7 +87,7 @@ class OfficeGenerator:
             if isinstance(content, str):
                 try:
                     content = json.loads(content)
-                except:
+                except json.JSONDecodeError:
                     content = self._create_default_content(office_type, content)
 
             # 清理文件名并添加扩展名
