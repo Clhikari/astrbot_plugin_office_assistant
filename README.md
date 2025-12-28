@@ -117,21 +117,20 @@ pip install python-docx openpyxl python-pptx
 
 ## 📝 开发日志
 
-### [2025-12-26] 类型系统修复与代码优化
+> ⚠️ **注意**：本插件尚处于开发阶段，暂未正式发布，功能测试尚未完成。
+
+### [2025-12-28] 常量模块提取与代码清理
 
 - 新增 constants.py 模块，集中管理静态常量（OfficeType、TEXT_SUFFIXES、FILE_TOOLS 等）
-
+- 移除未使用的 IMAGE_SUFFIXES 常量，保持代码整洁
 - read_file 交互模式变更：不再直接发送内容给用户，而是返回给 LLM 处理
-
 - 支持用户用自然语言描述需求（如总结、分析），LLM 智能理解后处理
-
 - 简化配置项：移除 max_read_text_kb 和 allowed_extensions 配置
-
 - 优化 Base64 编码：采用异步分块读取，避免大文件内存溢出
-
 - 私聊场景下跳过工具可见性检查，提升响应速度
+- 更新 README.md，优化功能描述与配置项说明
 
-### [2025-12-25] 代码优化与重构
+### [2025-12-27] 代码优化与重构
 
 - **架构精简**：移除独立的文件生成器类（`file_generator`），将相关逻辑整合至主插件中，减少代码冗余。
 - **异步优化**：Office 文件生成器全面支持异步操作，采用流式处理大文件，避免内存溢出。
@@ -141,7 +140,7 @@ pip install python-docx openpyxl python-pptx
 - **配置扩展**：新增 `file_settings` 配置组，支持设置最大文件大小(MB)、文本预览大小(KB)及允许的文件扩展名。
 - **Bug 修复**：修复 `format_file_size()` 函数对负值和零值的处理问题。
 
-### [2025-12-24] 修正 Office 导包
+### [2025-12-25] 修正 Office 导包
 
 - 修复了 Office 相关库的导入问题。
 
