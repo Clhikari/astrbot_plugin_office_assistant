@@ -1,0 +1,66 @@
+{
+    "trigger_settings": {
+        "description": "触发设置",
+        "type": "object",
+        "hint": "控制机器人何时允许调用文件工具",
+        "items": {
+            "require_at_in_group": {
+                "description": "群聊需要@/引用机器人",
+                "type": "bool",
+                "hint": "开启后，群聊中仅在@/引用机器人时模型才会获得文件操作能力。这能有效防止模型在群聊中误触发工具并节省Token。",
+                "default": true
+            },
+            "reply_to_user": {
+                "description": "发送文件时@用户",
+                "type": "bool",
+                "hint": "发送生成的文件时，是否@用户。",
+                "default": true
+            }
+        }
+    },
+    "permission_settings": {
+        "description": "权限管理",
+        "type": "object",
+        "hint": "配置可以使用插件的用户",
+        "items": {
+            "require_admin": {
+                "description": "仅管理员可用",
+                "type": "bool",
+                "hint": "是否限制只有管理员才能调用文件工具",
+                "default": false
+            },
+            "whitelist_users": {
+                "description": "用户白名单",
+                "type": "list",
+                "hint": "允许使用插件的用户ID，每行一个。留空则允许所有用户（受管理员设置约束）。",
+                "default": []
+            }
+        }
+    },
+    "feature_settings": {
+        "description": "功能开关",
+        "type": "object",
+        "hint": "启用或禁用特定功能",
+        "items": {
+            "enable_office_files": {
+                "description": "启用 Office 文件生成",
+                "type": "bool",
+                "hint": "是否允许生成 Word/Excel/PPT 文件。",
+                "default": true
+            }
+        }
+    },
+    "file_settings": {
+        "description": "文件限制",
+        "type": "object",
+        "hint": "控制文件操作的限制",
+        "items": {
+            "max_file_size_mb": {
+                "description": "最大文件大小(MB)",
+                "type": "int",
+                "hint": "允许读取/发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
+                "default": 50
+            }
+        }
+    }
+}
