@@ -3,6 +3,7 @@ import importlib
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger, llm_tool, AstrBotConfig
@@ -14,13 +15,19 @@ import astrbot.api.message_components as Comp
 
 # 导入底层生成器
 from .office_generator import OfficeGenerator
-from .utils import format_file_size
+from .utils import (
+    format_file_size,
+    extract_word_text,
+    extract_excel_text,
+    extract_ppt_text,
+)
 from .constants import (
     DEFAULT_MAX_FILE_SIZE_MB,
     FILE_TOOLS,
     OFFICE_LIBS,
     OFFICE_SUFFIXES,
     OFFICE_TYPE_MAP,
+    SUFFIX_TO_OFFICE_TYPE,
     OfficeType,
     TEXT_SUFFIXES,
 )
@@ -146,6 +153,39 @@ class FileOperationPlugin(Star):
         )
         return mb * 1024 * 1024
 
+    def _extract_office_text(self, file_path: Path, office_type: OfficeType) -> Optional[str]:
+        """根据 Office 类型提取文本内容"""
+        extractors = {
+            OfficeType.WORD: ("docx", extract_word_text),
+            OfficeType.EXCEL: ("openpyxl", extract_excel_text),
+            OfficeType.POWERPOINT: ("pptx", extract_ppt_text),
+        }
+        lib_key, extractor = extractors.get(office_type, (None, None))
+        if not lib_key or not self._office_libs.get(lib_key):
+            return None
+        # 检查库是否可用/已加载，并确保提取器是可调用的
+        if not lib_key or not self._office_libs.get(lib_key) or not callable(extractor):
+            # 记录更具体的错误日志，帮助调试
+            if lib_key and self._office_libs.get(lib_key) and not callable(extractor):
+                logger.error(
+                    f"[文件管理] 针对 Office 类型 '{office_type.name}' 的文本提取器不可调用。"
+                )
+            else:
+                logger.debug(
+                    f"[文件管理] Office 类型 '{office_type.name}' 对应的库未加载或类型不支持。"
+                )
+            return None
+        return extractor(file_path)
+
+    def _format_file_result(
+        self, filename: str, suffix: str, file_size: int, content: str
+    ) -> str:
+        """格式化文件读取结果"""
+        return (
+            f"[文件信息] 文件名: {filename}, 类型: {suffix}, 大小: {format_file_size(file_size)}\n"
+            f"[文件内容]\n{content}"
+        )
+
     @filter.on_llm_request()
     async def before_llm_chat(self, event: AstrMessageEvent, req: ProviderRequest):
         """动态控制工具可见性"""
@@ -154,7 +194,7 @@ class FileOperationPlugin(Star):
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = MessageType.FRIEND_MESSAGE
         # 私聊判断
-        if is_friend:
+        if is_friend and event.is_admin():
             return
         # 权限拦截
         if not self._check_permission(event):
@@ -231,60 +271,14 @@ class FileOperationPlugin(Star):
                 except Exception as e:
                     logger.error(f"读取文件失败: {e}")
                     return f"错误：读取文件失败 - {e}"
-
+            office_type = SUFFIX_TO_OFFICE_TYPE.get(suffix)
             # Office 文件：尝试提取文本（若未安装对应解析库，则提示为二进制）
-            if suffix == ".docx" and self._office_libs.get("docx"):
-                extracted = None
-                try:
-                    if suffix == OfficeType.WORD and self._office_libs.get("docx"):
-                        from docx import Document
-
-                        doc = Document(file_path)
-                        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-                        extracted = "\n".join(paragraphs)
-
-                    elif suffix == ".xlsx" and self._office_libs.get("openpyxl"):
-                        from openpyxl import load_workbook
-
-                        wb = load_workbook(file_path, read_only=True, data_only=True)
-                        texts = []
-                        for ws in wb.worksheets:
-                            for row in ws.iter_rows(values_only=True):
-                                texts.append(
-                                    "\t".join("" if v is None else str(v) for v in row)
-                                )
-                                if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
-                                    break
-                            if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
-                                break
-                        extracted = "\n".join(texts)
-                    elif suffix == ".pptx" and self._office_libs.get("pptx"):
-                        from pptx import Presentation
-
-                        prs = Presentation(file_path)
-                        texts = []
-                        for slide in prs.slides:
-                            for shape in slide.shapes:
-                                if hasattr(shape, "text"):
-                                    texts.append(shape.text)
-                                if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
-                                    break
-                            if len("\n".join(texts)) > DEFAULT_MAX_FILE_SIZE_MB:
-                                break
-                        extracted = "\n".join(texts)
-                except Exception as exc:
-                    logger.warning(f"Office 文本提取失败: {exc}", exc_info=True)
-
+            if office_type:
+                extracted = self._extract_office_text(file_path, office_type)
                 if extracted:
-                    if len(extracted) > DEFAULT_MAX_FILE_SIZE_MB:
-                        extracted = (
-                            extracted[:DEFAULT_MAX_FILE_SIZE_MB]
-                            + "\n\n...（内容已截断）..."
-                        )
-                    result = f"[文件信息] 文件名: {filename}, 类型: {suffix}, 大小: {format_file_size(file_size)}\n[文件内容]\n{extracted}"
-                    return result
-
-                return f"错误：文件 '{filename}' 为二进制格式或未安装对应解析库，无法读取内容"
+                    return self._format_file_result(filename, suffix, file_size, extracted)
+                return f"错误：文件 '{filename}' 无法读取，可能未安装对应解析库"
+            return f"错误：不支持读取 '{suffix}' 格式的文件"
         except Exception as e:
             logger.error(f"读取文件失败: {e}")
             return f"错误：读取文件失败 - {e}"
@@ -301,6 +295,7 @@ class FileOperationPlugin(Star):
         filename = Path(filename).name
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
+            return
         file_type_lower = file_type.lower()
         office_type = OFFICE_TYPE_MAP.get(file_type_lower)
         if not office_type:
@@ -315,6 +310,7 @@ class FileOperationPlugin(Star):
             await event.send(
                 MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
             )
+            return
 
         def format_file_size(size_bytes: int) -> str:
             """格式化文件大小为可读格式"""
