@@ -1,18 +1,16 @@
-import json
-from pathlib import Path
 import asyncio
-from datetime import datetime
-from docx import Document
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
-from astrbot.api.event import AstrMessageEvent
-from astrbot.core.message.message_event_result import MessageChain
-from pptx import Presentation
-from concurrent.futures import ThreadPoolExecutor
 import importlib.util
+import json
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
 
 from astrbot.api import logger
-from .constants import OfficeType, OFFICE_EXTENSIONS, OFFICE_LIBS
+from astrbot.api.event import AstrMessageEvent
+from astrbot.core.message.message_event_result import MessageChain
+
+from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
+
 
 class OfficeGenerator:
     """Office文件生成器"""
@@ -49,6 +47,7 @@ class OfficeGenerator:
         await loop.run_in_executor(
             self._executor, self._generate_ppt_sync, file_path, content
         )
+
     def _check_support(self) -> dict[OfficeType, bool]:
         """检查Office库支持"""
         support = {}
@@ -109,17 +108,156 @@ class OfficeGenerator:
             return ""
 
     def _create_default_content(self, file_type: OfficeType, text: str) -> dict:
-        """创建默认的内容结构"""
-        if file_type == "word":
-            return {"paragraphs": [text]}
-        elif file_type == "excel":
-            return {"sheets": [{"name": "Sheet1", "data": [[text]]}]}
-        elif file_type == "powerpoint":
-            return {"slides": [{"title": "内容", "content": [text]}]}
+        """创建默认的内容结构，智能解析文本格式"""
+        if file_type == OfficeType.WORD:
+            return self._parse_word_content(text)
+        elif file_type == OfficeType.EXCEL:
+            return self._parse_excel_content(text)
+        elif file_type == OfficeType.POWERPOINT:
+            return self._parse_ppt_content(text)
         return {}
 
-    async def _generate_word_sync(self, file_path: Path, content: dict):
+    def _parse_word_content(self, text: str) -> dict:
+        """解析 Word 内容格式
+
+        支持：
+        - 空行分隔段落
+        - 第一行作为标题（如果后面有空行）
+        """
+        text = text.strip()
+        if not text:
+            return {"paragraphs": ["（空文档）"]}
+
+        # 按空行分割段落
+        paragraphs = []
+        current_para = []
+
+        for line in text.split("\n"):
+            if line.strip():
+                current_para.append(line.strip())
+            else:
+                if current_para:
+                    paragraphs.append(" ".join(current_para))
+                    current_para = []
+
+        if current_para:
+            paragraphs.append(" ".join(current_para))
+
+        if not paragraphs:
+            return {"paragraphs": [text]}
+
+        # 如果只有一个段落，直接返回
+        if len(paragraphs) == 1:
+            return {"paragraphs": paragraphs}
+
+        # 第一段作为标题
+        title = paragraphs[0]
+        body_paragraphs = paragraphs[1:]
+
+        return {"title": title, "paragraphs": body_paragraphs}
+
+    def _parse_excel_content(self, text: str) -> dict:
+        """解析 Excel 内容格式
+
+        支持：
+        - 用 | 分隔每个单元格
+        - 换行分隔每一行
+        """
+        lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
+        if not lines:
+            return {"sheets": [{"name": "Sheet1", "data": [["（空表格）"]]}]}
+
+        data = []
+        for line in lines:
+            if "|" in line:
+                cells = [cell.strip() for cell in line.split("|")]
+            else:
+                cells = [line]
+            data.append(cells)
+
+        return {"sheets": [{"name": "Sheet1", "data": data}]}
+
+    def _parse_ppt_content(self, text: str) -> dict:
+        """解析 PPT 内容格式
+
+        支持：
+        - 用 [幻灯片 N] 或 [Slide N] 标记每页
+        - 标记后第一行作为标题
+        - 后续行作为内容要点
+        """
+        import re
+
+        text = text.strip()
+        if not text:
+            return {"slides": [{"title": "空白幻灯片", "content": []}]}
+
+        # 匹配 [幻灯片 N]、[幻灯片N]、[Slide N]、[slide N] 等格式
+        slide_pattern = r"\[(?:幻灯片|Slide|slide)\s*\d+\]"
+
+        # 检查是否有幻灯片标记
+        if not re.search(slide_pattern, text):
+            # 没有标记，尝试按空行分割成多页
+            return self._parse_ppt_by_blank_lines(text)
+
+        # 按幻灯片标记分割
+        slides = []
+        parts = re.split(f"({slide_pattern})", text)
+
+        current_slide = None
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            if re.match(slide_pattern, part):
+                # 这是一个幻灯片标记，准备新幻灯片
+                if current_slide:
+                    slides.append(current_slide)
+                current_slide = {"title": "", "content": []}
+            elif current_slide is not None:
+                # 解析幻灯片内容
+                lines = [ln.strip() for ln in part.split("\n") if ln.strip()]
+                if lines:
+                    current_slide["title"] = lines[0]
+                    current_slide["content"] = lines[1:] if len(lines) > 1 else []
+
+        if current_slide:
+            slides.append(current_slide)
+
+        if not slides:
+            return {"slides": [{"title": "内容", "content": [text]}]}
+
+        return {"slides": slides}
+
+    def _parse_ppt_by_blank_lines(self, text: str) -> dict:
+        """按空行分割 PPT 内容为多页"""
+        slides = []
+        current_lines = []
+
+        for line in text.split("\n"):
+            if line.strip():
+                current_lines.append(line.strip())
+            else:
+                if current_lines:
+                    title = current_lines[0]
+                    content = current_lines[1:] if len(current_lines) > 1 else []
+                    slides.append({"title": title, "content": content})
+                    current_lines = []
+
+        if current_lines:
+            title = current_lines[0]
+            content = current_lines[1:] if len(current_lines) > 1 else []
+            slides.append({"title": title, "content": content})
+
+        if not slides:
+            return {"slides": [{"title": "内容", "content": [text]}]}
+
+        return {"slides": slides}
+
+    def _generate_word_sync(self, file_path: Path, content: dict):
         """生成Word文档"""
+        from docx import Document
+
         doc = Document()
 
         # 添加标题
@@ -149,8 +287,11 @@ class OfficeGenerator:
 
         doc.save(str(file_path))
 
-    async def _generate_excel_sync(self, file_path: Path, content: dict):
+    def _generate_excel_sync(self, file_path: Path, content: dict):
         """生成Excel表格"""
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+
         wb = Workbook()
 
         # 删除默认sheet
@@ -184,8 +325,10 @@ class OfficeGenerator:
 
         wb.save(str(file_path))
 
-    async def _generate_ppt_sync(self, file_path: Path, content: dict):
+    def _generate_ppt_sync(self, file_path: Path, content: dict):
         """生成PowerPoint演示文稿"""
+        from pptx import Presentation
+
         prs = Presentation()
 
         # 添加幻灯片
@@ -231,18 +374,5 @@ class OfficeGenerator:
         return filename
 
     def _get_unique_filepath(self, filename: str) -> Path:
-        """获取唯一的文件路径"""
-        file_path = self.data_path / filename
-
-        if file_path.exists():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            name_parts = filename.rsplit(".", 1)
-
-            if len(name_parts) == 2:
-                filename = f"{name_parts[0]}_{timestamp}.{name_parts[1]}"
-            else:
-                filename = f"{filename}_{timestamp}"
-
-            file_path = self.data_path / filename
-
-        return file_path
+        """获取文件路径（覆盖已存在的同名文件）"""
+        return self.data_path / filename

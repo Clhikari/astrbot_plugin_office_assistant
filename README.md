@@ -119,6 +119,17 @@ pip install python-docx openpyxl python-pptx
 
 > ⚠️ **注意**：本插件尚处于开发阶段，暂未正式发布，功能测试尚未完成。
 
+### [2025-12-29] AI 代码生成 Office 文件与内容解析优化
+
+- 新增 `create_office_file` 工具：LLM 生成 Python 代码来创建 Office 文件，支持复杂格式和样式
+- 新增 `code_executor.py` 模块：沙盒化 Python 代码执行器，限制危险操作
+- 新增 `message_buffer.py` 模块：消息缓冲系统，支持流式输出
+- 优化 Office 内容解析：
+  - PPT：支持 `[幻灯片 N]` 标记分页，或按空行自动分页
+  - Word：按空行分段，首段作为标题
+  - Excel：保持 `|` 分隔符解析逻辑
+- 更新配置项和元数据
+
 ### [2025-12-28] 常量模块提取与代码清理
 
 - 新增 constants.py 模块，集中管理静态常量（OfficeType、TEXT_SUFFIXES、FILE_TOOLS 等）

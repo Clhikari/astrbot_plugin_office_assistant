@@ -1,6 +1,6 @@
 name: astrbot_plugin_file_operation_tool
-display_name: llm文件管理
-desc: 一个赋予大型语言模型读取、写入和管理文件能力的插件。
+display_name: llmOffice文件管理
+desc: 赋予 LLM 文件读取分析能力，支持 AI 生成 Office 文档（Word/Excel/PPT）。
 version: v1.0.0
 author: Clhikari
 repo: https://github.com/Clhikari/astrbot_plugin_file_operation_tool
