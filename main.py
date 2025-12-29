@@ -258,7 +258,7 @@ class FileOperationPlugin(Star):
         return libs
 
     async def _read_file_as_base64(
-        self, file_path: Path, chunk_size: int = 64 * 1024
+        self, file_path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> str:
         """
         异步分块读取文件并转为 Base64
@@ -441,9 +441,10 @@ class FileOperationPlugin(Star):
                 try:
                     # 获取文件路径
                     file_path = await component.get_file()
+                    file_name = component.name or "unknown_file"
                     if file_path and Path(file_path).exists():
                         src_path = Path(file_path)
-                        dst_path = self.plugin_data_path / component.name
+                        dst_path = self.plugin_data_path / file_name
                         # 复制文件到工作区
                         shutil.copy2(src_path, dst_path)
                         file_suffix = dst_path.suffix.lower()
@@ -464,18 +465,22 @@ class FileOperationPlugin(Star):
                 except Exception as e:
                     logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
-    @llm_tool(name="list_files")
+    @filter.command("list_files", alias={"文件列表", "ls"})
     async def list_files(self, event: AstrMessageEvent):
         """列出机器人文件库中的所有文件。"""
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return "拒绝访问：权限不足"
+            return
 
         # 自动删除模式下，文件发送后会被删除，列表通常为空
         if self._auto_delete:
-            msg = "当前为自动删除模式，文件发送后会自动清理，文件库为空。"
-            return msg
+            await event.send(
+                MessageChain().message(
+                    "当前为自动删除模式，文件发送后会自动清理，文件库为空。"
+                )
+            )
+            return
 
         try:
             files = [
@@ -484,8 +489,8 @@ class FileOperationPlugin(Star):
                 if f.is_file() and f.suffix.lower() in OFFICE_SUFFIXES
             ]
             if not files:
-                msg = "文件库当前没有 Office 文件,无需重复调用"
-                return msg
+                await event.send(MessageChain().message("文件库当前没有 Office 文件"))
+                return
 
             files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             res = ["📂 机器人工作区 Office 文件列表："]
@@ -494,11 +499,9 @@ class FileOperationPlugin(Star):
 
             result = "\n".join(res)
             await event.send(MessageChain().message(result))
-            return
         except Exception as e:
             logger.error(f"获取列表失败: {e}")
-            await event.send(MessageChain().message("获取列表失败"))
-            return f"获取列表失败: {e}"
+            await event.send(MessageChain().message(f"获取列表失败: {e}"))
 
     @llm_tool(name="read_file")
     async def read_file(self, event: AstrMessageEvent, filename: str) -> str | None:
@@ -644,10 +647,11 @@ class FileOperationPlugin(Star):
                 )
 
                 # 先发送文本消息
-                text_chain = [Comp.Plain(f"✅ 文件已处理成功：{file_path.name}")]
+                text_chain = MessageChain()
+                text_chain.message(f"✅ 文件已处理成功：{file_path.name}")
                 if use_reply:
-                    text_chain.append(Comp.At(qq=event.get_sender_id()))
-                await event.send(MessageChain(text_chain))
+                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
+                await event.send(text_chain)
                 await event.send(
                     MessageChain(
                         [Comp.File(file=str(file_path.resolve()), name=file_path.name)]
@@ -664,20 +668,26 @@ class FileOperationPlugin(Star):
         except Exception as e:
             await event.send(MessageChain().message(f"文件操作异常: {e}"))
 
-    @llm_tool(name="delete_file")
-    async def delete_file(self, event: AstrMessageEvent, filename: str) -> str|None:
-        """从工作区中永久删除指定文件。
-
-        Args:
-            filename(string): 要删除的文件名
-        """
+    @filter.command("delete_file", alias={"删除文件", "rm"})
+    async def delete_file(self, event: AstrMessageEvent):
+        """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
             return
+
+        # 从消息中获取文件名参数
+        text = event.message_str.strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await event.send(MessageChain().message("❌ 用法: /delete_file 文件名"))
+            return
+        filename = parts[1].strip()
+
         valid, file_path, error = self._validate_path(filename)
         if not valid:
-            return f"❌ {error}"
+            await event.send(MessageChain().message(f"❌ {error}"))
+            return
 
         if file_path.exists():
             try:
