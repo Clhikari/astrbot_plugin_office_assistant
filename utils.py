@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+
 from astrbot.api import logger
 
 
@@ -16,7 +16,7 @@ def format_file_size(size: int | float) -> str:
     return f"{size:.2f} TB"
 
 
-def extract_word_text(file_path: Path) -> Optional[str]:
+def extract_word_text(file_path: Path) -> str | None:
     """提取 Word 文档文本"""
     try:
         from docx import Document
@@ -31,7 +31,7 @@ def extract_word_text(file_path: Path) -> Optional[str]:
         return None
 
 
-def extract_excel_text(file_path: Path) -> Optional[str]:
+def extract_excel_text(file_path: Path) -> str | None:
     """提取 Excel 表格文本"""
     try:
         from openpyxl import load_workbook
@@ -49,7 +49,7 @@ def extract_excel_text(file_path: Path) -> Optional[str]:
         return None
 
 
-def extract_ppt_text(file_path: Path) -> Optional[str]:
+def extract_ppt_text(file_path: Path) -> str | None:
     """提取 PPT 幻灯片文本"""
     try:
         from pptx import Presentation
