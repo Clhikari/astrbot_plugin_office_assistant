@@ -494,7 +494,7 @@ class FileOperationPlugin(Star):
 
             result = "\n".join(res)
             await event.send(MessageChain().message(result))
-            return result
+            return
         except Exception as e:
             logger.error(f"获取列表失败: {e}")
             await event.send(MessageChain().message("获取列表失败"))
@@ -665,7 +665,7 @@ class FileOperationPlugin(Star):
             await event.send(MessageChain().message(f"文件操作异常: {e}"))
 
     @llm_tool(name="delete_file")
-    async def delete_file(self, event: AstrMessageEvent, filename: str) -> str:
+    async def delete_file(self, event: AstrMessageEvent, filename: str) -> str|None:
         """从工作区中永久删除指定文件。
 
         Args:
@@ -674,7 +674,7 @@ class FileOperationPlugin(Star):
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return ""
+            return
         valid, file_path, error = self._validate_path(filename)
         if not valid:
             return f"❌ {error}"
@@ -685,19 +685,19 @@ class FileOperationPlugin(Star):
                 await event.send(
                     MessageChain().message(f"成功：文件 '{filename}' 已删除。")
                 )
-                return ""
+                return
             except IsADirectoryError:
                 await event.send(MessageChain().message(f"'{filename}'是目录,拒绝删除"))
-                return ""
+                return
             except PermissionError:
                 await event.send(MessageChain().message("❌ 权限不足，无法删除文件"))
-                return ""
+                return
             except Exception as e:
                 logger.error(f"删除文件时发生错误{e}")
                 await event.send(MessageChain().message(f"删除文件时发生错误{e}"))
-                return ""
+                return
         await event.send(MessageChain().message(f"错误：找不到文件 '{filename}'"))
-        return ""
+        return
 
     @llm_tool(name="create_office_file")
     async def create_office_file(
