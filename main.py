@@ -465,7 +465,7 @@ class FileOperationPlugin(Star):
                 except Exception as e:
                     logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
-    @filter.command("list_files", alias={"文件列表", "ls"})
+    @filter.command("list_files", alias={"文件列表", "lsf"})
     async def list_files(self, event: AstrMessageEvent):
         """列出机器人文件库中的所有文件。"""
 
