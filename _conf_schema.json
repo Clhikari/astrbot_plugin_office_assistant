@@ -60,6 +60,24 @@
                 "type": "int",
                 "hint": "允许读取/发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
                 "default": 50
+            },
+            "auto_delete_files": {
+                "description": "发送后自动删除文件",
+                "type": "bool",
+                "hint": "启用后，生成的文件会在发送完成后自动删除，不会占用磁盘空间。关闭则持久化存储在 data/plugin_data/astrbot_plugin_file_operation_tool/ 目录。",
+                "default": true
+            },
+            "message_buffer_seconds": {
+                "description": "文件消息缓冲时间(秒)",
+                "type": "float",
+                "hint": "收到文件后等待后续消息的时间。用于聚合分离发送的文件和文本消息。",
+                "default": 2.5
+            },
+            "message_observe_seconds": {
+                "description": "消息观察期(秒)",
+                "type": "float",
+                "hint": "收到任何消息后的短观察期，用于检测是否有后续文件。如果观察期内收到文件，会自动延长到完整缓冲时间。设置为 0 可禁用观察期（仅缓冲文件消息）。",
+                "default": 0.8
             }
         }
     }
