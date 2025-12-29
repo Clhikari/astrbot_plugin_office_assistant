@@ -66,4 +66,11 @@ OFFICE_SUFFIXES = frozenset(OFFICE_EXTENSIONS.values())
 SUFFIX_TO_OFFICE_TYPE = {v: k for k, v in OFFICE_EXTENSIONS.items()}
 DEFAULT_MAX_FILE_SIZE_MB = 50
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
-FILE_TOOLS = ["list_files", "read_file", "write_file", "delete_file"]
+FILE_TOOLS = [
+    "list_files",
+    "read_file",
+    "write_file",
+    "delete_file",
+    "create_office_file",
+]
+PLUGIN_NAME = "astrbot_plugin_file_operation_tool"
