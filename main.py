@@ -473,15 +473,6 @@ class FileOperationPlugin(Star):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
             return
 
-        # 自动删除模式下，文件发送后会被删除，列表通常为空
-        if self._auto_delete:
-            await event.send(
-                MessageChain().message(
-                    "当前为自动删除模式，文件发送后会自动清理，文件库为空。"
-                )
-            )
-            return
-
         try:
             files = [
                 f
@@ -489,11 +480,16 @@ class FileOperationPlugin(Star):
                 if f.is_file() and f.suffix.lower() in OFFICE_SUFFIXES
             ]
             if not files:
-                await event.send(MessageChain().message("文件库当前没有 Office 文件"))
+                msg = "文件库当前没有 Office 文件"
+                if self._auto_delete:
+                    msg += "（自动删除模式已开启，文件发送后会自动清理）"
+                await event.send(MessageChain().message(msg))
                 return
 
             files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             res = ["📂 机器人工作区 Office 文件列表："]
+            if self._auto_delete:
+                res.append("⚠️ 自动删除模式已开启")
             for f in files:
                 res.append(f"- {f.name} ({format_file_size(f.stat().st_size)})")
 
