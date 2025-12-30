@@ -5,11 +5,10 @@
 - PC 端：文件和消息可能连发
 - 手机端：只能单发文件，不能连带消息
 
-核心思路（短观察期 + 文件触发延长缓冲）：
-1. 收到任何消息时，都开始一个短的"观察期"（默认 0.8 秒）
-2. 如果在观察期内收到文件，则延长等待时间到完整缓冲期（默认 2.5 秒）
-3. 如果观察期结束时没有文件，则立即处理（不额外延迟）
-4. 这样可以同时处理"先文件后文本"和"先文本后文件"两种场景
+核心思路：
+1. 收到包含文件的消息时，开始缓冲等待
+2. 在等待期间收到的后续消息（文本或文件）会被聚合
+3. 等待结束后，将所有消息合并处理
 """
 
 from __future__ import annotations
@@ -33,8 +32,6 @@ class BufferedMessage:
     files: list[Comp.File] = field(default_factory=list)  # 文件列表
     texts: list[str] = field(default_factory=list)  # 文本内容列表
     timer_task: asyncio.Task | None = None  # 定时器任务
-    has_file: bool = False  # 是否包含文件（决定等待时间）
-    extended: bool = False  # 是否已延长到完整缓冲期
 
 
 class MessageBuffer:
@@ -42,21 +39,15 @@ class MessageBuffer:
     消息缓冲器
 
     按 (平台ID, 用户ID, 会话ID) 分组缓冲消息，
-    使用两阶段等待策略：短观察期 + 文件触发延长。
+    收到文件消息后等待一段时间以聚合后续消息。
     """
 
-    def __init__(
-        self,
-        wait_seconds: float = 2.5,
-        observe_seconds: float = 0.8,
-    ):
+    def __init__(self, wait_seconds: float = 4):
         """
         Args:
-            wait_seconds: 完整等待时间（秒），有文件时使用
-            observe_seconds: 观察期时间（秒），无文件时的短等待
+            wait_seconds: 缓冲等待时间（秒）
         """
         self._wait_seconds = wait_seconds
-        self._observe_seconds = observe_seconds
         # 缓冲区: key = (platform_id, sender_id, session_id)
         self._buffers: dict[tuple[str, str, str], BufferedMessage] = {}
         # 回调函数，当消息聚合完成时调用
@@ -111,13 +102,12 @@ class MessageBuffer:
             True: 消息已被缓冲，调用方应停止事件传播
             False: 消息不需要缓冲（缓冲器已禁用）
         """
-        # 如果观察期和等待期都为 0，则禁用缓冲
-        if self._observe_seconds <= 0 and self._wait_seconds <= 0:
+        # 如果等待时间为 0，则禁用缓冲
+        if self._wait_seconds <= 0:
             return False
 
         files, texts = self._extract_components(event)
         key = self._get_buffer_key(event)
-        has_file = len(files) > 0
 
         async with self._lock:
             # 检查是否已有缓冲
@@ -125,27 +115,10 @@ class MessageBuffer:
                 buf = self._buffers[key]
                 buf.files.extend(files)
                 buf.texts.extend(texts)
-
-                # 如果新消息包含文件，且还没延长过，则延长等待时间
-                if has_file and not buf.extended:
-                    buf.has_file = True
-                    buf.extended = True
-                    # 取消旧的定时器
-                    if buf.timer_task and not buf.timer_task.done():
-                        buf.timer_task.cancel()
-                    # 使用完整等待时间重新启动定时器
-                    buf.timer_task = asyncio.create_task(
-                        self._wait_and_process(key, self._wait_seconds)
-                    )
-                    logger.info(
-                        f"[消息缓冲] 检测到文件，延长等待至 {self._wait_seconds} 秒: {key}"
-                    )
-                else:
-                    # 没有新文件，不改变定时器
-                    logger.debug(
-                        f"[消息缓冲] 追加消息到缓冲区: {key}, "
-                        f"文件数: {len(files)}, 文本数: {len(texts)}"
-                    )
+                logger.debug(
+                    f"[消息缓冲] 追加消息到缓冲区: {key}, "
+                    f"文件数: {len(files)}, 文本数: {len(texts)}"
+                )
                 return True
 
             # 没有缓冲，开始新的缓冲
@@ -153,21 +126,15 @@ class MessageBuffer:
                 event=event,
                 files=files,
                 texts=texts,
-                has_file=has_file,
-                extended=has_file,  # 如果一开始就有文件，直接标记为已延长
             )
 
-            # 决定等待时间
-            if has_file:
-                wait_time = self._wait_seconds
-                logger.info(
-                    f"[消息缓冲] 收到文件，开始完整缓冲: {key}, 等待 {wait_time} 秒"
-                )
-            else:
-                wait_time = self._observe_seconds
-                logger.info(f"[消息缓冲] 开始观察期: {key}, 等待 {wait_time} 秒")
+            logger.info(
+                f"[消息缓冲] 开始缓冲: {key}, 等待 {self._wait_seconds} 秒"
+            )
 
-            buf.timer_task = asyncio.create_task(self._wait_and_process(key, wait_time))
+            buf.timer_task = asyncio.create_task(
+                self._wait_and_process(key, self._wait_seconds)
+            )
             self._buffers[key] = buf
             return True
 
@@ -176,7 +143,7 @@ class MessageBuffer:
         try:
             await asyncio.sleep(wait_time)
         except asyncio.CancelledError:
-            # 定时器被取消（等待时间被延长），正常退出
+            # 定时器被取消，正常退出
             return
 
         async with self._lock:
@@ -186,12 +153,12 @@ class MessageBuffer:
             buf = self._buffers.pop(key)
 
         # 根据是否有文件决定调用哪个回调
-        if buf.has_file:
+        if buf.files:
             # 有文件，调用文件处理回调
             if self._on_complete_callback:
                 try:
                     logger.info(
-                        f"[消息缓冲] 缓冲完成（有文件），"
+                        f"[消息缓冲] 缓冲完成，"
                         f"文件数: {len(buf.files)}, 文本数: {len(buf.texts)}"
                     )
                     await self._on_complete_callback(buf)
@@ -201,7 +168,7 @@ class MessageBuffer:
             # 无文件，调用放行回调
             if self._on_passthrough_callback:
                 try:
-                    logger.debug("[消息缓冲] 观察期结束（无文件），放行消息")
+                    logger.debug("[消息缓冲] 缓冲结束（无文件），放行消息")
                     await self._on_passthrough_callback(buf)
                 except Exception as e:
                     logger.error(f"[消息缓冲] 放行回调时出错: {e}")
