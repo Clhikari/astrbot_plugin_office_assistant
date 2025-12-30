@@ -8,12 +8,11 @@ from pathlib import Path
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, llm_tool, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.message.components import At, Reply
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .constants import (
     DEFAULT_CHUNK_SIZE,
@@ -22,7 +21,6 @@ from .constants import (
     OFFICE_LIBS,
     OFFICE_SUFFIXES,
     OFFICE_TYPE_MAP,
-    PLUGIN_NAME,
     SUFFIX_TO_OFFICE_TYPE,
     TEXT_SUFFIXES,
     OfficeType,
@@ -58,11 +56,9 @@ class FileOperationPlugin(Star):
             self._temp_dir = tempfile.TemporaryDirectory(prefix="astrbot_file_")
             self.plugin_data_path = Path(self._temp_dir.name)
         else:
-            # 持久化存储到 data/plugin_data/插件名/
+            # 持久化存储到标准插件数据目录
             self._temp_dir = None
-            self.plugin_data_path = (
-                Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "files"
-            )
+            self.plugin_data_path = StarTools.get_data_dir() / "files"
             self.plugin_data_path.mkdir(parents=True, exist_ok=True)
 
         self.office_gen = OfficeGenerator(self.plugin_data_path)
