@@ -189,6 +189,46 @@ class RestrictedCodeExecutor:
         import re as re_module
         import string
 
+        # 受限的 __import__ 函数，只允许白名单模块
+        def restricted_import(
+            name: str,
+            globals_dict: dict | None = None,
+            locals_dict: dict | None = None,
+            fromlist: tuple = (),
+            level: int = 0,
+        ):
+            """受限的导入函数，只允许白名单中的模块"""
+            # 检查顶级模块是否在白名单中
+            base_module = name.split(".")[0]
+            allowed_bases = {
+                "openpyxl",
+                "docx",
+                "pptx",
+                "datetime",
+                "math",
+                "random",
+                "string",
+                "re",
+                "json",
+                "collections",
+                "itertools",
+                "functools",
+                "decimal",
+                "fractions",
+                "statistics",
+                "textwrap",
+                "unicodedata",
+                "copy",
+            }
+
+            if base_module not in allowed_bases:
+                raise ImportError(f"禁止导入模块: {name}")
+
+            # 使用真正的 __import__ 执行导入
+            return __builtins__["__import__"](
+                name, globals_dict, locals_dict, fromlist, level
+            )
+
         # 安全的文件保存函数
         def safe_save(obj: Any, filename: str) -> str:
             """安全地保存文件到工作目录"""
@@ -214,6 +254,8 @@ class RestrictedCodeExecutor:
         # 构建安全的全局命名空间
         safe_globals = {
             "__builtins__": {
+                # 受限的 import 函数
+                "__import__": restricted_import,
                 # 安全的内置函数
                 "abs": abs,
                 "all": all,

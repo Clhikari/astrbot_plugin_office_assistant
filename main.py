@@ -258,7 +258,7 @@ class FileOperationPlugin(Star):
         return libs
 
     async def _read_file_as_base64(
-        self, file_path: Path, chunk_size: int = 64 * 1024
+        self, file_path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> str:
         """
         异步分块读取文件并转为 Base64
@@ -441,9 +441,10 @@ class FileOperationPlugin(Star):
                 try:
                     # 获取文件路径
                     file_path = await component.get_file()
+                    file_name = component.name or "unknown_file"
                     if file_path and Path(file_path).exists():
                         src_path = Path(file_path)
-                        dst_path = self.plugin_data_path / component.name
+                        dst_path = self.plugin_data_path / file_name
                         # 复制文件到工作区
                         shutil.copy2(src_path, dst_path)
                         file_suffix = dst_path.suffix.lower()
@@ -464,18 +465,13 @@ class FileOperationPlugin(Star):
                 except Exception as e:
                     logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
-    @llm_tool(name="list_files")
+    @filter.command("list_files", alias={"文件列表", "lsf"})
     async def list_files(self, event: AstrMessageEvent):
         """列出机器人文件库中的所有文件。"""
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return "拒绝访问：权限不足"
-
-        # 自动删除模式下，文件发送后会被删除，列表通常为空
-        if self._auto_delete:
-            msg = "当前为自动删除模式，文件发送后会自动清理，文件库为空。"
-            return msg
+            return
 
         try:
             files = [
@@ -484,21 +480,24 @@ class FileOperationPlugin(Star):
                 if f.is_file() and f.suffix.lower() in OFFICE_SUFFIXES
             ]
             if not files:
-                msg = "文件库当前没有 Office 文件,无需重复调用"
-                return msg
+                msg = "文件库当前没有 Office 文件"
+                if self._auto_delete:
+                    msg += "（自动删除模式已开启，文件发送后会自动清理）"
+                await event.send(MessageChain().message(msg))
+                return
 
             files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             res = ["📂 机器人工作区 Office 文件列表："]
+            if self._auto_delete:
+                res.append("⚠️ 自动删除模式已开启")
             for f in files:
                 res.append(f"- {f.name} ({format_file_size(f.stat().st_size)})")
 
             result = "\n".join(res)
             await event.send(MessageChain().message(result))
-            return
         except Exception as e:
             logger.error(f"获取列表失败: {e}")
-            await event.send(MessageChain().message("获取列表失败"))
-            return f"获取列表失败: {e}"
+            await event.send(MessageChain().message(f"获取列表失败: {e}"))
 
     @llm_tool(name="read_file")
     async def read_file(self, event: AstrMessageEvent, filename: str) -> str | None:
@@ -545,46 +544,59 @@ class FileOperationPlugin(Star):
             logger.error(f"读取文件失败: {e}")
             return f"错误：读取文件失败 - {e}"
 
-    @llm_tool(name="write_file")
+    @llm_tool(name="create_office_file")
     async def write_file(
         self,
         event: AstrMessageEvent,
-        filename: str,
-        content: str,
+        filename: str = "",
+        content: str = "",
+        description: str = "",
         file_type: str = "word",
     ):
-        """在机器人工作区中创建 Office 文件并发送给用户。
+        """创建并生成新的 Office 文件（Excel/Word/PPT），然后发送给用户。
+        当用户要求制作、创建、生成文档/表格/PPT时，使用此工具。
 
-        【修改文件】：先用 read_file 读取原文件，修改内容后用此工具创建（相同文件名会覆盖）。
+        两种模式：
+        1. 直接生成：提供 content 参数，适合简单格式
+        2. AI 代码生成：提供 description 参数，适合复杂/精美格式（图表、样式等）
 
-        【Excel 格式】严格要求：
-        - 用 | 分隔每个单元格，用换行分隔每一行
-        - 第一行是表头，后续是数据行
-        - 每行的列数必须一致
-        - 示例（3列5行的表格）：
-          姓名|年龄|城市
-          张三|25|北京
-          李四|30|上海
-          王五|28|广州
-          赵六|35|深圳
+        【直接生成 - content 格式】：
+        - Excel：用 | 分隔单元格，换行分隔行。如：姓名|年龄\\n张三|25
+        - Word：纯文本，用空行分段
+        - PPT：用 [幻灯片 1] 标记分页
 
-        【Word 格式】：
-        - 纯文本书写，不要用 Markdown（禁止 #、**、- 等符号）
-        - 用空行分隔段落，标题直接写文字即可
-
-        【PPT 格式】：
-        - 用 [幻灯片 1]、[幻灯片 2] 标记每页
-        - 标题写在标记后第一行，内容写在后续行
+        【AI 生成 - description】：
+        描述需求即可，如"创建一个精美的销售报表PPT，包含图表"
 
         Args:
-            filename(string): 文件名（含扩展名如 .xlsx/.docx/.pptx，系统会自动识别类型）
-            content(string): 文件内容（严格按上述格式，不要用Markdown）
-            file_type(string): 仅当文件名无扩展名时使用，可选：word、excel、powerpoint
+            filename(string): 文件名（如 report.pptx），需包含扩展名(.docx/.xlsx/.pptx)
+            content(string): 文件内容（简单格式用此参数）
+            description(string): 需求描述（精美/复杂格式用此参数）
+            file_type(string): 文件类型 word/excel/powerpoint，仅当文件名无扩展名时使用
         """
-        filename = Path(filename).name
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return
+            return "拒绝访问：权限不足"
+
+        if not self.config.get("feature_settings", {}).get("enable_office_files", True):
+            await event.send(
+                MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
+            )
+            return "错误：当前配置禁用了 Office 文件生成功能"
+
+        # 参数验证
+        if not content and not description:
+            return "错误：请提供 content（文件内容）或 description（需求描述）"
+
+        # 根据参数选择生成模式
+        if description and not content:
+            # AI 代码生成模式
+            return await self._generate_with_code(event, description, filename)
+
+        # 直接生成模式
+        filename = Path(filename).name if filename else ""
+        if not filename:
+            return "错误：直接生成模式需要提供 filename"
 
         # 优先根据文件名扩展名自动推断文件类型
         suffix = Path(filename).suffix.lower()
@@ -600,13 +612,13 @@ class FileOperationPlugin(Star):
                     f"❌ 不支持的类型，可选：{', '.join(OFFICE_TYPE_MAP.keys())}"
                 )
             )
-            return
+            return f"不支持的文件类型: {file_type}"
 
         if not self.config.get("feature_settings", {}).get("enable_office_files", True):
             await event.send(
                 MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
             )
-            return
+            return "错误：当前配置禁用了 Office 文件生成功能"
 
         module_name = OFFICE_LIBS[office_type][0]
         if not self._office_libs.get(module_name):
@@ -614,7 +626,7 @@ class FileOperationPlugin(Star):
             await event.send(
                 MessageChain().message(f"❌ 需要安装 {package_name} 才能生成此类型文件")
             )
-            return
+            return f"错误：需要安装 {package_name}"
         file_info = {
             "type": office_type,
             "filename": filename,
@@ -638,16 +650,17 @@ class FileOperationPlugin(Star):
                             f"❌ 生成的文件过大 ({size_str})，超过限制 {max_str}"
                         )
                     )
-                    return
+                    return f"错误：文件过大 ({size_str})，超过限制 {max_str}"
                 use_reply = self.config.get("trigger_settings", {}).get(
                     "reply_to_user", True
                 )
 
                 # 先发送文本消息
-                text_chain = [Comp.Plain(f"✅ 文件已处理成功：{file_path.name}")]
+                text_chain = MessageChain()
+                text_chain.message(f"✅ 文件已处理成功：{file_path.name}")
                 if use_reply:
-                    text_chain.append(Comp.At(qq=event.get_sender_id()))
-                await event.send(MessageChain(text_chain))
+                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
+                await event.send(text_chain)
                 await event.send(
                     MessageChain(
                         [Comp.File(file=str(file_path.resolve()), name=file_path.name)]
@@ -664,20 +677,26 @@ class FileOperationPlugin(Star):
         except Exception as e:
             await event.send(MessageChain().message(f"文件操作异常: {e}"))
 
-    @llm_tool(name="delete_file")
-    async def delete_file(self, event: AstrMessageEvent, filename: str) -> str|None:
-        """从工作区中永久删除指定文件。
-
-        Args:
-            filename(string): 要删除的文件名
-        """
+    @filter.command("delete_file", alias={"删除文件", "rm"})
+    async def delete_file(self, event: AstrMessageEvent):
+        """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
             return
+
+        # 从消息中获取文件名参数
+        text = event.message_str.strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await event.send(MessageChain().message("❌ 用法: /delete_file 文件名"))
+            return
+        filename = parts[1].strip()
+
         valid, file_path, error = self._validate_path(filename)
         if not valid:
-            return f"❌ {error}"
+            await event.send(MessageChain().message(f"❌ {error}"))
+            return
 
         if file_path.exists():
             try:
@@ -699,31 +718,13 @@ class FileOperationPlugin(Star):
         await event.send(MessageChain().message(f"错误：找不到文件 '{filename}'"))
         return
 
-    @llm_tool(name="create_office_file")
-    async def create_office_file(
+    async def _generate_with_code(
         self,
         event: AstrMessageEvent,
         description: str,
         filename: str = "",
     ) -> str:
-        """通过 AI 生成代码来创建高质量的 Office 文件（Excel/Word/PPT）。
-
-        适用于需要复杂格式的文件，如：
-        - 带样式的 Excel 表格（合并单元格、公式、图表）
-        - 格式丰富的 Word 文档（多级标题、目录、图片）
-        - 专业的 PPT 演示文稿（多页幻灯片、布局）
-
-        Args:
-            description(string): 详细描述你需要的文件内容和格式要求
-            filename(string): 可选的文件名（如 report.xlsx），不填则自动生成
-        """
-        if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return "拒绝访问：权限不足"
-
-        if not self.config.get("feature_settings", {}).get("enable_office_files", True):
-            return "错误：当前配置禁用了 Office 文件生成功能。"
-
+        """通过 AI 生成代码来创建 Office 文件（内部方法）"""
         # 构建代码生成提示
         user_prompt = f"用户需求：{description}"
         if filename:
@@ -779,7 +780,7 @@ class FileOperationPlugin(Star):
             new_files = [f for f in current_files - existing_files if f.is_file()]
 
             if not new_files:
-                return "代码执行成功，但未生成任何文件。请检查代码是否正确调用了 save_file() 函数。"
+                return "代码执行成功，但未生成任何文件。请检查代码是否正确保存了文件。"
 
             # 发送所有生成的文件
             max_size = self._get_max_file_size()
