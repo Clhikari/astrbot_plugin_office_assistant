@@ -548,42 +548,54 @@ class FileOperationPlugin(Star):
     async def write_file(
         self,
         event: AstrMessageEvent,
-        filename: str,
-        content: str,
+        filename: str = "",
+        content: str = "",
+        description: str = "",
         file_type: str = "word",
     ):
-        """在机器人工作区中创建 Office 文件并发送给用户。
+        """创建 Office 文件（Excel/Word/PPT）并发送给用户。
 
-        【修改文件】：先用 read_file 读取原文件，修改内容后用此工具创建（相同文件名会覆盖）。
+        两种模式：
+        1. 直接生成：提供 content 参数，适合简单格式
+        2. AI 代码生成：提供 description 参数，适合复杂格式（图表、样式等）
 
-        【Excel 格式】严格要求：
-        - 用 | 分隔每个单元格，用换行分隔每一行
-        - 第一行是表头，后续是数据行
-        - 每行的列数必须一致
-        - 示例（3列5行的表格）：
-          姓名|年龄|城市
-          张三|25|北京
-          李四|30|上海
-          王五|28|广州
-          赵六|35|深圳
+        【直接生成 - content 格式要求】：
+        - Excel：用 | 分隔单元格，换行分隔行。如：姓名|年龄\\n张三|25
+        - Word：纯文本，用空行分段
+        - PPT：用 [幻灯片 1] 标记分页
 
-        【Word 格式】：
-        - 纯文本书写，不要用 Markdown（禁止 #、**、- 等符号）
-        - 用空行分隔段落，标题直接写文字即可
-
-        【PPT 格式】：
-        - 用 [幻灯片 1]、[幻灯片 2] 标记每页
-        - 标题写在标记后第一行，内容写在后续行
+        【AI 生成 - description】：
+        描述你需要的文件，如"创建一个带图表的销售报表"
 
         Args:
-            filename(string): 文件名（含扩展名如 .xlsx/.docx/.pptx，系统会自动识别类型）
-            content(string): 文件内容（严格按上述格式，不要用Markdown）
-            file_type(string): 仅当文件名无扩展名时使用，可选：word、excel、powerpoint
+            filename(string): 文件名（如 report.xlsx），必须包含扩展名
+            content(string): 文件内容（简单格式用此参数）
+            description(string): 需求描述（复杂格式用此参数，AI 会生成代码）
+            file_type(string): 仅当文件名无扩展名时使用
         """
-        filename = Path(filename).name
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return
+            return "拒绝访问：权限不足"
+
+        if not self.config.get("feature_settings", {}).get("enable_office_files", True):
+            await event.send(
+                MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
+            )
+            return "错误：当前配置禁用了 Office 文件生成功能"
+
+        # 参数验证
+        if not content and not description:
+            return "错误：请提供 content（文件内容）或 description（需求描述）"
+
+        # 根据参数选择生成模式
+        if description and not content:
+            # AI 代码生成模式
+            return await self._generate_with_code(event, description, filename)
+
+        # 直接生成模式
+        filename = Path(filename).name if filename else ""
+        if not filename:
+            return "错误：直接生成模式需要提供 filename"
 
         # 优先根据文件名扩展名自动推断文件类型
         suffix = Path(filename).suffix.lower()
@@ -599,13 +611,13 @@ class FileOperationPlugin(Star):
                     f"❌ 不支持的类型，可选：{', '.join(OFFICE_TYPE_MAP.keys())}"
                 )
             )
-            return
+            return f"不支持的文件类型: {file_type}"
 
         if not self.config.get("feature_settings", {}).get("enable_office_files", True):
             await event.send(
                 MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
             )
-            return
+            return "错误：当前配置禁用了 Office 文件生成功能"
 
         module_name = OFFICE_LIBS[office_type][0]
         if not self._office_libs.get(module_name):
@@ -613,7 +625,7 @@ class FileOperationPlugin(Star):
             await event.send(
                 MessageChain().message(f"❌ 需要安装 {package_name} 才能生成此类型文件")
             )
-            return
+            return f"错误：需要安装 {package_name}"
         file_info = {
             "type": office_type,
             "filename": filename,
@@ -637,7 +649,7 @@ class FileOperationPlugin(Star):
                             f"❌ 生成的文件过大 ({size_str})，超过限制 {max_str}"
                         )
                     )
-                    return
+                    return f"错误：文件过大 ({size_str})，超过限制 {max_str}"
                 use_reply = self.config.get("trigger_settings", {}).get(
                     "reply_to_user", True
                 )
@@ -705,31 +717,13 @@ class FileOperationPlugin(Star):
         await event.send(MessageChain().message(f"错误：找不到文件 '{filename}'"))
         return
 
-    @llm_tool(name="create_office_file")
-    async def create_office_file(
+    async def _generate_with_code(
         self,
         event: AstrMessageEvent,
         description: str,
         filename: str = "",
     ) -> str:
-        """通过 AI 生成代码来创建高质量的 Office 文件（Excel/Word/PPT）。
-
-        适用于需要复杂格式的文件，如：
-        - 带样式的 Excel 表格（合并单元格、公式、图表）
-        - 格式丰富的 Word 文档（多级标题、目录、图片）
-        - 专业的 PPT 演示文稿（多页幻灯片、布局）
-
-        Args:
-            description(string): 详细描述你需要的文件内容和格式要求
-            filename(string): 可选的文件名（如 report.xlsx），不填则自动生成
-        """
-        if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return "拒绝访问：权限不足"
-
-        if not self.config.get("feature_settings", {}).get("enable_office_files", True):
-            return "错误：当前配置禁用了 Office 文件生成功能。"
-
+        """通过 AI 生成代码来创建 Office 文件（内部方法）"""
         # 构建代码生成提示
         user_prompt = f"用户需求：{description}"
         if filename:
@@ -785,7 +779,7 @@ class FileOperationPlugin(Star):
             new_files = [f for f in current_files - existing_files if f.is_file()]
 
             if not new_files:
-                return "代码执行成功，但未生成任何文件。请检查代码是否正确调用了 save_file() 函数。"
+                return "代码执行成功，但未生成任何文件。请检查代码是否正确保存了文件。"
 
             # 发送所有生成的文件
             max_size = self._get_max_file_size()
