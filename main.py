@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import importlib
 import shutil
 import tempfile
@@ -9,21 +8,13 @@ from pathlib import Path
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, llm_tool, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.core.message.components import At, Reply
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_type import MessageType
+from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-# 导入代码执行器
-from .code_executor import (
-    CODE_GENERATION_PROMPT,
-    CodeExecutionError,
-    RestrictedCodeExecutor,
-    SecurityViolationError,
-    extract_code_from_response,
-)
 from .constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MAX_FILE_SIZE_MB,
@@ -81,12 +72,8 @@ class FileOperationPlugin(Star):
 
         # 初始化消息缓冲器
         file_settings = self.config.get("file_settings", {})
-        buffer_wait = file_settings.get("message_buffer_seconds", 2.5)
-        observe_wait = file_settings.get("message_observe_seconds", 0.8)
-        self._message_buffer = MessageBuffer(
-            wait_seconds=buffer_wait,
-            observe_seconds=observe_wait,
-        )
+        buffer_wait = file_settings.get("message_buffer_seconds", 4)
+        self._message_buffer = MessageBuffer(wait_seconds=buffer_wait)
         self._message_buffer.set_complete_callback(self._on_buffer_complete)
         self._message_buffer.set_passthrough_callback(self._on_buffer_passthrough)
 
@@ -94,6 +81,21 @@ class FileOperationPlugin(Star):
         logger.info(
             f"[文件管理] 插件加载完成。模式: {mode}, 数据目录: {self.plugin_data_path}"
         )
+
+    async def terminate(self):
+        """插件卸载时释放资源"""
+        # 关闭线程池
+        if hasattr(self, "_executor") and self._executor:
+            self._executor.shutdown(wait=False)
+            logger.debug("[文件管理] 线程池已关闭")
+
+        # 清理临时目录
+        if hasattr(self, "_temp_dir") and self._temp_dir:
+            try:
+                self._temp_dir.cleanup()
+                logger.debug("[文件管理] 临时目录已清理")
+            except Exception as e:
+                logger.warning(f"[文件管理] 清理临时目录失败: {e}")
 
     async def _on_buffer_passthrough(self, buf: BufferedMessage):
         """
@@ -197,21 +199,21 @@ class FileOperationPlugin(Star):
 
     def _check_permission(self, event: AstrMessageEvent) -> bool:
         """检查用户权限"""
-        logger.info("正在检查用户权限")
-        perm_cfg = self.config.get("permission_settings", {})
+        logger.debug("正在检查用户权限")
 
-        # 管理员检查
-        if perm_cfg.get("require_admin", False) and not event.is_admin():
+        # 管理员始终有权限
+        if event.is_admin():
+            return True
+
+        # 白名单检查（空白名单 = 仅管理员可用）
+        whitelist = self.config.get("permission_settings", {}).get(
+            "whitelist_users", []
+        )
+        if not whitelist:
             return False
 
-        # 白名单检查
-        whitelist = perm_cfg.get("whitelist_users", [])
-        if whitelist:
-            user_id = str(event.get_sender_id())
-            if user_id not in [str(u) for u in whitelist]:
-                return False
-
-        return True
+        user_id = str(event.get_sender_id())
+        return user_id in [str(u) for u in whitelist]
 
     def _is_bot_mentioned(self, event: AstrMessageEvent) -> bool:
         """检查是否被@/回复"""
@@ -257,41 +259,6 @@ class FileOperationPlugin(Star):
                 logger.warning(f"[文件管理] {package_name} 未安装")
         return libs
 
-    async def _read_file_as_base64(
-        self, file_path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE
-    ) -> str:
-        """
-        异步分块读取文件并转为 Base64
-
-        Args:
-            file_path: 文件路径
-            chunk_size: 每次读取的块大小，默认 64KB
-                        (Base64 编码要求输入是 3 的倍数，64KB = 65536 是 3 的倍数)
-        """
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self._executor, self._read_file_as_base64_sync, file_path, chunk_size
-        )
-
-    def _read_file_as_base64_sync(self, file_path: Path, chunk_size: int) -> str:
-        """同步分块读取文件并转为 Base64"""
-        # 确保 chunk_size 是 3 的倍数
-        chunk_size = (chunk_size // 3) * 3
-
-        # 防御性检查：确保chunk_size有效
-        if chunk_size <= 0:
-            chunk_size = DEFAULT_CHUNK_SIZE
-
-        encoded_chunks = []
-        with open(file_path, "rb") as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                encoded_chunks.append(base64.b64encode(chunk).decode("utf-8"))
-
-        return "".join(encoded_chunks)
-
     def _get_max_file_size(self) -> int:
         """获取最大文件大小（字节）"""
         mb = self.config.get("file_settings", {}).get(
@@ -303,7 +270,7 @@ class FileOperationPlugin(Star):
         self, file_path: Path, max_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> str:
         """异步分块读取文本文件"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor, self._read_text_file_sync, file_path, max_size, chunk_size
         )
@@ -430,10 +397,22 @@ class FileOperationPlugin(Star):
         ):
             should_expose = False
 
-        if not should_expose and req.func_tool:
-            for tool_name in FILE_TOOLS:
-                req.func_tool.remove_tool(tool_name)
-            return  # 如果工具被移除，通常意味着权限不足或未触发，不处理文件
+        if not should_expose:
+            logger.info(
+                f"[文件管理] 用户 {event.get_sender_id()} 权限不足，已隐藏文件工具"
+            )
+            if req.func_tool:
+                for tool_name in FILE_TOOLS:
+                    req.func_tool.remove_tool(tool_name)
+            # 权限不足时提示用户
+            if not self._check_permission(event):
+                await event.send(MessageChain().message(" 你没有使用文件功能的权限"))
+                if not is_friend:
+                    await event.send(
+                        MessageChain().at(event.get_sender_name(), event.get_sender_id())
+                    )
+                event.stop_event()
+            return
 
         # 处理文件消息
         for component in event.message_obj.message:
@@ -470,7 +449,7 @@ class FileOperationPlugin(Star):
         """列出机器人文件库中的所有文件。"""
 
         if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
+            await event.send(MessageChain().message("❌ 权限不足"))
             return
 
         try:
@@ -507,7 +486,7 @@ class FileOperationPlugin(Star):
             filename(string): 要读取的文件名
         """
         if not self._check_permission(event):
-            return "错误：拒绝访问，权限不足"
+            return "错误：权限不足"
         valid, file_path, error = self._validate_path(filename)
         if not valid:
             return f"错误：{error}"
@@ -545,58 +524,43 @@ class FileOperationPlugin(Star):
             return f"错误：读取文件失败 - {e}"
 
     @llm_tool(name="create_office_file")
-    async def write_file(
+    async def create_office_file(
         self,
         event: AstrMessageEvent,
         filename: str = "",
         content: str = "",
-        description: str = "",
         file_type: str = "word",
     ):
-        """创建并生成新的 Office 文件（Excel/Word/PPT），然后发送给用户。
-        当用户要求制作、创建、生成文档/表格/PPT时，使用此工具。
+        """创建Office 文件（Excel/Word/PPT）并发送给用户。
+        仅支持简单格式，不支持复杂样式、图表等。
 
-        两种模式：
-        1. 直接生成：提供 content 参数，适合简单格式
-        2. AI 代码生成：提供 description 参数，适合复杂/精美格式（图表、样式等）
-
-        【直接生成 - content 格式】：
+        【content 格式说明】：
         - Excel：用 | 分隔单元格，换行分隔行。如：姓名|年龄\\n张三|25
         - Word：纯文本，用空行分段
-        - PPT：用 [幻灯片 1] 标记分页
-
-        【AI 生成 - description】：
-        描述需求即可，如"创建一个精美的销售报表PPT，包含图表"
+        - PPT：用 [幻灯片 1] 标记分页，或按空行自动分页
 
         Args:
-            filename(string): 文件名（如 report.pptx），需包含扩展名(.docx/.xlsx/.pptx)
-            content(string): 文件内容（简单格式用此参数）
-            description(string): 需求描述（精美/复杂格式用此参数）
-            file_type(string): 文件类型 word/excel/powerpoint，仅当文件名无扩展名时使用
+            filename(string): 文件名（需包含扩展名 .docx/.xlsx/.pptx）
+            content(string): 文件内容（按上述格式）
+            file_type(string): 文件类型 word/excel/powerpoint（仅当文件名无扩展名时使用）
         """
         if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
-            return "拒绝访问：权限不足"
+            await event.send(MessageChain().message("❌ 权限不足"))
+            return "错误：权限不足"
 
         if not self.config.get("feature_settings", {}).get("enable_office_files", True):
             await event.send(
-                MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
+                MessageChain().message("❌ 当前配置禁用了 Office 文件生成功能")
             )
             return "错误：当前配置禁用了 Office 文件生成功能"
 
         # 参数验证
-        if not content and not description:
-            return "错误：请提供 content（文件内容）或 description（需求描述）"
+        if not content:
+            return "错误：请提供 content（文件内容）"
 
-        # 根据参数选择生成模式
-        if description and not content:
-            # AI 代码生成模式
-            return await self._generate_with_code(event, description, filename)
-
-        # 直接生成模式
         filename = Path(filename).name if filename else ""
         if not filename:
-            return "错误：直接生成模式需要提供 filename"
+            return "错误：请提供 filename（文件名）"
 
         # 优先根据文件名扩展名自动推断文件类型
         suffix = Path(filename).suffix.lower()
@@ -612,13 +576,7 @@ class FileOperationPlugin(Star):
                     f"❌ 不支持的类型，可选：{', '.join(OFFICE_TYPE_MAP.keys())}"
                 )
             )
-            return f"不支持的文件类型: {file_type}"
-
-        if not self.config.get("feature_settings", {}).get("enable_office_files", True):
-            await event.send(
-                MessageChain().message("错误：当前配置禁用了 Office 文件生成功能。")
-            )
-            return "错误：当前配置禁用了 Office 文件生成功能"
+            return f"错误：不支持的文件类型 '{file_type}'"
 
         module_name = OFFICE_LIBS[office_type][0]
         if not self._office_libs.get(module_name):
@@ -682,7 +640,7 @@ class FileOperationPlugin(Star):
         """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
 
         if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
+            await event.send(MessageChain().message("❌ 权限不足"))
             return
 
         # 从消息中获取文件名参数
@@ -717,112 +675,6 @@ class FileOperationPlugin(Star):
                 return
         await event.send(MessageChain().message(f"错误：找不到文件 '{filename}'"))
         return
-
-    async def _generate_with_code(
-        self,
-        event: AstrMessageEvent,
-        description: str,
-        filename: str = "",
-    ) -> str:
-        """通过 AI 生成代码来创建 Office 文件（内部方法）"""
-        # 构建代码生成提示
-        user_prompt = f"用户需求：{description}"
-        if filename:
-            user_prompt += f"\n文件名：{filename}"
-
-        try:
-            # 获取 LLM provider 生成代码
-            provider = self.context.get_using_provider()
-            if not provider:
-                return "错误：没有可用的 LLM 提供商"
-
-            # 调用 LLM 生成代码
-            from astrbot.api.provider import ProviderRequest
-
-            req = ProviderRequest(
-                prompt=user_prompt, system_prompt=CODE_GENERATION_PROMPT
-            )
-            resp = await provider.text_chat(**req.__dict__)
-
-            if not resp or not resp.completion_text:
-                return "错误：LLM 未返回有效代码"
-
-            # 提取代码
-            code = extract_code_from_response(resp.completion_text)
-            if not code:
-                return "错误：无法从 LLM 响应中提取代码"
-
-            logger.debug(f"[文件生成] 生成的代码:\n{code[:500]}...")
-
-            # 记录生成前的文件列表
-            existing_files = set(self.plugin_data_path.glob("*"))
-
-            # 执行代码
-            executor = RestrictedCodeExecutor(
-                work_dir=self.plugin_data_path,
-                timeout=30.0,
-            )
-
-            try:
-                result = await executor.execute(code)
-                logger.info(f"[文件生成] 代码执行成功: {result}")
-            except SecurityViolationError as e:
-                logger.warning(f"[文件生成] 安全违规: {e}")
-                return f"错误：代码安全检查失败 - {e}"
-            except CodeExecutionError as e:
-                logger.error(f"[文件生成] 代码执行失败: {e}")
-                return f"错误：代码执行失败 - {e}"
-            finally:
-                executor.cleanup()
-
-            # 查找新生成的文件
-            current_files = set(self.plugin_data_path.glob("*"))
-            new_files = [f for f in current_files - existing_files if f.is_file()]
-
-            if not new_files:
-                return "代码执行成功，但未生成任何文件。请检查代码是否正确保存了文件。"
-
-            # 发送所有生成的文件
-            max_size = self._get_max_file_size()
-            sent_files = []
-
-            for file_path in new_files:
-                file_size = file_path.stat().st_size
-                if file_size > max_size:
-                    file_path.unlink()
-                    await event.send(
-                        MessageChain().message(
-                            f"❌ 文件 {file_path.name} 过大 ({format_file_size(file_size)})，已删除"
-                        )
-                    )
-                    continue
-
-                # 发送文件
-                await event.send(
-                    MessageChain().message(f"✅ 已生成文件：{file_path.name}")
-                )
-                await event.send(
-                    MessageChain(
-                        [Comp.File(file=str(file_path.resolve()), name=file_path.name)]
-                    )
-                )
-                sent_files.append(file_path.name)
-
-                # 自动删除模式
-                if self._auto_delete and file_path.exists():
-                    try:
-                        file_path.unlink()
-                        logger.debug(f"[文件生成] 已自动删除: {file_path.name}")
-                    except Exception as del_e:
-                        logger.warning(f"[文件生成] 自动删除失败: {del_e}")
-
-            if sent_files:
-                return f"成功生成并发送文件: {', '.join(sent_files)}"
-            return "未能成功发送任何文件"
-
-        except Exception as e:
-            logger.error(f"[文件生成] 异常: {e}", exc_info=True)
-            return f"错误：文件生成失败 - {e}"
 
     @filter.command("fileinfo")
     async def fileinfo(self, event: AstrMessageEvent):
