@@ -1,6 +1,11 @@
-# 📁 文件操作工具
 
-这是一个为 AstrBot 设计的文件管理插件。它赋予大语言模型（LLM）直接操作机器人服务器工作区文件的能力，支持读取并分析多种格式文件，以及生成 Office 文档。
+<p align="center">
+  <img src="https://count.getloli.com/@Clhikariproject2?name=Clhikariproject2&theme=booru-touhoulat&padding=7&offset=0&align=center&scale=0.8&pixelated=1&darkmode=1" alt="Moe Counter">
+</p>
+
+# 📁 Office助手
+
+这是一个为 AstrBot 设计的Office助手插件。它赋予大语言模型（LLM）直接操作文件的能力，支持读取并分析多种格式文件，以及生成 Office 文档。
 
 ## 🌟 核心特性
 
