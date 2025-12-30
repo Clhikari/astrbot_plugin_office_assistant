@@ -405,7 +405,9 @@ class FileOperationPlugin(Star):
                 await event.send(MessageChain().message(" 你没有使用文件功能的权限"))
                 if not is_friend:
                     await event.send(
-                        MessageChain().at(event.get_sender_name(), event.get_sender_id())
+                        MessageChain().at(
+                            event.get_sender_name(), event.get_sender_id()
+                        )
                     )
                 event.stop_event()
             return
