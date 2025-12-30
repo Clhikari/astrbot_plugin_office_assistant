@@ -70,4 +70,3 @@ FILE_TOOLS = [
     "read_file",
     "create_office_file",
 ]
-PLUGIN_NAME = "astrbot_plugin_office_assistant"
