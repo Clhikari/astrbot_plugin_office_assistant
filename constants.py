@@ -68,6 +68,6 @@ DEFAULT_MAX_FILE_SIZE_MB = 50
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
 FILE_TOOLS = [
     "read_file",
-    "write_file",
+    "create_office_file",
 ]
 PLUGIN_NAME = "astrbot_plugin_office_assistant"

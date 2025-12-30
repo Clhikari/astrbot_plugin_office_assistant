@@ -544,7 +544,7 @@ class FileOperationPlugin(Star):
             logger.error(f"读取文件失败: {e}")
             return f"错误：读取文件失败 - {e}"
 
-    @llm_tool(name="write_file")
+    @llm_tool(name="create_office_file")
     async def write_file(
         self,
         event: AstrMessageEvent,
@@ -553,25 +553,26 @@ class FileOperationPlugin(Star):
         description: str = "",
         file_type: str = "word",
     ):
-        """创建 Office 文件（Excel/Word/PPT）并发送给用户。
+        """创建并生成新的 Office 文件（Excel/Word/PPT），然后发送给用户。
+        当用户要求制作、创建、生成文档/表格/PPT时，使用此工具。
 
         两种模式：
         1. 直接生成：提供 content 参数，适合简单格式
-        2. AI 代码生成：提供 description 参数，适合复杂格式（图表、样式等）
+        2. AI 代码生成：提供 description 参数，适合复杂/精美格式（图表、样式等）
 
-        【直接生成 - content 格式要求】：
+        【直接生成 - content 格式】：
         - Excel：用 | 分隔单元格，换行分隔行。如：姓名|年龄\\n张三|25
         - Word：纯文本，用空行分段
         - PPT：用 [幻灯片 1] 标记分页
 
         【AI 生成 - description】：
-        描述你需要的文件，如"创建一个带图表的销售报表"
+        描述需求即可，如"创建一个精美的销售报表PPT，包含图表"
 
         Args:
-            filename(string): 文件名（如 report.xlsx），必须包含扩展名
+            filename(string): 文件名（如 report.pptx），需包含扩展名(.docx/.xlsx/.pptx)
             content(string): 文件内容（简单格式用此参数）
-            description(string): 需求描述（复杂格式用此参数，AI 会生成代码）
-            file_type(string): 仅当文件名无扩展名时使用
+            description(string): 需求描述（精美/复杂格式用此参数）
+            file_type(string): 文件类型 word/excel/powerpoint，仅当文件名无扩展名时使用
         """
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 拒绝访问：权限不足"))
