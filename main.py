@@ -15,12 +15,15 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 
 from .constants import (
+    ALL_OFFICE_SUFFIXES,
+    CONVERTIBLE_TO_PDF,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MAX_FILE_SIZE_MB,
     FILE_TOOLS,
     OFFICE_LIBS,
-    OFFICE_SUFFIXES,
     OFFICE_TYPE_MAP,
+    PDF_SUFFIX,
+    PDF_TARGET_FORMATS,
     SUFFIX_TO_OFFICE_TYPE,
     TEXT_SUFFIXES,
     OfficeType,
@@ -31,11 +34,15 @@ from .message_buffer import BufferedMessage, MessageBuffer
 
 # 导入底层生成器
 from .office_generator import OfficeGenerator
+
+# 导入 PDF 转换器
+from .pdf_converter import PDFConverter
 from .utils import (
     extract_excel_text,
     extract_ppt_text,
     extract_word_text,
     format_file_size,
+    safe_error_message,
 )
 
 
@@ -61,10 +68,17 @@ class FileOperationPlugin(Star):
             self.plugin_data_path = StarTools.get_data_dir() / "files"
             self.plugin_data_path.mkdir(parents=True, exist_ok=True)
 
-        self.office_gen = OfficeGenerator(self.plugin_data_path)
+        # 统一的线程池，供所有子模块共享
+        self._executor = ThreadPoolExecutor(max_workers=4)
+
+        self.office_gen = OfficeGenerator(
+            self.plugin_data_path, executor=self._executor
+        )
+        self.pdf_converter = PDFConverter(
+            self.plugin_data_path, executor=self._executor
+        )
 
         self._office_libs = self._check_office_libs()
-        self._executor = ThreadPoolExecutor(max_workers=2)
 
         # 初始化消息缓冲器
         file_settings = self.config.get("file_settings", {})
@@ -80,10 +94,20 @@ class FileOperationPlugin(Star):
 
     async def terminate(self):
         """插件卸载时释放资源"""
-        # 关闭线程池
+        # 清理 Office 生成器资源
+        if hasattr(self, "office_gen") and self.office_gen:
+            self.office_gen.cleanup()
+            logger.debug("[文件管理] Office生成器已清理")
+
+        # 清理 PDF 转换器资源
+        if hasattr(self, "pdf_converter") and self.pdf_converter:
+            self.pdf_converter.cleanup()
+            logger.debug("[文件管理] PDF转换器已清理")
+
+        # 关闭主线程池（子模块使用共享线程池，不会自己关闭）
         if hasattr(self, "_executor") and self._executor:
             self._executor.shutdown(wait=False)
-            logger.debug("[文件管理] 线程池已关闭")
+            logger.debug("[文件管理] 主线程池已关闭")
 
         # 清理临时目录
         if hasattr(self, "_temp_dir") and self._temp_dir:
@@ -104,9 +128,16 @@ class FileOperationPlugin(Star):
             f"[消息缓冲] 放行无文件消息，文本: {buf.texts[:2] if buf.texts else '(空)'}..."
         )
 
+        # 检查重入次数，防止无限循环
+        reentry_count = getattr(event, "_buffer_reentry_count", 0)
+        if reentry_count >= 3:
+            logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
+            return
+
         try:
             # 标记事件已经过缓冲处理，避免重复缓冲
             setattr(event, "_buffered", True)
+            setattr(event, "_buffer_reentry_count", reentry_count + 1)
 
             # 重置事件状态，让它可以继续传播
             event._result = None
@@ -129,6 +160,12 @@ class FileOperationPlugin(Star):
         texts = buf.texts
 
         logger.info(f"[消息缓冲] 缓冲完成，文件数: {len(files)}, 文本数: {len(texts)}")
+
+        # 检查重入次数，防止无限循环
+        reentry_count = getattr(event, "_buffer_reentry_count", 0)
+        if reentry_count >= 3:
+            logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
+            return
 
         # 构建文件信息列表
         file_info_list = []
@@ -179,6 +216,7 @@ class FileOperationPlugin(Star):
         try:
             # 标记事件已经过缓冲处理，避免重复缓冲
             setattr(event, "_buffered", True)
+            setattr(event, "_buffer_reentry_count", reentry_count + 1)
 
             # 重置事件状态，让它可以继续传播
             event._result = None
@@ -241,6 +279,75 @@ class FileOperationPlugin(Star):
             return True, file_path, ""
         except Exception as e:
             return False, file_path, f"路径解析失败: {e}"
+
+    def _pre_check(
+        self,
+        event: AstrMessageEvent,
+        filename: str | None = None,
+        *,
+        check_permission: bool = True,
+        feature_key: str | None = None,
+        require_exists: bool = False,
+        allowed_suffixes: frozenset | set | None = None,
+        required_suffix: str | None = None,
+    ) -> tuple[bool, Path | None, str | None]:
+        """
+        统一的前置检查方法
+
+        Args:
+            event: 消息事件
+            filename: 要检查的文件名（可选）
+            check_permission: 是否检查用户权限
+            feature_key: 功能配置键名（如 "enable_pdf_conversion"）
+            require_exists: 是否要求文件存在
+            allowed_suffixes: 允许的文件后缀集合
+            required_suffix: 必须的文件后缀（如 ".pdf"）
+
+        Returns:
+            (通过检查, 文件路径, 错误信息)
+            - 通过时: (True, Path, None)
+            - 失败时: (False, None, "错误信息")
+        """
+        # 权限检查
+        if check_permission and not self._check_permission(event):
+            return False, None, "错误：权限不足"
+
+        # 功能开关检查
+        if feature_key:
+            if not self.config.get("feature_settings", {}).get(feature_key, True):
+                return False, None, "错误：该功能已被禁用"
+
+        # 如果不需要检查文件，直接返回成功
+        if filename is None:
+            return True, None, None
+
+        # 路径验证
+        valid, file_path, error = self._validate_path(filename)
+        if not valid:
+            return False, None, f"错误：{error}"
+
+        # 文件存在性检查
+        if require_exists and not file_path.exists():
+            return False, None, f"错误：文件 '{filename}' 不存在"
+
+        # 文件后缀检查
+        suffix = file_path.suffix.lower()
+        if required_suffix and suffix != required_suffix:
+            return (
+                False,
+                None,
+                f"错误：仅支持 {required_suffix} 文件，当前格式: {suffix}",
+            )
+
+        if allowed_suffixes and suffix not in allowed_suffixes:
+            supported = ", ".join(allowed_suffixes)
+            return (
+                False,
+                None,
+                f"错误：不支持的文件格式 '{suffix}'，仅支持: {supported}",
+            )
+
+        return True, file_path, None
 
     def _check_office_libs(self) -> dict:
         """检查并缓存 Office 库的可用性"""
@@ -427,7 +534,7 @@ class FileOperationPlugin(Star):
                         file_suffix = dst_path.suffix.lower()
                         type_desc = "未知格式文件"
 
-                        if file_suffix in OFFICE_SUFFIXES:
+                        if file_suffix in ALL_OFFICE_SUFFIXES:
                             type_desc = "Office文档 (Word/Excel/PPT)"
                         elif file_suffix in TEXT_SUFFIXES:
                             type_desc = "文本/代码文件"
@@ -442,40 +549,6 @@ class FileOperationPlugin(Star):
                 except Exception as e:
                     logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
-    @filter.command("list_files", alias={"文件列表", "lsf"})
-    async def list_files(self, event: AstrMessageEvent):
-        """列出机器人文件库中的所有文件。"""
-
-        if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 权限不足"))
-            return
-
-        try:
-            files = [
-                f
-                for f in self.plugin_data_path.glob("*")
-                if f.is_file() and f.suffix.lower() in OFFICE_SUFFIXES
-            ]
-            if not files:
-                msg = "文件库当前没有 Office 文件"
-                if self._auto_delete:
-                    msg += "（自动删除模式已开启，文件发送后会自动清理）"
-                await event.send(MessageChain().message(msg))
-                return
-
-            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            res = ["📂 机器人工作区 Office 文件列表："]
-            if self._auto_delete:
-                res.append("⚠️ 自动删除模式已开启")
-            for f in files:
-                res.append(f"- {f.name} ({format_file_size(f.stat().st_size)})")
-
-            result = "\n".join(res)
-            await event.send(MessageChain().message(result))
-        except Exception as e:
-            logger.error(f"获取列表失败: {e}")
-            await event.send(MessageChain().message(f"获取列表失败: {e}"))
-
     @llm_tool(name="read_file")
     async def read_file(self, event: AstrMessageEvent, filename: str) -> str | None:
         """读取文件内容并返回给 LLM 处理。LLM 会根据用户的请求（如总结、分析、提取信息等）对文件内容进行相应处理。
@@ -483,14 +556,12 @@ class FileOperationPlugin(Star):
         Args:
             filename(string): 要读取的文件名
         """
-        if not self._check_permission(event):
-            return "错误：权限不足"
-        valid, file_path, error = self._validate_path(filename)
-        if not valid:
-            return f"错误：{error}"
-        if not file_path.exists():
-            return f"错误：文件 '{filename}' 不存在"
+        # 统一前置检查
+        ok, file_path, err = self._pre_check(event, filename, require_exists=True)
+        if not ok:
+            return err or "错误：未知错误"
 
+        assert file_path is not None  # 类型断言：ok=True 时 file_path 必定存在
         file_size = file_path.stat().st_size
         max_size = self._get_max_file_size()
         if file_size > max_size:
@@ -506,7 +577,7 @@ class FileOperationPlugin(Star):
                     return f"[文件: {filename}, 大小: {format_file_size(file_size)}]\n{content}"
                 except Exception as e:
                     logger.error(f"读取文件失败: {e}")
-                    return f"错误：读取文件失败 - {e}"
+                    return f"错误：{safe_error_message(e, '读取文件失败')}"
             office_type = SUFFIX_TO_OFFICE_TYPE.get(suffix)
             # Office 文件：尝试提取文本（若未安装对应解析库，则提示为二进制）
             if office_type:
@@ -519,7 +590,7 @@ class FileOperationPlugin(Star):
             return f"错误：不支持读取 '{suffix}' 格式的文件"
         except Exception as e:
             logger.error(f"读取文件失败: {e}")
-            return f"错误：读取文件失败 - {e}"
+            return f"错误：{safe_error_message(e, '读取文件失败')}"
 
     @llm_tool(name="create_office_file")
     async def create_office_file(
@@ -542,15 +613,11 @@ class FileOperationPlugin(Star):
             content(string): 文件内容（按上述格式）
             file_type(string): 文件类型 word/excel/powerpoint（仅当文件名无扩展名时使用）
         """
-        if not self._check_permission(event):
-            await event.send(MessageChain().message("❌ 权限不足"))
-            return "错误：权限不足"
-
-        if not self.config.get("feature_settings", {}).get("enable_office_files", True):
-            await event.send(
-                MessageChain().message("❌ 当前配置禁用了 Office 文件生成功能")
-            )
-            return "错误：当前配置禁用了 Office 文件生成功能"
+        # 统一前置检查（仅检查权限和功能开关，不检查文件）
+        ok, _, err = self._pre_check(event, feature_key="enable_office_files")
+        if not ok:
+            await event.send(MessageChain().message(f"❌ {err}"))
+            return err or "错误：未知错误"
 
         # 参数验证
         if not content:
@@ -633,6 +700,198 @@ class FileOperationPlugin(Star):
         except Exception as e:
             await event.send(MessageChain().message(f"文件操作异常: {e}"))
 
+    @llm_tool(name="convert_to_pdf")
+    async def convert_to_pdf(
+        self,
+        event: AstrMessageEvent,
+        filename: str = "",
+        file_path: str = "",  # 别名，兼容 LLM 可能使用的参数名
+    ) -> str:
+        """将 Office 文件 (Word/Excel/PPT) 转换为 PDF 格式。
+        支持新旧版格式：.docx/.doc, .xlsx/.xls, .pptx/.ppt
+
+        Args:
+            filename(string): 要转换的 Office 文件名 (如 report.docx, data.xlsx, 报表.xls)
+        """
+        # 兼容 file_path 参数名
+        if not filename and file_path:
+            filename = file_path
+
+        if not filename:
+            return "错误：请提供要转换的 Office 文件名"
+
+        logger.debug(f"[PDF转换] convert_to_pdf 被调用，filename={filename}")
+        # 统一前置检查
+        ok, resolved_path, err = self._pre_check(
+            event,
+            filename,
+            feature_key="enable_pdf_conversion",
+            require_exists=True,
+            allowed_suffixes=CONVERTIBLE_TO_PDF,
+        )
+        if not ok:
+            logger.warning(f"[PDF转换] 前置检查失败: {err}")
+            return err or "错误：未知错误"
+
+        assert resolved_path is not None  # 类型断言：ok=True 时 resolved_path 必定存在
+
+        # 检查转换器是否可用
+        if not self.pdf_converter.is_available("office_to_pdf"):
+            return "错误：Office→PDF 转换不可用，需要安装 LibreOffice"
+
+        try:
+            logger.info(f"[PDF转换] 开始转换: {filename} → PDF")
+            output_path = await self.pdf_converter.office_to_pdf(resolved_path)
+
+            if output_path and output_path.exists():
+                file_size = output_path.stat().st_size
+                max_size = self._get_max_file_size()
+
+                if file_size > max_size:
+                    output_path.unlink()
+                    return f"错误：生成的 PDF 文件过大 ({format_file_size(file_size)})"
+
+                # 发送文件
+                use_reply = self.config.get("trigger_settings", {}).get(
+                    "reply_to_user", True
+                )
+                text_chain = MessageChain()
+                text_chain.message(f"✅ 已将 {filename} 转换为 PDF")
+                if use_reply:
+                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
+                await event.send(text_chain)
+
+                await event.send(
+                    MessageChain(
+                        [
+                            Comp.File(
+                                file=str(output_path.resolve()), name=output_path.name
+                            )
+                        ]
+                    )
+                )
+
+                # 自动删除
+                if self._auto_delete and output_path.exists():
+                    try:
+                        output_path.unlink()
+                        logger.debug(f"[PDF转换] 已自动删除: {output_path.name}")
+                    except Exception as e:
+                        logger.warning(f"[PDF转换] 自动删除失败: {e}")
+
+                return f"已将 {filename} 转换为 {output_path.name} 并发送给用户"
+
+            return "错误：PDF 转换失败，请检查文件格式是否正确"
+
+        except Exception as e:
+            logger.error(f"[PDF转换] 转换失败: {e}", exc_info=True)
+            return f"错误：{safe_error_message(e, '转换失败')}"
+
+    @llm_tool(name="convert_from_pdf")
+    async def convert_from_pdf(
+        self,
+        event: AstrMessageEvent,
+        filename: str = "",
+        target_format: str = "word",
+        file_id: str = "",  # 别名，兼容 LLM 可能使用的参数名
+    ) -> str:
+        """将 PDF 文件转换为 Office 格式 (Word 或 Excel)。
+
+        注意事项:
+        - PDF→Word: 适用于文本为主的 PDF，复杂布局可能有偏差
+        - PDF→Excel: 仅提取 PDF 中的表格数据，非表格内容会丢失
+
+        Args:
+            filename(string): 要转换的 PDF 文件名 (如 document.pdf)
+            target_format(string): 目标格式，可选 word 或 excel，默认 word
+        """
+        # 兼容 file_id 参数名
+        if not filename and file_id:
+            filename = file_id
+
+        if not filename:
+            return "错误：请提供要转换的 PDF 文件名"
+        # 统一前置检查：权限、功能开关、文件存在性、PDF 后缀
+        ok, file_path, err = self._pre_check(
+            event,
+            filename,
+            feature_key="enable_pdf_conversion",
+            require_exists=True,
+            required_suffix=PDF_SUFFIX,
+        )
+        if not ok:
+            return err or "错误：未知错误"
+
+        assert file_path is not None  # 类型断言：ok=True 时 file_path 必定存在
+
+        # 验证目标格式
+        target = target_format.lower().strip()
+        if target not in PDF_TARGET_FORMATS:
+            supported = ", ".join(PDF_TARGET_FORMATS.keys())
+            return f"错误：不支持的目标格式 '{target_format}'，可选: {supported}"
+
+        _, target_desc = PDF_TARGET_FORMATS[target]
+
+        # 检查转换器是否可用
+        conversion_type = f"pdf_to_{target}"
+        if not self.pdf_converter.is_available(conversion_type):
+            missing = self.pdf_converter.get_missing_dependencies()
+            return f"错误：PDF→{target_desc} 转换不可用，缺少依赖: {', '.join(missing)}"
+
+        try:
+            logger.info(f"[PDF转换] 开始转换: {filename} → {target_desc}")
+
+            if target == "word":
+                output_path = await self.pdf_converter.pdf_to_word(file_path)
+            elif target == "excel":
+                output_path = await self.pdf_converter.pdf_to_excel(file_path)
+            else:
+                return f"错误：未实现的转换类型: {target}"
+
+            if output_path and output_path.exists():
+                file_size = output_path.stat().st_size
+                max_size = self._get_max_file_size()
+
+                if file_size > max_size:
+                    output_path.unlink()
+                    return f"错误：生成的文件过大 ({format_file_size(file_size)})"
+
+                # 发送文件
+                use_reply = self.config.get("trigger_settings", {}).get(
+                    "reply_to_user", True
+                )
+                text_chain = MessageChain()
+                text_chain.message(f"✅ 已将 {filename} 转换为 {target_desc}")
+                if use_reply:
+                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
+                await event.send(text_chain)
+
+                await event.send(
+                    MessageChain(
+                        [
+                            Comp.File(
+                                file=str(output_path.resolve()), name=output_path.name
+                            )
+                        ]
+                    )
+                )
+
+                # 自动删除
+                if self._auto_delete and output_path.exists():
+                    try:
+                        output_path.unlink()
+                        logger.debug(f"[PDF转换] 已自动删除: {output_path.name}")
+                    except Exception as e:
+                        logger.warning(f"[PDF转换] 自动删除失败: {e}")
+
+                return f"已将 {filename} 转换为 {output_path.name} 并发送给用户"
+
+            return f"错误：PDF→{target_desc} 转换失败"
+
+        except Exception as e:
+            logger.error(f"[PDF转换] 转换失败: {e}", exc_info=True)
+            return f"错误：{safe_error_message(e, '转换失败')}"
+
     @filter.command("delete_file", alias={"删除文件", "rm"})
     async def delete_file(self, event: AstrMessageEvent):
         """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
@@ -678,9 +937,110 @@ class FileOperationPlugin(Star):
     async def fileinfo(self, event: AstrMessageEvent):
         """显示文件管理工具的运行信息"""
         storage_mode = "临时目录(自动删除)" if self._auto_delete else "持久化存储"
+
+        # 获取 PDF 转换器状态
+        pdf_caps = self.pdf_converter.capabilities
+        pdf_status = []
+        if pdf_caps.get("office_to_pdf"):
+            pdf_status.append("Office→PDF ✓")
+        else:
+            pdf_status.append("Office→PDF ✗ (需要LibreOffice)")
+        if pdf_caps.get("pdf_to_word"):
+            pdf_status.append("PDF→Word ✓")
+        else:
+            pdf_status.append("PDF→Word ✗ (需要pdf2docx)")
+        if pdf_caps.get("pdf_to_excel"):
+            pdf_status.append("PDF→Excel ✓")
+        else:
+            pdf_status.append("PDF→Excel ✗ (需要tabula-py)")
+
         yield event.plain_result(
             "📂 AstrBot 文件操作工具\n"
             f"存储模式: {storage_mode}\n"
             f"工作目录: {self.plugin_data_path}\n"
-            f"回复模式: {'开启' if self.config.get('trigger_settings', {}).get('reply_to_user') else '关闭'}"
+            f"回复模式: {'开启' if self.config.get('trigger_settings', {}).get('reply_to_user') else '关闭'}\n"
+            f"PDF转换: {', '.join(pdf_status)}"
         )
+
+    @filter.command("list_files", alias={"文件列表", "lsf"})
+    async def list_files(self, event: AstrMessageEvent):
+        """列出机器人文件库中的所有文件。"""
+
+        if not self._check_permission(event):
+            await event.send(MessageChain().message("❌ 权限不足"))
+            return
+
+        try:
+            files = [
+                f
+                for f in self.plugin_data_path.glob("*")
+                if f.is_file() and f.suffix.lower() in ALL_OFFICE_SUFFIXES
+            ]
+            if not files:
+                msg = "文件库当前没有 Office 文件"
+                if self._auto_delete:
+                    msg += "（自动删除模式已开启，文件发送后会自动清理）"
+                await event.send(MessageChain().message(msg))
+                return
+
+            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            res = ["📂 机器人工作区 Office 文件列表："]
+            if self._auto_delete:
+                res.append("⚠️ 自动删除模式已开启")
+            for f in files:
+                res.append(f"- {f.name} ({format_file_size(f.stat().st_size)})")
+
+            result = "\n".join(res)
+            await event.send(MessageChain().message(result))
+        except Exception as e:
+            logger.error(f"获取列表失败: {e}")
+            await event.send(MessageChain().message(f"获取列表失败: {e}"))
+
+    @filter.command("pdf_status", alias={"pdf状态"})
+    async def pdf_status(self, event: AstrMessageEvent):
+        """显示 PDF 转换功能的状态和依赖信息"""
+        status = self.pdf_converter.get_detailed_status()
+        caps = status["capabilities"]
+        missing = self.pdf_converter.get_missing_dependencies()
+
+        lines = ["📄 PDF 转换功能状态\n"]
+
+        # 功能状态
+        lines.append("【功能可用性】")
+        office_status = "✅ 可用" if caps["office_to_pdf"] else "❌ 不可用"
+        if status["office_to_pdf_backend"]:
+            office_status += f" ({status['office_to_pdf_backend']})"
+        lines.append(f"  Office→PDF: {office_status}")
+        word_status = "✅ 可用" if caps["pdf_to_word"] else "❌ 不可用"
+        if status["word_backend"]:
+            word_status += f" ({status['word_backend']})"
+        lines.append(f"  PDF→Word:   {word_status}")
+        excel_status = "✅ 可用" if caps["pdf_to_excel"] else "❌ 不可用"
+        if status["excel_backend"]:
+            excel_status += f" ({status['excel_backend']})"
+        lines.append(f"  PDF→Excel:  {excel_status}")
+
+        # 环境信息
+        lines.append("\n【环境检测】")
+        lines.append(f"  平台: {'Windows' if status['is_windows'] else 'Linux/macOS'}")
+        lines.append(
+            f"  Java: {'✅ 可用' if status['java_available'] else '❌ 不可用'}"
+        )
+        if status["libreoffice_path"]:
+            lines.append(f"  LibreOffice: {status['libreoffice_path']}")
+
+        # 已安装的库
+        libs = status["libs"]
+        installed = [k for k, v in libs.items() if v]
+        if installed:
+            lines.append(f"\n【已安装库】 {', '.join(installed)}")
+
+        # 缺失依赖
+        if missing:
+            lines.append("\n【缺失依赖】")
+            for dep in missing:
+                lines.append(f"  • {dep}")
+        else:
+            lines.append("\n✅ 所有依赖已安装")
+
+        yield event.plain_result("\n".join(lines))
