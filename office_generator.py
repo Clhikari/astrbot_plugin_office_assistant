@@ -15,10 +15,13 @@ from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
 class OfficeGenerator:
     """Office文件生成器"""
 
-    def __init__(self, data_path: Path):
+    def __init__(self, data_path: Path, executor: ThreadPoolExecutor | None = None):
         self.data_path = data_path
         self.support = self._check_support()
-        self._executor = ThreadPoolExecutor(max_workers=2)
+        self._executor = executor  # 使用外部传入的线程池
+        self._owns_executor = executor is None  # 标记是否自己管理线程池
+        if self._owns_executor:
+            self._executor = ThreadPoolExecutor(max_workers=2)
 
     # 定义映射表
     _GENERATORS = {
@@ -363,12 +366,48 @@ class OfficeGenerator:
         prs.save(str(file_path))
 
     def _sanitize_filename(self, filename: str) -> str:
-        """清理文件名"""
+        """
+        清理文件名
+
+        - 移除非法字符，仅保留字母、数字、中文、空格、连字符、下划线和点号
+        - 移除开头的点号（避免创建隐藏文件）
+        - 合并多个连续的点号
+        - 限制文件名长度
+        """
+        import re
+
+        # 保留字母、数字、中文、空格、连字符、下划线、点号
         filename = "".join(
             c for c in filename if c.isalnum() or c in (" ", "-", "_", ".")
         ).strip()
 
-        if not filename:
+        # 移除开头的点号
+        filename = filename.lstrip(".")
+
+        # 合并多个连续的点号为单个点号
+        filename = re.sub(r"\.{2,}", ".", filename)
+
+        # 移除末尾多余的点号（扩展名前的点号除外）
+        # 先分离扩展名
+        if "." in filename:
+            name_part, ext_part = filename.rsplit(".", 1)
+            name_part = name_part.rstrip(".")
+            filename = f"{name_part}.{ext_part}" if name_part else ext_part
+        else:
+            filename = filename.rstrip(".")
+
+        # 限制长度（保留扩展名）
+        max_length = 200
+        if len(filename) > max_length:
+            if "." in filename:
+                name_part, ext_part = filename.rsplit(".", 1)
+                name_part = name_part[: max_length - len(ext_part) - 1]
+                filename = f"{name_part}.{ext_part}"
+            else:
+                filename = filename[:max_length]
+
+        # 如果清理后为空，使用默认文件名
+        if not filename or filename == ".":
             filename = f"office_file_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         return filename
@@ -376,3 +415,10 @@ class OfficeGenerator:
     def _get_unique_filepath(self, filename: str) -> Path:
         """获取文件路径（覆盖已存在的同名文件）"""
         return self.data_path / filename
+
+    def cleanup(self):
+        """清理资源"""
+        # 只有自己创建的线程池才需要关闭
+        if self._owns_executor and hasattr(self, "_executor") and self._executor:
+            self._executor.shutdown(wait=False)
+            logger.debug("[文件生成器] 线程池已关闭")
