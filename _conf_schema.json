@@ -41,6 +41,12 @@
                 "type": "bool",
                 "hint": "是否允许生成 Word/Excel/PPT 文件。",
                 "default": true
+            },
+            "enable_pdf_conversion": {
+                "description": "启用 PDF 转换",
+                "type": "bool",
+                "hint": "是否允许 Office⇄PDF 互转功能。需要额外安装依赖：LibreOffice (Office→PDF)、pdf2docx (PDF→Word)、tabula-py (PDF→Excel)。",
+                "default": true
             }
         }
     },
