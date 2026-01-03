@@ -10,6 +10,7 @@
 
 - **智能文件分析**：LLM 可读取 Python, JS, HTML, Markdown, JSON 等文本文件，并对内容进行总结、分析，提供帮助或建议。
 - **Office 文档生成**：原生支持生成 Word (.docx), Excel (.xlsx) 和 PowerPoint (.pptx) 文件。
+- **PDF 转换**：支持 Office⇄PDF 双向转换（需额外依赖）。
 - **流式处理**：大文件采用分块读取，避免内存溢出。
 - **安全防护**：内置路径验证机制，防止路径遍历攻击。
 - **精细权限控制**：
@@ -18,13 +19,82 @@
 
 ## 🛠️ 安装与配置
 
-### 依赖要求
+### 基础依赖
 
-若需使用 Office 生成功能，请确保安装以下 Python 库：
+Office 文档生成功能所需：
 
 ```bash
 pip install python-docx openpyxl python-pptx
 ```
+
+### PDF 转换依赖（可选）
+
+PDF 转换功能需要额外安装依赖，根据需要选择安装：
+
+#### PDF→Word 转换
+
+```bash
+pip install pdf2docx
+```
+
+#### PDF→Excel 转换
+
+**方案一：pdfplumber（推荐，纯 Python）**
+
+```bash
+pip install pdfplumber
+```
+
+**方案二：tabula-py（效果更好，需要 Java）**
+
+```bash
+pip install tabula-py
+# 还需要安装 Java 运行时
+```
+
+#### Office→PDF 转换
+
+**Windows（推荐：docx2pdf，需要已安装 Microsoft Office）**
+
+```bash
+pip install docx2pdf
+```
+
+> docx2pdf 仅支持 Word→PDF。如需 Excel/PPT→PDF，可安装 pywin32：
+>
+> ```bash
+> pip install pywin32
+> ```
+
+**Windows（备选：LibreOffice，无需 MS Office）**
+
+从 [LibreOffice 官网](https://www.libreoffice.org/download/) 下载安装
+
+**Linux/Docker：**
+
+```bash
+apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
+```
+
+**macOS：**
+
+```bash
+brew install --cask libreoffice
+```
+
+### Docker 环境完整安装
+
+```dockerfile
+# PDF 转换系统依赖
+RUN apt-get update && apt-get install -y \
+    libreoffice-writer libreoffice-calc libreoffice-impress \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 依赖
+RUN pip install python-docx openpyxl python-pptx pdf2docx pdfplumber
+```
+
+> 💡 **提示**：使用 `/pdf_status` 或 `/pdf状态` 命令可查看当前 PDF 转换功能的可用性和缺失依赖。
 
 ### 配置项说明
 
@@ -45,9 +115,10 @@ pip install python-docx openpyxl python-pptx
 
 #### 功能开关
 
-| 配置项               | 类型 | 默认值 | 说明                             |
-| -------------------- | ---- | ------ | -------------------------------- |
-| 启用 Office 文件生成 | bool | true   | 是否允许生成 Word/Excel/PPT 文件 |
+| 配置项               | 类型 | 默认值 | 说明                                             |
+| -------------------- | ---- | ------ | ------------------------------------------------ |
+| 启用 Office 文件生成 | bool | true   | 是否允许生成 Word/Excel/PPT 文件                 |
+| 启用 PDF 转换        | bool | true   | 是否允许 Office⇄PDF 互转（需安装对应依赖才可用） |
 
 #### 文件限制
 
@@ -59,18 +130,21 @@ pip install python-docx openpyxl python-pptx
 
 ## 📖 提供的工具 (LLM Tools)
 
-| 工具名称             | 功能描述                                            |
-| -------------------- | --------------------------------------------------- |
-| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助 |
-| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                  |
+| 工具名称             | 功能描述                                                    |
+| -------------------- | ----------------------------------------------------------- |
+| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助         |
+| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                          |
+| `convert_to_pdf`     | 将 Office 文件转换为 PDF（Windows: docx2pdf/pywin32，其他: LibreOffice） |
+| `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                   |
 
 ### 命令
 
-| 命令        | 功能描述                 |
-| ----------- | ------------------------ |
-| `/lsf`      | 查看工作区的 Office 文件 |
-| `/rm`       | 永久删除指定文件         |
-| `/fileinfo` | 显示插件运行信息         |
+| 命令          | 功能描述                        |
+| ------------- | ------------------------------- |
+| `/lsf`        | 查看工作区的 Office 文件        |
+| `/rm`         | 永久删除指定文件                |
+| `/fileinfo`   | 显示插件运行信息                |
+| `/pdf_status` | 查看 PDF 转换功能状态和缺失依赖 |
 
 ### 支持的文件类型
 
@@ -91,6 +165,16 @@ pip install python-docx openpyxl python-pptx
 > ⚠️ **注意**：本插件仅支持生成 Office 文件，不支持生成普通文本文件（如 .txt, .py 等）。
 
 > ⚠️ **功能限制**：目前仅支持生成**简单的** Office 文件（基本表格、纯文本文档、简单幻灯片）。不支持复杂样式、图表等高级功能。
+
+#### 🔄 PDF 转换支持
+
+| 转换方向   | 依赖                                        | 说明                                 |
+| ---------- | ------------------------------------------- | ------------------------------------ |
+| Office→PDF | docx2pdf/pywin32 (Windows) 或 LibreOffice   | 支持 Word/Excel/PPT 转 PDF           |
+| PDF→Word   | pdf2docx                                    | 适用于文本为主的 PDF                 |
+| PDF→Excel  | pdfplumber 或 tabula-py                     | 仅提取表格数据，非表格会丢失         |
+
+> Windows 用户推荐使用 docx2pdf（需已安装 MS Office），体积小、转换质量好。
 
 ## 💬 使用示例
 
@@ -115,6 +199,14 @@ pip install python-docx openpyxl python-pptx
 机器人：好的，我来为你生成 Excel 文件。
        ✅ 文件已处理成功：sales_report.xlsx
        [sales_report.xlsx 文件]
+
+用户：把这个 Excel 转成 PDF
+机器人：✅ 已将 sales_report.xlsx 转换为 PDF
+       [sales_report.pdf 文件]
+
+用户：把这个 PDF 转成 Word
+机器人：✅ 已将 document.pdf 转换为 Word 文档
+       [document.docx 文件]
 ```
 
 ## ⚠️ 注意事项
@@ -124,6 +216,10 @@ pip install python-docx openpyxl python-pptx
 3. **文件大小**：建议根据服务器内存合理配置最大文件大小，过大可能导致发送失败。
 4. **Office 依赖**：如未安装 Office 相关库，对应格式的生成功能将自动禁用，插件会提示所需的包名。
 5. **权限配置**：建议在公开群聊中启用"群聊需要@机器人"选项，避免意外触发。
+6. **PDF 转换限制**：
+   - PDF→Word：复杂布局的 PDF 转换后可能有偏差
+   - PDF→Excel：仅能提取 PDF 中的表格，非表格内容会丢失
+   - Office→PDF：Windows 推荐 docx2pdf（需 MS Office）；Linux/Docker 需安装 LibreOffice
 
 ## 📄 许可证
 
