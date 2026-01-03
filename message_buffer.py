@@ -1,14 +1,5 @@
 """
 消息缓冲器模块
-
-解决 QQ 平台文件和文本消息分离的问题：
-- PC 端：文件和消息可能连发
-- 手机端：只能单发文件，不能连带消息
-
-核心思路：
-1. 收到包含文件的消息时，开始缓冲等待
-2. 在等待期间收到的后续消息（文本或文件）会被聚合
-3. 等待结束后，将所有消息合并处理
 """
 
 from __future__ import annotations
@@ -128,9 +119,7 @@ class MessageBuffer:
                 texts=texts,
             )
 
-            logger.info(
-                f"[消息缓冲] 开始缓冲: {key}, 等待 {self._wait_seconds} 秒"
-            )
+            logger.info(f"[消息缓冲] 开始缓冲: {key}, 等待 {self._wait_seconds} 秒")
 
             buf.timer_task = asyncio.create_task(
                 self._wait_and_process(key, self._wait_seconds)
