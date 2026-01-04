@@ -19,56 +19,25 @@
 
 ## 🛠️ 安装与配置
 
-### 基础依赖
+### Python 依赖
 
-Office 文档生成功能所需：
+通过 AstrBot 插件管理器安装时，Python 依赖会自动安装
 
-```bash
-pip install python-docx openpyxl python-pptx
-```
-
-### PDF 转换依赖（可选）
-
-PDF 转换功能需要额外安装依赖，根据需要选择安装：
-
-#### PDF→Word 转换
+如需手动安装：
 
 ```bash
-pip install pdf2docx
+pip install python-docx openpyxl python-pptx pdfplumber pdf2docx docx2pdf pywin32
 ```
 
-#### PDF→Excel 转换
+### Office→PDF 转换（系统依赖）
 
-**方案一：pdfplumber（推荐，纯 Python）**
+Office→PDF 转换需要额外的系统依赖：
 
-```bash
-pip install pdfplumber
-```
+**Windows（推荐）：** 需要已安装 Microsoft Office
+- `docx2pdf` 支持 Word→PDF
+- `pywin32` 支持 Word/Excel/PPT→PDF
 
-**方案二：tabula-py（效果更好，需要 Java）**
-
-```bash
-pip install tabula-py
-# 还需要安装 Java 运行时
-```
-
-#### Office→PDF 转换
-
-**Windows（推荐：docx2pdf，需要已安装 Microsoft Office）**
-
-```bash
-pip install docx2pdf
-```
-
-> docx2pdf 仅支持 Word→PDF。如需 Excel/PPT→PDF，可安装 pywin32：
->
-> ```bash
-> pip install pywin32
-> ```
-
-**Windows（备选：LibreOffice，无需 MS Office）**
-
-从 [LibreOffice 官网](https://www.libreoffice.org/download/) 下载安装
+**Windows（备选）：** 从 [LibreOffice 官网](https://www.libreoffice.org/download/) 下载安装（无需 MS Office）
 
 **Linux/Docker：**
 
@@ -82,16 +51,13 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 brew install --cask libreoffice
 ```
 
-### Docker 环境完整安装
+### Docker 环境
 
 ```dockerfile
-# PDF 转换系统依赖
+# 系统依赖（Office→PDF 转换）
 RUN apt-get update && apt-get install -y \
     libreoffice-writer libreoffice-calc libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
-
-# Python 依赖
-RUN pip install python-docx openpyxl python-pptx pdf2docx pdfplumber
 ```
 
 > 💡 **提示**：使用 `/pdf_status` 或 `/pdf状态` 命令可查看当前 PDF 转换功能的可用性和缺失依赖。
