@@ -85,7 +85,6 @@ class FileOperationPlugin(Star):
         buffer_wait = file_settings.get("message_buffer_seconds", 4)
         self._message_buffer = MessageBuffer(wait_seconds=buffer_wait)
         self._message_buffer.set_complete_callback(self._on_buffer_complete)
-        self._message_buffer.set_passthrough_callback(self._on_buffer_passthrough)
 
         mode = "临时目录(自动删除)" if self._auto_delete else "持久化存储"
         logger.info(
@@ -116,38 +115,6 @@ class FileOperationPlugin(Star):
                 logger.debug("[文件管理] 临时目录已清理")
             except Exception as e:
                 logger.warning(f"[文件管理] 清理临时目录失败: {e}")
-
-    async def _on_buffer_passthrough(self, buf: BufferedMessage):
-        """
-        无文件消息的放行回调
-
-        观察期结束后没有收到文件，直接将原始事件重新放入队列处理。
-        """
-        event = buf.event
-        logger.debug(
-            f"[消息缓冲] 放行无文件消息，文本: {buf.texts[:2] if buf.texts else '(空)'}..."
-        )
-
-        # 检查重入次数，防止无限循环
-        reentry_count = getattr(event, "_buffer_reentry_count", 0)
-        if reentry_count >= 3:
-            logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
-            return
-
-        try:
-            # 标记事件已经过缓冲处理，避免重复缓冲
-            setattr(event, "_buffered", True)
-            setattr(event, "_buffer_reentry_count", reentry_count + 1)
-
-            # 重置事件状态，让它可以继续传播
-            event._result = None
-
-            # 使用 context 的 event_queue 重新分发事件
-            event_queue = self.context.get_event_queue()
-            await event_queue.put(event)
-            logger.debug("[消息缓冲] 无文件事件已重新放入队列")
-        except Exception as e:
-            logger.error(f"[消息缓冲] 重新分发无文件事件失败: {e}")
 
     async def _on_buffer_complete(self, buf: BufferedMessage):
         """
@@ -442,6 +409,7 @@ class FileOperationPlugin(Star):
     async def on_file_message(self, event: AstrMessageEvent):
         """
         拦截包含文件的消息，使用缓冲器聚合文件和后续文本消息
+        仅处理支持的文件格式（Office、文本、PDF），其他格式直接放行
         """
         # 检查是否已经过缓冲处理，避免重复缓冲
         if getattr(event, "_buffered", False):
@@ -451,32 +419,41 @@ class FileOperationPlugin(Star):
         if not event.message_obj.message:
             return
 
-        # 检查消息是否包含文件
-        has_file = False
+        # 检查消息是否包含支持的文件格式
+        has_supported_file = False
         for component in event.message_obj.message:
             if isinstance(component, Comp.File):
-                has_file = True
-                break
+                name = component.name or ""
+                suffix = Path(name).suffix.lower() if name else ""
+                # 只有支持的格式才进入缓冲流程
+                if (
+                    suffix in ALL_OFFICE_SUFFIXES
+                    or suffix in TEXT_SUFFIXES
+                    or suffix == PDF_SUFFIX
+                ):
+                    has_supported_file = True
+                    break
 
-        # 只有包含文件的消息才需要缓冲
-        # 纯文本消息（包括命令）直接放行，不进行缓冲
-        if not has_file:
+        # 只有包含支持格式的文件才需要缓冲
+        # 不支持的文件（如图片、视频）直接放行
+        if not has_supported_file:
             # 检查是否有正在等待的缓冲（用户可能先发文件再发文本）
             if self._message_buffer.is_buffering(event):
-                # 有缓冲正在等待，将此文本消息加入缓冲
+                # 有缓冲正在等待，将此消息加入缓冲
                 await self._message_buffer.add_message(event)
                 event.stop_event()
-                logger.debug("[文件管理] 文本消息已加入现有缓冲")
+                logger.debug("[文件管理] 消息已加入现有缓冲")
+            # 不支持的文件格式直接放行，不做任何处理
             return
 
-        # 消息包含文件，进行缓冲
+        # 消息包含支持的文件格式，进行缓冲
         buffered = await self._message_buffer.add_message(event)
 
         if buffered:
             # 消息已被缓冲，停止事件传播
             # 等待缓冲完成后会通过回调重新触发处理
             event.stop_event()
-            logger.debug("[文件管理] 文件消息已缓冲，等待聚合...")
+            logger.debug("[文件管理] 支持的文件已缓冲，等待聚合...")
             return
 
     @filter.on_llm_request()
@@ -532,48 +509,76 @@ class FileOperationPlugin(Star):
                         # 复制文件到工作区
                         shutil.copy2(src_path, dst_path)
                         file_suffix = dst_path.suffix.lower()
-                        type_desc = "未知格式文件"
+                        type_desc = ""
+                        is_supported = False
 
                         if file_suffix in ALL_OFFICE_SUFFIXES:
                             type_desc = "Office文档 (Word/Excel/PPT)"
+                            is_supported = True
                         elif file_suffix in TEXT_SUFFIXES:
                             type_desc = "文本/代码文件"
+                            is_supported = True
+                        elif file_suffix == PDF_SUFFIX:
+                            type_desc = "PDF文档"
+                            is_supported = True
 
-                        # 构建更Prompt
-                        prompt = (
-                            f"\n[系统通知] 收到用户上传的 {type_desc}: {component.name} (后缀: {file_suffix})。"
-                            f"文件已存入工作区。请使用 `read_file` 工具读取其内容进行分析。"
-                        )
-                        req.system_prompt += prompt
-                        logger.info(f"[文件管理] 收到文件 {component.name}，已保存。")
+                        # 只有支持的格式才注入提示
+                        if is_supported:
+                            prompt = (
+                                f"\n[系统通知] 收到用户上传的 {type_desc}: {component.name} (后缀: {file_suffix})。"
+                                f"文件已存入工作区。如果用户需要读取或分析该文件，可使用 `read_file` 工具。"
+                                f"请先询问用户想对文件做什么，不要主动调用工具。"
+                            )
+                            req.system_prompt += prompt
+                            logger.info(
+                                f"[文件管理] 收到文件 {component.name}，已保存。"
+                            )
+                        else:
+                            logger.info(
+                                f"[文件管理] 文件 {component.name} 格式不支持 ({file_suffix})，跳过处理"
+                            )
                 except Exception as e:
                     logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
     @llm_tool(name="read_file")
-    async def read_file(self, event: AstrMessageEvent, filename: str) -> str | None:
-        """读取文件内容并返回给 LLM 处理。LLM 会根据用户的请求（如总结、分析、提取信息等）对文件内容进行相应处理。
+    async def read_file(
+        self,
+        event: AstrMessageEvent,
+        filename: str = "",
+    ) -> str | None:
+        """读取**文本文件、Office 文档或 PDF**内容并返回给 LLM 处理。
+
+        【支持的格式】：
+        - 文本：.txt, .md, .log, .py, .js, .ts, .json, .yaml, .xml, .csv, .html, .css, .sql 等
+        - Office：.docx, .xlsx, .pptx, .doc, .xls, .ppt
+        - PDF：.pdf（需安装 pdfplumber 或 pdf2docx）
+
+        【不支持】：图片、视频、音频等二进制文件。
 
         Args:
             filename(string): 要读取的文件名
         """
+        if not filename:
+            return "错误：请提供要读取的文件名"
+
         # 统一前置检查
-        ok, file_path, err = self._pre_check(event, filename, require_exists=True)
+        ok, resolved_path, err = self._pre_check(event, filename, require_exists=True)
         if not ok:
             return err or "错误：未知错误"
 
-        assert file_path is not None  # 类型断言：ok=True 时 file_path 必定存在
-        file_size = file_path.stat().st_size
+        assert resolved_path is not None  # 类型断言：ok=True 时 resolved_path 必定存在
+        file_size = resolved_path.stat().st_size
         max_size = self._get_max_file_size()
         if file_size > max_size:
             size_str = format_file_size(file_size)
             max_str = format_file_size(max_size)
             return f"错误：文件大小 {size_str} 超过限制 {max_str}"
         try:
-            suffix = file_path.suffix.lower()
+            suffix = resolved_path.suffix.lower()
             # 文本文件：使用流式读取并限制最大读取量以防止内存耗尽
             if suffix in TEXT_SUFFIXES:
                 try:
-                    content = await self._read_text_file(file_path, max_size)
+                    content = await self._read_text_file(resolved_path, max_size)
                     return f"[文件: {filename}, 大小: {format_file_size(file_size)}]\n{content}"
                 except Exception as e:
                     logger.error(f"读取文件失败: {e}")
@@ -581,7 +586,7 @@ class FileOperationPlugin(Star):
             office_type = SUFFIX_TO_OFFICE_TYPE.get(suffix)
             # Office 文件：尝试提取文本（若未安装对应解析库，则提示为二进制）
             if office_type:
-                extracted = self._extract_office_text(file_path, office_type)
+                extracted = self._extract_office_text(resolved_path, office_type)
                 if extracted:
                     return self._format_file_result(
                         filename, suffix, file_size, extracted
@@ -892,7 +897,7 @@ class FileOperationPlugin(Star):
             logger.error(f"[PDF转换] 转换失败: {e}", exc_info=True)
             return f"错误：{safe_error_message(e, '转换失败')}"
 
-    @filter.command("delete_file", alias={"删除文件", "rm"})
+    @filter.command("dle", alias={"删除文件", "dle"})
     async def delete_file(self, event: AstrMessageEvent):
         """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
 
@@ -962,7 +967,7 @@ class FileOperationPlugin(Star):
             f"PDF转换: {', '.join(pdf_status)}"
         )
 
-    @filter.command("list_files", alias={"文件列表", "lsf"})
+    @filter.command("lsf", alias={"文件列表", "lsf"})
     async def list_files(self, event: AstrMessageEvent):
         """列出机器人文件库中的所有文件。"""
 
