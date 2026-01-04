@@ -43,18 +43,12 @@ class MessageBuffer:
         self._buffers: dict[tuple[str, str, str], BufferedMessage] = {}
         # 回调函数，当消息聚合完成时调用
         self._on_complete_callback = None
-        # 无文件时的回调（直接放行，不触发文件处理逻辑）
-        self._on_passthrough_callback = None
         # 锁，保证线程安全
         self._lock = asyncio.Lock()
 
     def set_complete_callback(self, callback):
         """设置消息聚合完成后的回调函数（有文件时）"""
         self._on_complete_callback = callback
-
-    def set_passthrough_callback(self, callback):
-        """设置无文件消息放行的回调函数"""
-        self._on_passthrough_callback = callback
 
     def _get_buffer_key(self, event: AstrMessageEvent) -> tuple[str, str, str]:
         """获取缓冲区的 key"""
@@ -141,26 +135,16 @@ class MessageBuffer:
 
             buf = self._buffers.pop(key)
 
-        # 根据是否有文件决定调用哪个回调
-        if buf.files:
-            # 有文件，调用文件处理回调
-            if self._on_complete_callback:
-                try:
-                    logger.info(
-                        f"[消息缓冲] 缓冲完成，"
-                        f"文件数: {len(buf.files)}, 文本数: {len(buf.texts)}"
-                    )
-                    await self._on_complete_callback(buf)
-                except Exception as e:
-                    logger.error(f"[消息缓冲] 处理回调时出错: {e}")
-        else:
-            # 无文件，调用放行回调
-            if self._on_passthrough_callback:
-                try:
-                    logger.debug("[消息缓冲] 缓冲结束（无文件），放行消息")
-                    await self._on_passthrough_callback(buf)
-                except Exception as e:
-                    logger.error(f"[消息缓冲] 放行回调时出错: {e}")
+        # 只有文件时才调用回调
+        if buf.files and self._on_complete_callback:
+            try:
+                logger.info(
+                    f"[消息缓冲] 缓冲完成，"
+                    f"文件数: {len(buf.files)}, 文本数: {len(buf.texts)}"
+                )
+                await self._on_complete_callback(buf)
+            except Exception as e:
+                logger.error(f"[消息缓冲] 处理回调时出错: {e}")
 
     def is_buffering(self, event: AstrMessageEvent) -> bool:
         """检查指定用户是否正在缓冲状态"""
