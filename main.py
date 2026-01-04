@@ -532,45 +532,26 @@ class FileOperationPlugin(Star):
                         # 复制文件到工作区
                         shutil.copy2(src_path, dst_path)
                         file_suffix = dst_path.suffix.lower()
-                        type_desc = ""
-                        is_supported = False
+                        type_desc = "未知格式文件"
 
                         if file_suffix in ALL_OFFICE_SUFFIXES:
                             type_desc = "Office文档 (Word/Excel/PPT)"
-                            is_supported = True
                         elif file_suffix in TEXT_SUFFIXES:
                             type_desc = "文本/代码文件"
-                            is_supported = True
-                        elif file_suffix == PDF_SUFFIX:
-                            type_desc = "PDF文档"
-                            is_supported = True
 
-                        # 只有支持的格式才注入提示，否则让其他插件处理
-                        if is_supported:
-                            prompt = (
-                                f"\n[系统通知] 收到用户上传的 {type_desc}: {component.name} (后缀: {file_suffix})。"
-                                f"文件已存入工作区。如果用户需要读取或分析该文件，可使用 `read_file` 工具。"
-                                f"请先询问用户想对文件做什么，不要主动调用工具。"
-                            )
-                            req.system_prompt += prompt
-                        else:
-                            logger.info(
-                                f"[文件管理] 文件 {component.name} 格式不支持 ({file_suffix})，跳过处理"
-                            )
+                        # 构建更Prompt
+                        prompt = (
+                            f"\n[系统通知] 收到用户上传的 {type_desc}: {component.name} (后缀: {file_suffix})。"
+                            f"文件已存入工作区。请使用 `read_file` 工具读取其内容进行分析。"
+                        )
+                        req.system_prompt += prompt
                         logger.info(f"[文件管理] 收到文件 {component.name}，已保存。")
                 except Exception as e:
                     logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
     @llm_tool(name="read_file")
     async def read_file(self, event: AstrMessageEvent, filename: str) -> str | None:
-        """读取**文本文件、Office 文档或 PDF**内容并返回给 LLM 处理。
-
-        【支持的格式】：
-        - 文本：.txt, .md, .log, .py, .js, .ts, .json, .yaml, .xml, .csv, .html, .css, .sql 等
-        - Office：.docx, .xlsx, .pptx, .doc, .xls, .ppt
-        - PDF：.pdf（需安装 pdfplumber 或 pdf2docx）
-
-        【不支持】：图片、视频、音频等二进制文件。
+        """读取文件内容并返回给 LLM 处理。LLM 会根据用户的请求（如总结、分析、提取信息等）对文件内容进行相应处理。
 
         Args:
             filename(string): 要读取的文件名
