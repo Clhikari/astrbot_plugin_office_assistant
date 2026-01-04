@@ -55,7 +55,7 @@ except ImportError:
 # Windows 专用：docx2pdf（仅支持 Word）
 if _IS_WINDOWS:
     try:
-        import docx2pdf
+        import docx2pdf  # noqa: F401
 
         _DOCX2PDF_AVAILABLE = True
     except ImportError:
