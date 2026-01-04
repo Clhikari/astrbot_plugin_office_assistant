@@ -1,0 +1,14 @@
+# Office 文档生成（必需）
+python-docx
+openpyxl
+python-pptx
+
+# PDF 文本提取（推荐）
+pdfplumber
+
+# PDF→Word 转换
+pdf2docx
+
+# Office→PDF 转换（Windows，需要已安装 Microsoft Office）
+docx2pdf
+pywin32
