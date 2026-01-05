@@ -21,12 +21,18 @@
 
 ### Python 依赖
 
-通过 AstrBot 插件管理器安装时，Python 依赖会自动安装
+通过 AstrBot 插件管理器安装时，`requirements.txt` 中的 Python 包会自动安装。
+
+> ⚠️ **注意**：部分功能需要额外的**系统依赖**（如 antiword、LibreOffice），请参考下方说明。
 
 如需手动安装：
 
 ```bash
-pip install python-docx openpyxl python-pptx pdfplumber pdf2docx docx2pdf pywin32
+# 基础依赖（跨平台）
+pip install python-docx openpyxl python-pptx pdfplumber pdf2docx xlrd
+
+# Windows 额外依赖（需要 Microsoft Office）
+pip install docx2pdf pywin32
 ```
 
 ### Office→PDF 转换（系统依赖）
@@ -34,6 +40,7 @@ pip install python-docx openpyxl python-pptx pdfplumber pdf2docx docx2pdf pywin3
 Office→PDF 转换需要额外的系统依赖：
 
 **Windows（推荐）：** 需要已安装 Microsoft Office
+
 - `docx2pdf` 支持 Word→PDF
 - `pywin32` 支持 Word/Excel/PPT→PDF
 
@@ -51,12 +58,40 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 brew install --cask libreoffice
 ```
 
+### 旧格式支持 (.doc/.xls/.ppt)
+
+旧版 Office 格式（97-2003）的支持情况：
+
+| 格式   | Windows                          | Linux/macOS       | 说明                      |
+| ------ | -------------------------------- | ----------------- | ------------------------- |
+| `.doc` | pywin32 + Word（pip 安装）       | antiword（系统）  | 需手动安装                |
+| `.xls` | xlrd                             | xlrd              | ✅ 自动安装               |
+| `.ppt` | pywin32 + PowerPoint（pip 安装） | ❌ 不支持         | 请转为 .pptx              |
+
+**安装依赖：**
+
+```bash
+# Windows: 安装 pywin32（需要已安装 Microsoft Office）
+pip install pywin32
+
+# Linux (Debian/Ubuntu): 安装 antiword
+apt install antiword
+
+# macOS: 安装 antiword
+brew install antiword
+
+# Docker: 参考下方 Docker 环境说明
+```
+
+> 💡 **建议**：优先使用新格式（.docx/.xlsx/.pptx），兼容性更好，无需额外依赖。
+
 ### Docker 环境
 
 ```dockerfile
-# 系统依赖（Office→PDF 转换）
+# 系统依赖（Office→PDF 转换 + 旧格式支持）
 RUN apt-get update && apt-get install -y \
     libreoffice-writer libreoffice-calc libreoffice-impress \
+    antiword \
     && rm -rf /var/lib/apt/lists/*
 ```
 
@@ -96,12 +131,12 @@ RUN apt-get update && apt-get install -y \
 
 ## 📖 提供的工具 (LLM Tools)
 
-| 工具名称             | 功能描述                                                    |
-| -------------------- | ----------------------------------------------------------- |
-| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助         |
-| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                          |
+| 工具名称             | 功能描述                                                                 |
+| -------------------- | ------------------------------------------------------------------------ |
+| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助                      |
+| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                                       |
 | `convert_to_pdf`     | 将 Office 文件转换为 PDF（Windows: docx2pdf/pywin32，其他: LibreOffice） |
-| `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                   |
+| `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                                |
 
 ### 命令
 
@@ -116,7 +151,11 @@ RUN apt-get update && apt-get install -y \
 
 #### 📖 可读取分析的文件格式
 
-`.txt`, `.md`, `.json`, `.csv`, `.log`, `.py`, `.js`, `.html`, `.css`, `.xml`, `.yaml`, `.yml` 等
+**Office 文档：**
+`.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pdf`
+
+**文本/代码文件：**
+`.txt`, `.md`, `.log`, `.rst`, `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.csv`, `.html`, `.css`, `.sql`, `.sh`, `.bat`, `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.c`, `.cpp`, `.h`, `.java`, `.go`, `.rs`
 
 > LLM 会读取这些文件的内容，并根据用户需求进行：代码审查、内容总结、问题排查、优化建议等。
 
@@ -134,11 +173,11 @@ RUN apt-get update && apt-get install -y \
 
 #### 🔄 PDF 转换支持
 
-| 转换方向   | 依赖                                        | 说明                                 |
-| ---------- | ------------------------------------------- | ------------------------------------ |
-| Office→PDF | docx2pdf/pywin32 (Windows) 或 LibreOffice   | 支持 Word/Excel/PPT 转 PDF           |
-| PDF→Word   | pdf2docx                                    | 适用于文本为主的 PDF                 |
-| PDF→Excel  | pdfplumber 或 tabula-py                     | 仅提取表格数据，非表格会丢失         |
+| 转换方向   | 依赖                                      | 说明                         |
+| ---------- | ----------------------------------------- | ---------------------------- |
+| Office→PDF | docx2pdf/pywin32 (Windows) 或 LibreOffice | 支持 Word/Excel/PPT 转 PDF   |
+| PDF→Word   | pdf2docx                                  | 适用于文本为主的 PDF         |
+| PDF→Excel  | pdfplumber 或 tabula-py                   | 仅提取表格数据，非表格会丢失 |
 
 > Windows 用户推荐使用 docx2pdf（需已安装 MS Office），体积小、转换质量好。
 
