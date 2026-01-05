@@ -1,4 +1,4 @@
-# Office 文档生成（必需）
+# Office 文档处理（必需）
 python-docx
 openpyxl
 python-pptx
@@ -9,6 +9,9 @@ pdfplumber
 # PDF→Word 转换
 pdf2docx
 
-# Office→PDF 转换（Windows，需要已安装 Microsoft Office）
-docx2pdf
-pywin32
+# 旧格式 .xls 读取（跨平台）
+xlrd
+
+# Office→PDF 转换及旧格式读取（仅 Windows，需要 Microsoft Office）
+docx2pdf; sys_platform == 'win32'
+pywin32; sys_platform == 'win32'
