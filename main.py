@@ -897,7 +897,7 @@ class FileOperationPlugin(Star):
             logger.error(f"[PDF转换] 转换失败: {e}", exc_info=True)
             return f"错误：{safe_error_message(e, '转换失败')}"
 
-    @filter.command("dle", alias={"删除文件", "dle"})
+    @filter.command("rm", alias={"删除文件", "rm"})
     async def delete_file(self, event: AstrMessageEvent):
         """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
 
