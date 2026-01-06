@@ -1,4 +1,6 @@
 import platform
+import shutil
+import subprocess
 from pathlib import Path
 
 from astrbot.api import logger
@@ -6,6 +8,7 @@ from astrbot.api import logger
 # 检测是否为 Windows 平台，旧格式需要 win32com
 _IS_WINDOWS = platform.system() == "Windows"
 _WIN32COM_AVAILABLE = False
+_ANTIWORD_AVAILABLE = shutil.which("antiword") is not None
 
 if _IS_WINDOWS:
     try:
@@ -63,9 +66,22 @@ def extract_word_text(file_path: Path) -> str | None:
     """提取 Word 文档文本（支持 .docx 和 .doc）"""
     suffix = file_path.suffix.lower()
 
-    # 旧格式 .doc 需要 win32com
+    # 旧格式 .doc 优先用 antiword（跨平台），其次 win32com（Windows）
     if suffix == ".doc":
-        return _extract_doc_text_win32com(file_path)
+        if _ANTIWORD_AVAILABLE:
+            return _extract_doc_text_antiword(file_path)
+        elif _WIN32COM_AVAILABLE:
+            return _extract_doc_text_win32com(file_path)
+        else:
+            if _IS_WINDOWS:
+                logger.warning(
+                    "读取 .doc 文件需要 pywin32 和 Microsoft Word，请安装: pip install pywin32"
+                )
+            else:
+                logger.warning(
+                    "读取 .doc 文件需要 antiword，请安装: apt install antiword (Linux) 或 brew install antiword (macOS)"
+                )
+            return None
 
     # 新格式 .docx 使用 python-docx
     try:
@@ -81,12 +97,30 @@ def extract_word_text(file_path: Path) -> str | None:
         return None
 
 
-def _extract_doc_text_win32com(file_path: Path) -> str | None:
-    """使用 win32com 提取 .doc 文件文本（仅 Windows）"""
-    if not _WIN32COM_AVAILABLE:
-        logger.warning("读取 .doc 文件需要 pywin32，请安装: pip install pywin32")
+def _extract_doc_text_antiword(file_path: Path) -> str | None:
+    """使用 antiword 提取 .doc 文件文本（Linux/macOS）"""
+    try:
+        result = subprocess.run(
+            ["antiword", str(file_path.resolve())],
+            capture_output=True,
+            text=True, errors="replace",
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() if result.stdout else None
+        else:
+            logger.warning(f"antiword 执行失败: {result.stderr}")
+            return None
+    except subprocess.TimeoutExpired:
+        logger.warning("antiword 执行超时")
+        return None
+    except Exception as e:
+        logger.warning(f"antiword 执行出错: {e}")
         return None
 
+
+def _extract_doc_text_win32com(file_path: Path) -> str | None:
+    """使用 win32com 提取 .doc 文件文本（仅 Windows）"""
     app = None
     doc = None
     try:
@@ -124,9 +158,20 @@ def extract_excel_text(file_path: Path) -> str | None:
     """提取 Excel 表格文本（支持 .xlsx 和 .xls）"""
     suffix = file_path.suffix.lower()
 
-    # 旧格式 .xls 需要 win32com
+    # 旧格式 .xls 优先用 xlrd（跨平台），其次 win32com（Windows）
     if suffix == ".xls":
-        return _extract_xls_text_win32com(file_path)
+        result = _extract_xls_text_xlrd(file_path)
+        if result is not None:
+            return result
+        if _WIN32COM_AVAILABLE:
+            return _extract_xls_text_win32com(file_path)
+        if not _IS_WINDOWS:
+            logger.warning("读取 .xls 文件需要 xlrd，请安装: pip install xlrd")
+        else:
+            logger.warning(
+                "读取 .xls 文件失败。请确保 `xlrd` 已安装 (`pip install xlrd`)，或在 Windows 上安装 `pywin32` (`pip install pywin32`) 及 Microsoft Office。"
+            )
+        return None
 
     # 新格式 .xlsx 使用 openpyxl
     try:
@@ -145,12 +190,27 @@ def extract_excel_text(file_path: Path) -> str | None:
         return None
 
 
-def _extract_xls_text_win32com(file_path: Path) -> str | None:
-    """使用 win32com 提取 .xls 文件文本（仅 Windows）"""
-    if not _WIN32COM_AVAILABLE:
-        logger.warning("读取 .xls 文件需要 pywin32，请安装: pip install pywin32")
+def _extract_xls_text_xlrd(file_path: Path) -> str | None:
+    """使用 xlrd 提取 .xls 文件文本（跨平台）"""
+    try:
+        import xlrd
+
+        wb = xlrd.open_workbook(str(file_path))
+        lines = []
+        for sheet in wb.sheets():
+            for row_idx in range(sheet.nrows):
+                row_values = [str(cell.value) for cell in sheet.row(row_idx)]
+                lines.append("\t".join(row_values))
+        return "\n".join(lines) if lines else None
+    except ImportError:
+        return None
+    except Exception as e:
+        logger.warning(f"xlrd 读取 .xls 失败: {e}")
         return None
 
+
+def _extract_xls_text_win32com(file_path: Path) -> str | None:
+    """使用 win32com 提取 .xls 文件文本（仅 Windows）"""
     app = None
     wb = None
     try:
@@ -224,7 +284,14 @@ def extract_ppt_text(file_path: Path) -> str | None:
 def _extract_ppt_text_win32com(file_path: Path) -> str | None:
     """使用 win32com 提取 .ppt 文件文本（仅 Windows）"""
     if not _WIN32COM_AVAILABLE:
-        logger.warning("读取 .ppt 文件需要 pywin32，请安装: pip install pywin32")
+        if _IS_WINDOWS:
+            logger.warning(
+                "读取 .ppt 文件需要 pywin32 和 Microsoft PowerPoint，请安装: pip install pywin32"
+            )
+        else:
+            logger.warning(
+                "读取 .ppt 旧格式文件仅支持 Windows 环境，请将文件另存为 .pptx 格式"
+            )
         return None
 
     app = None

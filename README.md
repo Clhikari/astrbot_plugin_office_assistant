@@ -19,46 +19,89 @@
 
 ## 🛠️ 安装与配置
 
-### Python 依赖
+### 依赖说明
 
-通过 AstrBot 插件管理器安装时，Python 依赖会自动安装
+通过 AstrBot 插件管理器安装时，Python 包会自动安装。
 
-如需手动安装：
+**部分功能需要额外的系统依赖：**
+
+| 功能            | 所需依赖                                    | 备注               |
+| --------------- | ------------------------------------------- | ------------------ |
+| 读取 .doc 文件  | antiword (Linux/macOS) 或 pywin32 (Windows) | 需手动安装         |
+| 读取 .xls 文件  | xlrd                                        | ✅ 自动安装        |
+| 读取 .ppt 文件  | pywin32 (Windows)                           | Linux/macOS 不支持 |
+| Office→PDF 转换 | LibreOffice 或 Microsoft Office             | 需手动安装         |
+
+### 系统依赖安装
+
+**Windows：**
 
 ```bash
-pip install python-docx openpyxl python-pptx pdfplumber pdf2docx docx2pdf pywin32
+# pywin32（读取旧格式 + Office→PDF，需要已安装 Microsoft Office）
+pip install pywin32
+
+# 或安装 LibreOffice（无需 MS Office）：https://www.libreoffice.org/download/
 ```
 
-### Office→PDF 转换（系统依赖）
-
-Office→PDF 转换需要额外的系统依赖：
-
-**Windows（推荐）：** 需要已安装 Microsoft Office
-- `docx2pdf` 支持 Word→PDF
-- `pywin32` 支持 Word/Excel/PPT→PDF
-
-**Windows（备选）：** 从 [LibreOffice 官网](https://www.libreoffice.org/download/) 下载安装（无需 MS Office）
-
-**Linux/Docker：**
+**Linux (Debian/Ubuntu)：**
 
 ```bash
-apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
+# 读取 .doc 文件
+apt install antiword
+
+# Office→PDF 转换（可选，体积较大）
+apt install libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
 **macOS：**
 
 ```bash
+# 读取 .doc 文件
+brew install antiword
+
+# Office→PDF 转换（可选）
 brew install --cask libreoffice
 ```
 
+> 💡 **建议**：优先使用新格式（.docx/.xlsx/.pptx），兼容性更好，无需额外依赖。
+
+> ⚠️ **重要**：安装系统依赖后需要**重启 AstrBot** 才能生效。
+
 ### Docker 环境
 
+**方式一：进入容器安装（简单，但容器删除后需重装）**
+
+```bash
+# 1. 查看容器名称
+docker ps
+
+# 2. 进入容器（将 <容器名> 替换为实际名称，如 astrbot）
+docker exec -it <容器名> bash
+
+# 3. 安装依赖（根据需要选择）
+apt-get update
+
+# 读取 .doc 旧格式文件
+apt-get install -y antiword
+
+# Office→PDF 转换（可选，体积较大）
+apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
+```
+
+> ⚠️ 容器删除重建后需要重新安装，普通重启不影响。
+
+**方式二：修改 Dockerfile（永久生效，适合熟悉 Docker 的用户）**
+
+Dockerfile 是构建 Docker 镜像的配置文件。如果你有自己的 Dockerfile，添加以下内容：
+
 ```dockerfile
-# 系统依赖（Office→PDF 转换）
 RUN apt-get update && apt-get install -y \
+    antiword \
     libreoffice-writer libreoffice-calc libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 ```
+
+然后重新构建镜像：`docker build -t my-astrbot .`
 
 > 💡 **提示**：使用 `/pdf_status` 或 `/pdf状态` 命令可查看当前 PDF 转换功能的可用性和缺失依赖。
 
@@ -96,19 +139,19 @@ RUN apt-get update && apt-get install -y \
 
 ## 📖 提供的工具 (LLM Tools)
 
-| 工具名称             | 功能描述                                                    |
-| -------------------- | ----------------------------------------------------------- |
-| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助         |
-| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                          |
+| 工具名称             | 功能描述                                                                 |
+| -------------------- | ------------------------------------------------------------------------ |
+| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助                      |
+| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                                       |
 | `convert_to_pdf`     | 将 Office 文件转换为 PDF（Windows: docx2pdf/pywin32，其他: LibreOffice） |
-| `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                   |
+| `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                                |
 
 ### 命令
 
 | 命令          | 功能描述                        |
 | ------------- | ------------------------------- |
 | `/lsf`        | 查看工作区的 Office 文件        |
-| `/rm`         | 永久删除指定文件                |
+| `/dle`        | 永久删除指定文件                |
 | `/fileinfo`   | 显示插件运行信息                |
 | `/pdf_status` | 查看 PDF 转换功能状态和缺失依赖 |
 
@@ -116,7 +159,11 @@ RUN apt-get update && apt-get install -y \
 
 #### 📖 可读取分析的文件格式
 
-`.txt`, `.md`, `.json`, `.csv`, `.log`, `.py`, `.js`, `.html`, `.css`, `.xml`, `.yaml`, `.yml` 等
+**Office 文档：**
+`.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pdf`
+
+**文本/代码文件：**
+`.txt`, `.md`, `.log`, `.rst`, `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.csv`, `.html`, `.css`, `.sql`, `.sh`, `.bat`, `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.c`, `.cpp`, `.h`, `.java`, `.go`, `.rs`
 
 > LLM 会读取这些文件的内容，并根据用户需求进行：代码审查、内容总结、问题排查、优化建议等。
 
@@ -134,11 +181,11 @@ RUN apt-get update && apt-get install -y \
 
 #### 🔄 PDF 转换支持
 
-| 转换方向   | 依赖                                        | 说明                                 |
-| ---------- | ------------------------------------------- | ------------------------------------ |
-| Office→PDF | docx2pdf/pywin32 (Windows) 或 LibreOffice   | 支持 Word/Excel/PPT 转 PDF           |
-| PDF→Word   | pdf2docx                                    | 适用于文本为主的 PDF                 |
-| PDF→Excel  | pdfplumber 或 tabula-py                     | 仅提取表格数据，非表格会丢失         |
+| 转换方向   | 依赖                                      | 说明                         |
+| ---------- | ----------------------------------------- | ---------------------------- |
+| Office→PDF | docx2pdf/pywin32 (Windows) 或 LibreOffice | 支持 Word/Excel/PPT 转 PDF   |
+| PDF→Word   | pdf2docx                                  | 适用于文本为主的 PDF         |
+| PDF→Excel  | pdfplumber 或 tabula-py                   | 仅提取表格数据，非表格会丢失 |
 
 > Windows 用户推荐使用 docx2pdf（需已安装 MS Office），体积小、转换质量好。
 
