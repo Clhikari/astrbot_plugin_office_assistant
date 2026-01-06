@@ -103,7 +103,7 @@ def _extract_doc_text_antiword(file_path: Path) -> str | None:
         result = subprocess.run(
             ["antiword", str(file_path.resolve())],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=30,
         )
         if result.returncode == 0:
