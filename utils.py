@@ -169,7 +169,7 @@ def extract_excel_text(file_path: Path) -> str | None:
             logger.warning("读取 .xls 文件需要 xlrd，请安装: pip install xlrd")
         else:
             logger.warning(
-                "读取 .xls 文件需要 xlrd 或 pywin32，请安装: pip install xlrd"
+                "读取 .xls 文件失败。请确保 `xlrd` 已安装 (`pip install xlrd`)，或在 Windows 上安装 `pywin32` (`pip install pywin32`) 及 Microsoft Office。"
             )
         return None
 
