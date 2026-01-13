@@ -283,7 +283,13 @@ class PDFConverter:
 
         output_path = self.data_path / f"{input_path.stem}.pdf"
         try:
-            docx2pdf.convert(str(input_path), str(output_path))
+            # Windows COM 需要在当前线程初始化
+            pythoncom.CoInitialize()
+            try:
+                docx2pdf.convert(str(input_path), str(output_path))
+            finally:
+                pythoncom.CoUninitialize()
+
             if output_path.exists():
                 logger.info(f"[PDF转换器] docx2pdf 转换成功: {output_path}")
                 return output_path
