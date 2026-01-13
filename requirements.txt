@@ -9,6 +9,9 @@ pdfplumber
 # PDF→Word 转换
 pdf2docx
 
+# PDF/Office 预览图生成
+pymupdf
+
 # 旧格式 .xls 读取（跨平台）
 xlrd
 
