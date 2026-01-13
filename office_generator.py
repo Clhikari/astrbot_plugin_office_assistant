@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -188,7 +189,6 @@ class OfficeGenerator:
         - 标记后第一行作为标题
         - 后续行作为内容要点
         """
-        import re
 
         text = text.strip()
         if not text:
@@ -374,7 +374,6 @@ class OfficeGenerator:
         - 合并多个连续的点号
         - 限制文件名长度
         """
-        import re
 
         # 保留字母、数字、中文、空格、连字符、下划线、点号
         filename = "".join(

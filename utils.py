@@ -1,4 +1,5 @@
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,7 +49,6 @@ def safe_error_message(error: Exception, context: str = "") -> str:
 
     # 移除可能包含路径的信息
     # 常见模式: 'D:\\path\\to\\file' 或 '/path/to/file'
-    import re
 
     # Windows 路径模式
     error_str = re.sub(r"[A-Za-z]:\\[^\s'\"]+", "[路径已隐藏]", error_str)
