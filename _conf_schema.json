@@ -74,5 +74,24 @@
                 "default": 4
             }
         }
+    },
+    "preview_settings": {
+        "description": "预览图设置",
+        "type": "object",
+        "hint": "控制文件预览图生成",
+        "items": {
+            "enable": {
+                "description": "启用预览图",
+                "type": "bool",
+                "hint": "发送 Office/PDF 文件时是否同时发送第一页预览图",
+                "default": true
+            },
+            "dpi": {
+                "description": "预览图分辨率",
+                "type": "int",
+                "hint": "预览图的 DPI 分辨率，越高越清晰但文件越大。推荐 100-200。",
+                "default": 150
+            }
+        }
     }
 }
