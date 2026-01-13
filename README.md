@@ -8,9 +8,10 @@
 
 ## 🌟 核心特性
 
-- **智能文件分析**：LLM 可读取 Python, JS, HTML, Markdown, JSON 等文本文件，并对内容进行总结、分析，提供帮助或建议。
+- **智能文件分析**：LLM 可读取 Python, JS, HTML, Markdown, JSON, PDF 等文件，并对内容进行总结、分析，提供帮助或建议。
 - **Office 文档生成**：原生支持生成 Word (.docx), Excel (.xlsx) 和 PowerPoint (.pptx) 文件。
 - **PDF 转换**：支持 Office⇄PDF 双向转换（需额外依赖）。
+- **预览图生成**：发送 Office/PDF 文件时自动生成第一页预览图（可配置）。
 - **流式处理**：大文件采用分块读取，避免内存溢出。
 - **安全防护**：内置路径验证机制，防止路径遍历攻击。
 - **精细权限控制**：
@@ -30,6 +31,8 @@
 | 读取 .doc 文件  | antiword (Linux/macOS) 或 pywin32 (Windows) | 需手动安装         |
 | 读取 .xls 文件  | xlrd                                        | ✅ 自动安装        |
 | 读取 .ppt 文件  | pywin32 (Windows)                           | Linux/macOS 不支持 |
+| 读取 .pdf 文件  | pdfplumber                                  | ✅ 自动安装        |
+| 预览图生成      | pymupdf                                     | ✅ 自动安装        |
 | Office→PDF 转换 | LibreOffice 或 Microsoft Office             | 需手动安装         |
 
 ### 系统依赖安装
@@ -137,11 +140,20 @@ RUN apt-get update && apt-get install -y \
 | 发送后自动删除文件 | bool  | true   | 生成的文件发送后自动删除，关闭则持久化存储                         |
 | 文件消息缓冲时间   | float | 4      | 收到文件后等待后续消息的时间(秒)，用于聚合分离发送的文件和文本消息 |
 
+#### 预览图设置
+
+| 配置项       | 类型 | 默认值 | 说明                                                    |
+| ------------ | ---- | ------ | ------------------------------------------------------- |
+| 启用预览图   | bool | true   | 发送 Office/PDF 文件时是否同时发送第一页预览图          |
+| 预览图分辨率 | int  | 150    | 预览图的 DPI 分辨率，越高越清晰但文件越大，推荐 100-200 |
+
+> 💡 **提示**：预览图功能对 PDF 和 Word 文件效果最好。Excel/PPT 暂不支持预览图（仅 Windows 的 Word 支持）。
+
 ## 📖 提供的工具 (LLM Tools)
 
 | 工具名称             | 功能描述                                                                 |
 | -------------------- | ------------------------------------------------------------------------ |
-| `read_file`          | 读取文本文件内容，供 LLM 分析并提供总结、建议或帮助                      |
+| `read_file`          | 读取文件内容（包括 PDF 文本提取），供 LLM 分析并提供总结、建议或帮助     |
 | `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                                       |
 | `convert_to_pdf`     | 将 Office 文件转换为 PDF（Windows: docx2pdf/pywin32，其他: LibreOffice） |
 | `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                                |

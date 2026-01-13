@@ -5,6 +5,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pdfplumber
+
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, llm_tool, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -37,6 +39,9 @@ from .office_generator import OfficeGenerator
 
 # 导入 PDF 转换器
 from .pdf_converter import PDFConverter
+
+# 导入预览图生成器
+from .preview_generator import PreviewGenerator
 from .utils import (
     extract_excel_text,
     extract_ppt_text,
@@ -77,6 +82,12 @@ class FileOperationPlugin(Star):
         self.pdf_converter = PDFConverter(
             self.plugin_data_path, executor=self._executor
         )
+
+        # 初始化预览图生成器
+        preview_settings = self.config.get("preview_settings", {})
+        self._enable_preview = preview_settings.get("enable", True)
+        preview_dpi = preview_settings.get("dpi", 150)
+        self.preview_gen = PreviewGenerator(dpi=preview_dpi)
 
         self._office_libs = self._check_office_libs()
 
@@ -336,6 +347,66 @@ class FileOperationPlugin(Star):
         )
         return mb * 1024 * 1024
 
+    async def _send_file_with_preview(
+        self,
+        event: AstrMessageEvent,
+        file_path: Path,
+        success_message: str = "✅ 文件已处理成功",
+    ) -> None:
+        """发送文件，并根据配置生成预览图
+
+        Args:
+            event: 消息事件
+            file_path: 要发送的文件路径
+            success_message: 成功消息前缀
+        """
+        use_reply = self.config.get("trigger_settings", {}).get("reply_to_user", True)
+        preview_path = None
+
+        # 生成预览图
+        if self._enable_preview:
+            try:
+                loop = asyncio.get_running_loop()
+                preview_path = await loop.run_in_executor(
+                    self._executor,
+                    self.preview_gen.generate_preview,
+                    file_path,
+                    None,
+                )
+            except Exception as e:
+                logger.warning(f"[文件管理] 生成预览图失败: {e}")
+                preview_path = None
+
+        # 构建并发送消息
+        text_chain = MessageChain()
+        text_chain.message(f"{success_message}：{file_path.name}")
+        if use_reply:
+            text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
+        await event.send(text_chain)
+
+        # 先发送预览图（如果有）
+        if preview_path and preview_path.exists():
+            await event.send(MessageChain([Comp.Image(file=str(preview_path.resolve()))]))
+            # 清理预览图
+            if self._auto_delete:
+                try:
+                    preview_path.unlink()
+                except Exception:
+                    pass
+
+        # 发送文件
+        await event.send(
+            MessageChain([Comp.File(file=str(file_path.resolve()), name=file_path.name)])
+        )
+
+        # 根据配置决定是否删除文件
+        if self._auto_delete and file_path.exists():
+            try:
+                file_path.unlink()
+                logger.debug(f"[文件管理] 已自动删除文件: {file_path.name}")
+            except Exception as del_e:
+                logger.warning(f"[文件管理] 自动删除文件失败: {del_e}")
+
     async def _read_text_file(
         self, file_path: Path, max_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> str:
@@ -404,6 +475,23 @@ class FileOperationPlugin(Star):
             f"[文件信息] 文件名: {filename}, 类型: {suffix}, 大小: {format_file_size(file_size)}\n"
             f"[文件内容]\n{content}"
         )
+
+    def _extract_pdf_text(self, file_path: Path) -> str | None:
+        """使用 pdfplumber 提取 PDF 文本内容"""
+        try:
+            text_parts = []
+            with pdfplumber.open(file_path) as pdf:
+                for i, page in enumerate(pdf.pages, 1):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(f"--- 第 {i} 页 ---\n{page_text}")
+            if text_parts:
+                return "\n\n".join(text_parts)
+            logger.warning(f"[文件管理] PDF 文件 {file_path.name} 未提取到文本")
+            return None
+        except Exception as e:
+            logger.error(f"[文件管理] 提取 PDF 文本失败: {e}")
+            return None
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=0)
     async def on_file_message(self, event: AstrMessageEvent):
@@ -592,6 +680,14 @@ class FileOperationPlugin(Star):
                         filename, suffix, file_size, extracted
                     )
                 return f"错误：文件 '{filename}' 无法读取，可能未安装对应解析库"
+            # PDF 文件：使用 pdfplumber 提取文本
+            if suffix == PDF_SUFFIX:
+                extracted = self._extract_pdf_text(resolved_path)
+                if extracted:
+                    return self._format_file_result(
+                        filename, suffix, file_size, extracted
+                    )
+                return f"错误：无法从 PDF 文件 '{filename}' 中提取文本内容，文件可能为空、已损坏或只包含图片。"
             return f"错误：不支持读取 '{suffix}' 格式的文件"
         except Exception as e:
             logger.error(f"读取文件失败: {e}")
@@ -679,31 +775,13 @@ class FileOperationPlugin(Star):
                         )
                     )
                     return f"错误：文件过大 ({size_str})，超过限制 {max_str}"
-                use_reply = self.config.get("trigger_settings", {}).get(
-                    "reply_to_user", True
-                )
 
-                # 先发送文本消息
-                text_chain = MessageChain()
-                text_chain.message(f"✅ 文件已处理成功：{file_path.name}")
-                if use_reply:
-                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
-                await event.send(text_chain)
-                await event.send(
-                    MessageChain(
-                        [Comp.File(file=str(file_path.resolve()), name=file_path.name)]
-                    )
-                )
-                # 发送后根据配置决定是否删除文件
-                if self._auto_delete and file_path.exists():
-                    try:
-                        file_path.unlink()
-                        logger.debug(f"[文件管理] 已自动删除文件: {file_path.name}")
-                    except Exception as del_e:
-                        logger.warning(f"[文件管理] 自动删除文件失败: {del_e}")
+                # 发送文件（带预览图）
+                await self._send_file_with_preview(event, file_path)
                 return f"已将文件{file_path.name}发送给用户"
         except Exception as e:
             await event.send(MessageChain().message(f"文件操作异常: {e}"))
+            return f"错误：文件操作异常: {e}"
 
     @llm_tool(name="convert_to_pdf")
     async def convert_to_pdf(
@@ -714,6 +792,7 @@ class FileOperationPlugin(Star):
     ) -> str:
         """将 Office 文件 (Word/Excel/PPT) 转换为 PDF 格式。
         支持新旧版格式：.docx/.doc, .xlsx/.xls, .pptx/.ppt
+        注意：直接调用此工具即可，无需先调用 read_file 读取文件。
 
         Args:
             filename(string): 要转换的 Office 文件名 (如 report.docx, data.xlsx, 报表.xls)
@@ -756,33 +835,10 @@ class FileOperationPlugin(Star):
                     output_path.unlink()
                     return f"错误：生成的 PDF 文件过大 ({format_file_size(file_size)})"
 
-                # 发送文件
-                use_reply = self.config.get("trigger_settings", {}).get(
-                    "reply_to_user", True
+                # 发送文件（带预览图）
+                await self._send_file_with_preview(
+                    event, output_path, f"✅ 已将 {filename} 转换为 PDF"
                 )
-                text_chain = MessageChain()
-                text_chain.message(f"✅ 已将 {filename} 转换为 PDF")
-                if use_reply:
-                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
-                await event.send(text_chain)
-
-                await event.send(
-                    MessageChain(
-                        [
-                            Comp.File(
-                                file=str(output_path.resolve()), name=output_path.name
-                            )
-                        ]
-                    )
-                )
-
-                # 自动删除
-                if self._auto_delete and output_path.exists():
-                    try:
-                        output_path.unlink()
-                        logger.debug(f"[PDF转换] 已自动删除: {output_path.name}")
-                    except Exception as e:
-                        logger.warning(f"[PDF转换] 自动删除失败: {e}")
 
                 return f"已将 {filename} 转换为 {output_path.name} 并发送给用户"
 
@@ -801,6 +857,7 @@ class FileOperationPlugin(Star):
         file_id: str = "",  # 别名，兼容 LLM 可能使用的参数名
     ) -> str:
         """将 PDF 文件转换为 Office 格式 (Word 或 Excel)。
+        直接调用此工具即可，无需先调用 read_file 读取文件。
 
         注意事项:
         - PDF→Word: 适用于文本为主的 PDF，复杂布局可能有偏差
@@ -861,33 +918,10 @@ class FileOperationPlugin(Star):
                     output_path.unlink()
                     return f"错误：生成的文件过大 ({format_file_size(file_size)})"
 
-                # 发送文件
-                use_reply = self.config.get("trigger_settings", {}).get(
-                    "reply_to_user", True
+                # 发送文件（带预览图）
+                await self._send_file_with_preview(
+                    event, output_path, f"✅ 已将 {filename} 转换为 {target_desc}"
                 )
-                text_chain = MessageChain()
-                text_chain.message(f"✅ 已将 {filename} 转换为 {target_desc}")
-                if use_reply:
-                    text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
-                await event.send(text_chain)
-
-                await event.send(
-                    MessageChain(
-                        [
-                            Comp.File(
-                                file=str(output_path.resolve()), name=output_path.name
-                            )
-                        ]
-                    )
-                )
-
-                # 自动删除
-                if self._auto_delete and output_path.exists():
-                    try:
-                        output_path.unlink()
-                        logger.debug(f"[PDF转换] 已自动删除: {output_path.name}")
-                    except Exception as e:
-                        logger.warning(f"[PDF转换] 自动删除失败: {e}")
 
                 return f"已将 {filename} 转换为 {output_path.name} 并发送给用户"
 
