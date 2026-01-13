@@ -109,10 +109,10 @@ class PreviewGenerator:
             pythoncom.CoInitialize()
             try:
                 convert(str(office_path), str(tmp_pdf))
-                result = self._generate_from_pdf(tmp_pdf, output_path)
-                return result
             finally:
                 pythoncom.CoUninitialize()
+
+            return self._generate_from_pdf(tmp_pdf, output_path)
         except Exception as e:
             logger.error(f"[预览生成] Office 转 PDF 失败: {e}")
             return None
