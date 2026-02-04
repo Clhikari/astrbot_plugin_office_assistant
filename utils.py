@@ -2,6 +2,8 @@ import platform
 import re
 import shutil
 import subprocess
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from astrbot.api import logger
@@ -19,6 +21,42 @@ if _IS_WINDOWS:
         _WIN32COM_AVAILABLE = True
     except ImportError:
         pass
+
+
+@contextmanager
+def com_application(app_name: str) -> Generator:
+    """Windows COM 应用上下文管理器
+
+    自动处理 COM 初始化/反初始化和应用退出，避免资源泄漏。
+
+    Args:
+        app_name: COM 应用名称，如 "Word.Application"
+
+    Yields:
+        COM 应用对象
+
+    Example:
+        with com_application("Word.Application") as app:
+            doc = app.Documents.Open(path)
+            # ...
+    """
+    if not _WIN32COM_AVAILABLE:
+        raise RuntimeError("win32com 不可用，请安装 pywin32: pip install pywin32")
+
+    app = None
+    try:
+        pythoncom.CoInitialize()
+        app = win32com.client.Dispatch(app_name)
+        app.Visible = False
+        if hasattr(app, "DisplayAlerts"):
+            app.DisplayAlerts = False
+        yield app
+    finally:
+        if app:
+            with suppress(Exception):
+                app.Quit()
+        with suppress(Exception):
+            pythoncom.CoUninitialize()
 
 
 def format_file_size(size: int | float) -> str:
@@ -103,7 +141,8 @@ def _extract_doc_text_antiword(file_path: Path) -> str | None:
         result = subprocess.run(
             ["antiword", str(file_path.resolve())],
             capture_output=True,
-            text=True, errors="replace",
+            text=True,
+            errors="replace",
             timeout=30,
         )
         if result.returncode == 0:
@@ -121,37 +160,18 @@ def _extract_doc_text_antiword(file_path: Path) -> str | None:
 
 def _extract_doc_text_win32com(file_path: Path) -> str | None:
     """使用 win32com 提取 .doc 文件文本（仅 Windows）"""
-    app = None
-    doc = None
     try:
-        pythoncom.CoInitialize()
-        app = win32com.client.Dispatch("Word.Application")
-        app.Visible = False
-        app.DisplayAlerts = False
-
-        doc = app.Documents.Open(str(file_path.resolve()))
-        text = doc.Content.Text
-        return text.strip() if text else None
-
+        with com_application("Word.Application") as app:
+            doc = app.Documents.Open(str(file_path.resolve()))
+            try:
+                text = doc.Content.Text
+                return text.strip() if text else None
+            finally:
+                with suppress(Exception):
+                    doc.Close()
     except Exception as e:
         logger.warning(f".doc 文本提取失败: {e}", exc_info=True)
         return None
-
-    finally:
-        if doc:
-            try:
-                doc.Close()
-            except Exception:
-                pass
-        if app:
-            try:
-                app.Quit()
-            except Exception:
-                pass
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
 
 
 def extract_excel_text(file_path: Path) -> str | None:
@@ -211,48 +231,27 @@ def _extract_xls_text_xlrd(file_path: Path) -> str | None:
 
 def _extract_xls_text_win32com(file_path: Path) -> str | None:
     """使用 win32com 提取 .xls 文件文本（仅 Windows）"""
-    app = None
-    wb = None
     try:
-        pythoncom.CoInitialize()
-        app = win32com.client.Dispatch("Excel.Application")
-        app.Visible = False
-        app.DisplayAlerts = False
-
-        wb = app.Workbooks.Open(str(file_path.resolve()))
-        lines = []
-
-        for ws in wb.Worksheets:
-            used_range = ws.UsedRange
-            if used_range:
-                for row in used_range.Rows:
-                    row_values = []
-                    for cell in row.Cells:
-                        val = cell.Value
-                        row_values.append("" if val is None else str(val))
-                    lines.append("\t".join(row_values))
-
-        return "\n".join(lines) if lines else None
-
+        with com_application("Excel.Application") as app:
+            wb = app.Workbooks.Open(str(file_path.resolve()))
+            try:
+                lines = []
+                for ws in wb.Worksheets:
+                    used_range = ws.UsedRange
+                    if used_range:
+                        for row in used_range.Rows:
+                            row_values = [
+                                "" if cell.Value is None else str(cell.Value)
+                                for cell in row.Cells
+                            ]
+                            lines.append("\t".join(row_values))
+                return "\n".join(lines) if lines else None
+            finally:
+                with suppress(Exception):
+                    wb.Close(SaveChanges=False)
     except Exception as e:
         logger.warning(f".xls 文本提取失败: {e}", exc_info=True)
         return None
-
-    finally:
-        if wb:
-            try:
-                wb.Close(SaveChanges=False)
-            except Exception:
-                pass
-        if app:
-            try:
-                app.Quit()
-            except Exception:
-                pass
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
 
 
 def extract_ppt_text(file_path: Path) -> str | None:
@@ -294,41 +293,21 @@ def _extract_ppt_text_win32com(file_path: Path) -> str | None:
             )
         return None
 
-    app = None
-    ppt = None
     try:
-        pythoncom.CoInitialize()
-        app = win32com.client.Dispatch("PowerPoint.Application")
-        app.DisplayAlerts = False
-
-        ppt = app.Presentations.Open(str(file_path.resolve()), WithWindow=False)
-        texts = []
-
-        for slide in ppt.Slides:
-            for shape in slide.Shapes:
-                if shape.HasTextFrame:
-                    text_frame = shape.TextFrame
-                    if text_frame.HasText:
-                        texts.append(text_frame.TextRange.Text)
-
-        return "\n".join(texts) if texts else None
-
+        with com_application("PowerPoint.Application") as app:
+            ppt = app.Presentations.Open(str(file_path.resolve()), WithWindow=False)
+            try:
+                texts = []
+                for slide in ppt.Slides:
+                    for shape in slide.Shapes:
+                        if shape.HasTextFrame:
+                            text_frame = shape.TextFrame
+                            if text_frame.HasText:
+                                texts.append(text_frame.TextRange.Text)
+                return "\n".join(texts) if texts else None
+            finally:
+                with suppress(Exception):
+                    ppt.Close()
     except Exception as e:
         logger.warning(f".ppt 文本提取失败: {e}", exc_info=True)
         return None
-
-    finally:
-        if ppt:
-            try:
-                ppt.Close()
-            except Exception:
-                pass
-        if app:
-            try:
-                app.Quit()
-            except Exception:
-                pass
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
