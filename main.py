@@ -58,11 +58,24 @@ class FileOperationPlugin(Star):
         super().__init__(context)
         self.config = config
 
-        # 根据配置决定使用临时目录还是持久化目录
-        self._auto_delete = self.config.get("file_settings", {}).get(
-            "auto_delete_files", True
-        )
+        # 预加载常用配置
+        file_settings = self.config.get("file_settings", {})
+        trigger_settings = self.config.get("trigger_settings", {})
+        preview_settings = self.config.get("preview_settings", {})
 
+        self._auto_delete = file_settings.get("auto_delete_files", True)
+        self._max_file_size = (
+            file_settings.get("max_file_size_mb", DEFAULT_MAX_FILE_SIZE_MB)
+            * 1024
+            * 1024
+        )
+        self._buffer_wait = file_settings.get("message_buffer_seconds", 4)
+        self._reply_to_user = trigger_settings.get("reply_to_user", True)
+        self._require_at_in_group = trigger_settings.get("require_at_in_group", True)
+        self._enable_preview = preview_settings.get("enable", True)
+        self._preview_dpi = preview_settings.get("dpi", 150)
+
+        # 根据配置决定使用临时目录还是持久化目录
         if self._auto_delete:
             # 使用临时目录，发送后自动删除
             self._temp_dir = tempfile.TemporaryDirectory(prefix="astrbot_file_")
@@ -84,17 +97,12 @@ class FileOperationPlugin(Star):
         )
 
         # 初始化预览图生成器
-        preview_settings = self.config.get("preview_settings", {})
-        self._enable_preview = preview_settings.get("enable", True)
-        preview_dpi = preview_settings.get("dpi", 150)
-        self.preview_gen = PreviewGenerator(dpi=preview_dpi)
+        self.preview_gen = PreviewGenerator(dpi=self._preview_dpi)
 
         self._office_libs = self._check_office_libs()
 
         # 初始化消息缓冲器
-        file_settings = self.config.get("file_settings", {})
-        buffer_wait = file_settings.get("message_buffer_seconds", 4)
-        self._message_buffer = MessageBuffer(wait_seconds=buffer_wait)
+        self._message_buffer = MessageBuffer(wait_seconds=self._buffer_wait)
         self._message_buffer.set_complete_callback(self._on_buffer_complete)
 
         mode = "临时目录(自动删除)" if self._auto_delete else "持久化存储"
@@ -342,10 +350,7 @@ class FileOperationPlugin(Star):
 
     def _get_max_file_size(self) -> int:
         """获取最大文件大小（字节）"""
-        mb = self.config.get("file_settings", {}).get(
-            "max_file_size_mb", DEFAULT_MAX_FILE_SIZE_MB
-        )
-        return mb * 1024 * 1024
+        return self._max_file_size
 
     async def _send_file_with_preview(
         self,
@@ -360,7 +365,6 @@ class FileOperationPlugin(Star):
             file_path: 要发送的文件路径
             success_message: 成功消息前缀
         """
-        use_reply = self.config.get("trigger_settings", {}).get("reply_to_user", True)
         preview_path = None
 
         # 生成预览图
@@ -380,13 +384,15 @@ class FileOperationPlugin(Star):
         # 构建并发送消息
         text_chain = MessageChain()
         text_chain.message(f"{success_message}：{file_path.name}")
-        if use_reply:
+        if self._reply_to_user:
             text_chain.chain.append(Comp.At(qq=event.get_sender_id()))
         await event.send(text_chain)
 
         # 先发送预览图（如果有）
         if preview_path and preview_path.exists():
-            await event.send(MessageChain([Comp.Image(file=str(preview_path.resolve()))]))
+            await event.send(
+                MessageChain([Comp.Image(file=str(preview_path.resolve()))])
+            )
             # 清理预览图
             if self._auto_delete:
                 try:
@@ -396,7 +402,9 @@ class FileOperationPlugin(Star):
 
         # 发送文件
         await event.send(
-            MessageChain([Comp.File(file=str(file_path.resolve()), name=file_path.name)])
+            MessageChain(
+                [Comp.File(file=str(file_path.resolve()), name=file_path.name)]
+            )
         )
 
         # 根据配置决定是否删除文件
@@ -547,23 +555,24 @@ class FileOperationPlugin(Star):
     @filter.on_llm_request()
     async def before_llm_chat(self, event: AstrMessageEvent, req: ProviderRequest):
         """动态控制工具可见性"""
-        trigger_cfg = self.config.get("trigger_settings", {})
-        should_expose = True
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
-        # 私聊判断
-        if is_friend and event.is_admin():
-            pass  # keep should_expose True
-        # 权限拦截
-        elif not self._check_permission(event):
-            should_expose = False
-        # 群聊@/回复拦截
-        elif (
-            is_group
-            and trigger_cfg.get("require_at_in_group", True)
-            and not self._is_bot_mentioned(event)
-        ):
-            should_expose = False
+        has_permission = self._check_permission(event)
+
+        # 判断是否暴露文件工具
+        should_expose = (
+            # 管理员私聊始终可用
+            (is_friend and event.is_admin())
+            # 有权限且满足群聊条件
+            or (
+                has_permission
+                and (
+                    not is_group
+                    or not self._require_at_in_group
+                    or self._is_bot_mentioned(event)
+                )
+            )
+        )
 
         if not should_expose:
             logger.info(
@@ -573,7 +582,7 @@ class FileOperationPlugin(Star):
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
             # 权限不足时提示用户
-            if not self._check_permission(event):
+            if not has_permission:
                 await event.send(MessageChain().message(" 你没有使用文件功能的权限"))
                 if not is_friend:
                     await event.send(
@@ -997,7 +1006,7 @@ class FileOperationPlugin(Star):
             "📂 AstrBot 文件操作工具\n"
             f"存储模式: {storage_mode}\n"
             f"工作目录: {self.plugin_data_path}\n"
-            f"回复模式: {'开启' if self.config.get('trigger_settings', {}).get('reply_to_user') else '关闭'}\n"
+            f"回复模式: {'开启' if self._reply_to_user else '关闭'}\n"
             f"PDF转换: {', '.join(pdf_status)}"
         )
 
