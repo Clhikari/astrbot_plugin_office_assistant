@@ -696,7 +696,7 @@ class FileOperationPlugin(Star):
                     return self._format_file_result(
                         filename, suffix, file_size, extracted
                     )
-                return f"错误：PDF 文件 '{filename}' 无法读取，请确保已安装 pdfplumber"
+                return f"错误：无法从 PDF 文件 '{filename}' 中提取文本内容，文件可能为空、已损坏或只包含图片。"
             return f"错误：不支持读取 '{suffix}' 格式的文件"
         except Exception as e:
             logger.error(f"读取文件失败: {e}")
