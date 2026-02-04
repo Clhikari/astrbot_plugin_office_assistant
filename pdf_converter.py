@@ -16,10 +16,13 @@ import platform
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
 from astrbot.api import logger
+
+from .utils import com_application
 
 # 系统类型检测
 _IS_WINDOWS = platform.system() == "Windows"
@@ -63,8 +66,8 @@ if _IS_WINDOWS:
 
     # win32com 支持 Word/Excel/PPT（需要 pythoncom 配合）
     try:
-        import pythoncom
-        import win32com.client
+        import pythoncom  # noqa: F401
+        import win32com.client  # noqa: F401
 
         _WIN32COM_AVAILABLE = True
     except ImportError:
@@ -305,32 +308,33 @@ class PDFConverter:
         input_abs = str(input_path.resolve())
         output_abs = str(output_path.resolve())
 
-        app = None
-        doc = None  # doc/wb/ppt
-
         try:
-            pythoncom.CoInitialize()
-
             if suffix in (".doc", ".docx"):
-                app = win32com.client.Dispatch("Word.Application")
-                app.Visible = False
-                app.DisplayAlerts = False  # 禁止弹窗
-                doc = app.Documents.Open(input_abs)
-                doc.SaveAs(output_abs, FileFormat=17)  # 17 = PDF
+                with com_application("Word.Application") as app:
+                    doc = app.Documents.Open(input_abs)
+                    try:
+                        doc.SaveAs(output_abs, FileFormat=17)  # 17 = PDF
+                    finally:
+                        with suppress(Exception):
+                            doc.Close()
 
             elif suffix in (".xls", ".xlsx"):
-                app = win32com.client.Dispatch("Excel.Application")
-                app.Visible = False
-                app.DisplayAlerts = False  # 禁止弹窗
-                doc = app.Workbooks.Open(input_abs)
-                doc.ExportAsFixedFormat(0, output_abs)  # 0 = PDF
+                with com_application("Excel.Application") as app:
+                    wb = app.Workbooks.Open(input_abs)
+                    try:
+                        wb.ExportAsFixedFormat(0, output_abs)  # 0 = PDF
+                    finally:
+                        with suppress(Exception):
+                            wb.Close(SaveChanges=False)
 
             elif suffix in (".ppt", ".pptx"):
-                app = win32com.client.Dispatch("PowerPoint.Application")
-                app.DisplayAlerts = False  # 禁止弹窗 (ppAlertsNone = 0 在某些版本)
-                doc = app.Presentations.Open(input_abs, WithWindow=False)
-                doc.SaveAs(output_abs, 32)  # 32 = PDF
-
+                with com_application("PowerPoint.Application") as app:
+                    ppt = app.Presentations.Open(input_abs, WithWindow=False)
+                    try:
+                        ppt.SaveAs(output_abs, 32)  # 32 = PDF
+                    finally:
+                        with suppress(Exception):
+                            ppt.Close()
             else:
                 logger.error(f"[PDF转换器] win32com 不支持的格式: {suffix}")
                 return None
@@ -343,23 +347,6 @@ class PDFConverter:
         except Exception as e:
             logger.error(f"[PDF转换器] win32com 转换失败: {e}")
             return None
-
-        finally:
-            # 确保 COM 对象正确释放
-            if doc:
-                try:
-                    doc.Close()
-                except Exception:
-                    pass
-            if app:
-                try:
-                    app.Quit()
-                except Exception:
-                    pass
-            try:
-                pythoncom.CoUninitialize()
-            except Exception:
-                pass
 
     def _office_to_pdf_libreoffice(self, input_path: Path, timeout: int) -> Path | None:
         """使用 LibreOffice 转换（跨平台）"""
