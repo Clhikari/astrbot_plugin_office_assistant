@@ -24,7 +24,9 @@ class PreviewGenerator:
         self.dpi = dpi
         self._zoom = dpi / 72  # PDF 默认 72 DPI
 
-    def generate_preview(self, file_path: Path, output_path: Path | None = None) -> Path | None:
+    def generate_preview(
+        self, file_path: Path, output_path: Path | None = None
+    ) -> Path | None:
         """
         生成文件第一页预览图
 
@@ -76,7 +78,9 @@ class PreviewGenerator:
             logger.error(f"[预览生成] PDF 预览生成失败: {e}")
             return None
 
-    def _generate_from_office(self, office_path: Path, output_path: Path) -> Path | None:
+    def _generate_from_office(
+        self, office_path: Path, output_path: Path
+    ) -> Path | None:
         """从 Office 文件生成预览图（先转 PDF）
 
         注意：docx2pdf 仅支持 Word 文件，Excel/PPT 暂不支持预览图生成
