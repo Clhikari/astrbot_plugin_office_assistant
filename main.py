@@ -602,7 +602,16 @@ class FileOperationPlugin(Star):
                     file_name = component.name or "unknown_file"
                     if file_path and Path(file_path).exists():
                         src_path = Path(file_path)
-                        dst_path = self.plugin_data_path / file_name
+
+                        # 仅使用文件名，避免路径穿越
+                        safe_name = Path(file_name).name
+                        valid, dst_path, error = self._validate_path(safe_name)
+                        if not valid:
+                            logger.warning(
+                                f"[文件管理] 上传文件名不安全，已拒绝: {file_name}, 原因: {error}"
+                            )
+                            continue
+
                         # 复制文件到工作区
                         shutil.copy2(src_path, dst_path)
                         file_suffix = dst_path.suffix.lower()
