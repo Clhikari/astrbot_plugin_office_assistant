@@ -9,8 +9,14 @@ pdfplumber
 # PDF→Word 转换
 pdf2docx
 
+# PDF→Excel 转换（tabula/pdfplumber 路径均依赖 pandas）
+pandas
+
 # PDF/Office 预览图生成
 pymupdf
+
+# PDF→Excel 高精度表格提取（可选，需 Java）
+tabula-py
 
 # 旧格式 .xls 读取（跨平台）
 xlrd
