@@ -575,7 +575,7 @@ class FileOperationPlugin(Star):
         )
 
         if not should_expose:
-            logger.dubug(
+            logger.debug(
                 f"[文件管理] 用户 {event.get_sender_id()} 权限不足，已隐藏文件工具"
             )
             if req.func_tool:
