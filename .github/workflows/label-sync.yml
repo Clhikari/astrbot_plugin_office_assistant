@@ -1,0 +1,73 @@
+name: Sync issue labels
+
+on:
+  push:
+    paths:
+      - ".github/workflows/label-sync.yml"
+      - ".github/workflows/issue-auto-label.yml"
+      - ".github/workflows/pr-auto-label.yml"
+  workflow_dispatch:
+
+jobs:
+  sync-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Sync labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: "bug", color: "d73a4a", description: "Something is not working" },
+              { name: "enhancement", color: "a2eeef", description: "New feature or request" },
+              { name: "question", color: "d876e3", description: "Usage or configuration question" },
+              { name: "stale", color: "cfd3d7", description: "No recent activity" },
+              { name: "need-update-doc", color: "5319e7", description: "Documentation update is needed" },
+              { name: "area:webui", color: "1d76db", description: "WebUI related" },
+              { name: "area:core", color: "0052cc", description: "Core logic related" },
+              { name: "area:plugin", color: "0e8a16", description: "Plugin behavior related" },
+              { name: "area:docs", color: "5319e7", description: "Documentation related" },
+              { name: "area:ci", color: "fbca04", description: "CI / workflow related" },
+              { name: "priority:p0", color: "b60205", description: "Critical priority" },
+              { name: "priority:p1", color: "d93f0b", description: "High priority" },
+              { name: "priority:p2", color: "fbca04", description: "Medium priority" },
+              { name: "priority:p3", color: "0e8a16", description: "Low priority" },
+              { name: "size:xs", color: "c2e0c6", description: "Tiny issue" },
+              { name: "size:s", color: "7fd67f", description: "Small issue" },
+              { name: "size:m", color: "fbca04", description: "Medium issue" },
+              { name: "size:l", color: "f9d0c4", description: "Large issue" },
+              { name: "size:xl", color: "b60205", description: "Extra large issue" },
+            ];
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                });
+
+                await github.rest.issues.updateLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  new_name: label.name,
+                  color: label.color,
+                  description: label.description,
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: label.name,
+                    color: label.color,
+                    description: label.description,
+                  });
+                } else {
+                  throw error;
+                }
+              }
+            }

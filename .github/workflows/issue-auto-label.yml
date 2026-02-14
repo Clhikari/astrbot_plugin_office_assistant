@@ -1,0 +1,135 @@
+name: Auto label issues by title and content
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Apply smart labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const title = (issue.title || "").toLowerCase();
+            const body = (issue.body || "").toLowerCase();
+            const text = `${title}\n${body}`;
+            const bodyLength = body.replace(/\s+/g, "").length;
+
+            const current = (issue.labels || []).map((l) =>
+              typeof l === "string" ? l : l.name,
+            );
+
+            const areaKeywords = [
+              { label: "area:webui", keys: ["webui", "dashboard", "frontend", "ui", "界面", "面板"] },
+              { label: "area:ci", keys: ["github actions", "workflow", "ci", "pipeline", "action", "工作流"] },
+              { label: "area:docs", keys: ["readme", "docs", "documentation", "文档", "教程"] },
+              { label: "area:core", keys: ["core", "provider", "adapter", "session", "权限", "白名单"] },
+              { label: "area:plugin", keys: ["plugin", "插件", "office_assistant", "astrbot_plugin_office_assistant", "read_file", "pdf"] },
+            ];
+
+            function detectByKeywords(rules) {
+              for (const rule of rules) {
+                if (rule.keys.some((k) => text.includes(k))) {
+                  return rule.label;
+                }
+              }
+              return null;
+            }
+
+            let areaLabel = detectByKeywords(areaKeywords);
+            if (!areaLabel) {
+              areaLabel = "area:plugin";
+            }
+
+            const docKeywords = [
+              "readme",
+              "docs",
+              "documentation",
+              "doc",
+              "文档",
+              "教程",
+              "说明",
+              "示例",
+              "example",
+            ];
+            const needDocLabel =
+              areaLabel === "area:docs" || docKeywords.some((k) => text.includes(k))
+                ? "need-update-doc"
+                : null;
+
+            const p0Keys = ["priority:p0", "p0", "critical", "紧急", "严重", "阻塞", "无法使用", "不能用", "crash", "宕机", "data loss", "数据丢失", "security", "漏洞"];
+            const p1Keys = ["priority:p1", "p1", "high", "major", "高优先级", "重要", "严重影响"];
+            const p2Keys = ["priority:p2", "p2", "medium", "normal", "中优先级", "一般"];
+            const p3Keys = ["priority:p3", "p3", "low", "minor", "低优先级", "优化", "文案", "typo"];
+
+            function hasAny(keys) {
+              return keys.some((k) => text.includes(k));
+            }
+
+            let priorityLabel = null;
+            if (hasAny(p0Keys)) {
+              priorityLabel = "priority:p0";
+            } else if (hasAny(p1Keys)) {
+              priorityLabel = "priority:p1";
+            } else if (hasAny(p2Keys)) {
+              priorityLabel = "priority:p2";
+            } else if (hasAny(p3Keys)) {
+              priorityLabel = "priority:p3";
+            } else if (current.includes("bug")) {
+              priorityLabel = "priority:p2";
+            } else if (current.includes("enhancement") || current.includes("question")) {
+              priorityLabel = "priority:p3";
+            }
+
+            let sizeLabel = "size:m";
+            if (bodyLength <= 120) {
+              sizeLabel = "size:xs";
+            } else if (bodyLength <= 400) {
+              sizeLabel = "size:s";
+            } else if (bodyLength <= 1000) {
+              sizeLabel = "size:m";
+            } else if (bodyLength <= 2500) {
+              sizeLabel = "size:l";
+            } else {
+              sizeLabel = "size:xl";
+            }
+
+            const toRemove = current.filter(
+              (n) =>
+                n.startsWith("area:") ||
+                n.startsWith("priority:") ||
+                n.startsWith("size:") ||
+                n === "need-update-doc",
+            );
+            for (const labelName of toRemove) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: labelName,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const toAdd = [areaLabel, priorityLabel, sizeLabel, needDocLabel].filter(
+              Boolean,
+            );
+            if (toAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: toAdd,
+              });
+            }

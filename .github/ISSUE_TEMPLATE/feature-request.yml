@@ -1,0 +1,56 @@
+name: "✨ Feature Request / 功能建议"
+description: Suggest an improvement for astrbot_plugin_office_assistant.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion.
+        Please describe the problem and expected outcome clearly.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve / 想解决的问题
+      description: What pain point are you facing now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / 建议方案
+      description: What behavior do you expect after this feature is added?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / 备选方案
+      description: Other options you considered.
+
+  - type: checkboxes
+    id: willing-pr
+    attributes:
+      label: Are you willing to submit a PR? / 你愿意提交 PR 吗？
+      description: This is optional, but contributions are welcome.
+      options:
+        - label: Yes, I can submit a PR for this feature.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+
+  - type: checkboxes
+    id: coc
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the repository Code of Conduct.
+          required: true

@@ -1,0 +1,46 @@
+name: "❓ Question / 使用问题"
+description: Ask a usage or configuration question.
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For usage questions, please provide enough context so others can help quickly.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / 问题描述
+      description: What exactly do you want to know?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / 背景信息
+      description: Include your plugin config, adapter, and expected goal.
+      placeholder: |
+        - Plugin version:
+        - AstrBot version:
+        - Adapter:
+        - Current behavior:
+        - Goal:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: Add logs if this question is related to unexpected behavior.
+      render: shell
+
+  - type: checkboxes
+    id: coc
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the repository Code of Conduct.
+          required: true

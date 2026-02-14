@@ -1,0 +1,48 @@
+name: Mark stale issues
+
+on:
+  schedule:
+    - cron: "30 8 * * *"
+  workflow_dispatch:
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - uses: actions/stale@v10
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          operations-per-run: 200
+
+          any-of-labels: "bug,enhancement"
+
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+
+          days-before-issue-stale: 60
+          days-before-issue-close: 30
+
+          stale-issue-label: "stale"
+          stale-issue-message: |
+            This issue has been automatically marked as **stale** because it has not had recent activity.
+            It will be closed after a period of time if no further activity occurs.
+            If this issue is still relevant, please leave a comment.
+
+            ---
+
+            该 Issue 因长期无活动已被自动标记为 **stale**。
+            若后续仍无活动将自动关闭；如问题仍存在，请回复评论。
+
+          close-issue-message: |
+            This issue was automatically closed due to inactivity.
+            If the problem still exists, feel free to reopen it or create a new issue with updated details.
+
+            ---
+
+            该 Issue 因长期无活动已自动关闭。
+            如问题仍存在，欢迎补充信息后重新打开或新建 Issue。
+
+          remove-stale-when-updated: true

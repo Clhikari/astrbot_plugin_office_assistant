@@ -1,0 +1,40 @@
+name: Issue triage with Dosu
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  summon-dosu:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Summon Dosu on new issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (issue.user?.type === "Bot") {
+              core.info("Skip bot-created issue.");
+              return;
+            }
+
+            const body = [
+              "Thanks for opening this issue.",
+              "",
+              "@dosu please help triage this issue and suggest next steps.",
+              "",
+              "---",
+              "",
+              "感谢反馈。",
+              "@dosu 请协助分流该 Issue，并给出下一步建议。"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body
+            });

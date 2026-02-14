@@ -1,0 +1,134 @@
+name: Auto label PR by title and changed files
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+jobs:
+  auto-label-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      issues: write
+
+    steps:
+      - name: Apply PR labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = pr.number;
+            const title = (pr.title || "").toLowerCase();
+            const body = (pr.body || "").toLowerCase();
+            const text = `${title}\n${body}`;
+
+            const current = (pr.labels || []).map((l) =>
+              typeof l === "string" ? l : l.name,
+            );
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: issueNumber,
+              per_page: 100,
+            });
+
+            const changedPaths = files.map((f) => (f.filename || "").toLowerCase());
+            const totalChanges =
+              Number(pr.additions || 0) + Number(pr.deletions || 0);
+
+            const areaLabels = new Set();
+
+            const hasPath = (rules) =>
+              changedPaths.some((p) => rules.some((r) => p.includes(r)));
+
+            if (hasPath(["dashboard/", "webui", "frontend", "ui/"])) {
+              areaLabels.add("area:webui");
+            }
+            if (hasPath([".github/workflows/", "ci", "pipeline", "action"])) {
+              areaLabels.add("area:ci");
+            }
+            if (hasPath(["readme", "docs/", ".md", "documentation"])) {
+              areaLabels.add("area:docs");
+            }
+            if (
+              hasPath([
+                "main.py",
+                "pdf_converter.py",
+                "office_generator.py",
+                "preview_generator.py",
+                "message_buffer.py",
+                "constants.py",
+                "utils.py",
+              ]) ||
+              text.includes("plugin") ||
+              text.includes("插件")
+            ) {
+              areaLabels.add("area:plugin");
+            }
+            if (
+              text.includes("core") ||
+              text.includes("session") ||
+              text.includes("provider")
+            ) {
+              areaLabels.add("area:core");
+            }
+
+            if (areaLabels.size === 0) {
+              areaLabels.add("area:plugin");
+            }
+
+            const needDocLabel =
+              text.includes("docs") ||
+              text.includes("documentation") ||
+              text.includes("文档") ||
+              hasPath(["readme", "docs/", ".md"])
+                ? "need-update-doc"
+                : null;
+
+            let sizeLabel = "size:m";
+            if (totalChanges <= 30) {
+              sizeLabel = "size:xs";
+            } else if (totalChanges <= 120) {
+              sizeLabel = "size:s";
+            } else if (totalChanges <= 400) {
+              sizeLabel = "size:m";
+            } else if (totalChanges <= 1000) {
+              sizeLabel = "size:l";
+            } else {
+              sizeLabel = "size:xl";
+            }
+
+            const toRemove = current.filter(
+              (n) =>
+                n.startsWith("area:") ||
+                n.startsWith("size:") ||
+                n === "need-update-doc",
+            );
+
+            for (const labelName of toRemove) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  name: labelName,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const toAdd = [...areaLabels, sizeLabel, needDocLabel].filter(Boolean);
+            if (toAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                labels: toAdd,
+              });
+            }
