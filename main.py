@@ -575,22 +575,12 @@ class FileOperationPlugin(Star):
         )
 
         if not should_expose:
-            logger.info(
+            logger.debug(
                 f"[文件管理] 用户 {event.get_sender_id()} 权限不足，已隐藏文件工具"
             )
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
-            # 权限不足时提示用户
-            if not has_permission:
-                await event.send(MessageChain().message(" 你没有使用文件功能的权限"))
-                if not is_friend:
-                    await event.send(
-                        MessageChain().at(
-                            event.get_sender_name(), event.get_sender_id()
-                        )
-                    )
-                event.stop_event()
             return
 
         # 处理文件消息
