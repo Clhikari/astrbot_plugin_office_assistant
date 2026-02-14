@@ -1,0 +1,118 @@
+{
+  "labels": [
+    { "name": "bug", "color": "d73a4a", "description": "Something is not working" },
+    { "name": "enhancement", "color": "a2eeef", "description": "New feature or request" },
+    { "name": "question", "color": "d876e3", "description": "Usage or configuration question" },
+    { "name": "stale", "color": "cfd3d7", "description": "No recent activity" },
+    { "name": "need-update-doc", "color": "5319e7", "description": "Documentation update is needed" },
+    { "name": "area:webui", "color": "1d76db", "description": "WebUI related" },
+    { "name": "area:core", "color": "0052cc", "description": "Core logic related" },
+    { "name": "area:plugin", "color": "0e8a16", "description": "Plugin behavior related" },
+    { "name": "area:docs", "color": "5319e7", "description": "Documentation related" },
+    { "name": "area:ci", "color": "fbca04", "description": "CI / workflow related" },
+    { "name": "priority:p0", "color": "b60205", "description": "Critical priority" },
+    { "name": "priority:p1", "color": "d93f0b", "description": "High priority" },
+    { "name": "priority:p2", "color": "fbca04", "description": "Medium priority" },
+    { "name": "priority:p3", "color": "0e8a16", "description": "Low priority" },
+    { "name": "size:xs", "color": "c2e0c6", "description": "Tiny issue" },
+    { "name": "size:s", "color": "7fd67f", "description": "Small issue" },
+    { "name": "size:m", "color": "fbca04", "description": "Medium issue" },
+    { "name": "size:l", "color": "f9d0c4", "description": "Large issue" },
+    { "name": "size:xl", "color": "b60205", "description": "Extra large issue" }
+  ],
+  "issue": {
+    "default_area": "area:plugin",
+    "default_priority_by_type": {
+      "bug": "priority:p2",
+      "enhancement": "priority:p3",
+      "question": "priority:p3"
+    },
+    "area_rules": [
+      {
+        "label": "area:webui",
+        "patterns": ["\\bwebui\\b", "\\bdashboard\\b", "\\bfrontend\\b", "\\bui\\b", "front\\s*end"]
+      },
+      {
+        "label": "area:ci",
+        "patterns": ["github\\s*actions?", "\\bworkflow\\b", "\\bpipeline\\b", "ci\\s*(fail|error|broken)"]
+      },
+      {
+        "label": "area:docs",
+        "patterns": ["\\breadme\\b", "\\bdocs?\\b", "\\bdocumentation\\b", "\\bguide\\b", "\\bmanual\\b"]
+      },
+      {
+        "label": "area:core",
+        "patterns": ["\\bcore\\b", "\\bprovider\\b", "\\badapter\\b", "\\bsession\\b", "\\bauth\\b", "\\bpermission\\b"]
+      },
+      {
+        "label": "area:plugin",
+        "patterns": ["\\bplugin\\b", "office_assistant", "astrbot_plugin_office_assistant", "\\bread_file\\b", "\\bpdf\\b"]
+      }
+    ],
+    "priority_rules": [
+      {
+        "label": "priority:p0",
+        "patterns": ["priority\\s*:\\s*p0", "\\bp0\\b", "\\bcritical\\b", "\\bblocker\\b", "\\bcrash\\b", "data\\s*loss", "security\\s*(issue|bug|risk)?"]
+      },
+      {
+        "label": "priority:p1",
+        "patterns": ["priority\\s*:\\s*p1", "\\bp1\\b", "\\bhigh\\b", "\\bmajor\\b", "high\\s*priority"]
+      },
+      {
+        "label": "priority:p2",
+        "patterns": ["priority\\s*:\\s*p2", "\\bp2\\b", "\\bmedium\\b", "\\bnormal\\b", "default\\s*priority"]
+      },
+      {
+        "label": "priority:p3",
+        "patterns": ["priority\\s*:\\s*p3", "\\bp3\\b", "\\blow\\b", "\\bminor\\b", "\\btypo\\b", "polish"]
+      }
+    ],
+    "doc_patterns": ["\\breadme\\b", "\\bdocs?\\b", "\\bdocumentation\\b", "\\bguide\\b", "\\bmanual\\b"],
+    "size_by_body_length": [
+      { "max": 120, "label": "size:xs" },
+      { "max": 400, "label": "size:s" },
+      { "max": 1000, "label": "size:m" },
+      { "max": 2500, "label": "size:l" },
+      { "max": 1000000000, "label": "size:xl" }
+    ]
+  },
+  "pr": {
+    "default_area": "area:plugin",
+    "area_path_rules": [
+      {
+        "label": "area:webui",
+        "prefixes": ["dashboard/", "webui/", "frontend/"],
+        "patterns": []
+      },
+      {
+        "label": "area:ci",
+        "prefixes": [".github/workflows/", ".github/actions/", "ci/"],
+        "patterns": []
+      },
+      {
+        "label": "area:docs",
+        "prefixes": ["docs/"],
+        "patterns": ["(^|/)readme(\\.|$)", "\\.md$"]
+      },
+      {
+        "label": "area:plugin",
+        "prefixes": [],
+        "patterns": ["(^|/)main\\.py$", "(^|/)pdf_converter\\.py$", "(^|/)office_generator\\.py$", "(^|/)preview_generator\\.py$", "(^|/)message_buffer\\.py$", "(^|/)constants\\.py$", "(^|/)utils\\.py$", "(^|/)metadata\\.yaml$", "(^|/)_conf_schema\\.json$"]
+      },
+      {
+        "label": "area:core",
+        "prefixes": ["astrbot/core/"],
+        "patterns": []
+      }
+    ],
+    "doc_path_patterns": ["(^|/)readme(\\.|$)", "^docs/", "\\.md$"],
+    "doc_text_patterns": ["\\bdocs?\\b", "\\bdocumentation\\b", "\\breadme\\b", "\\bguide\\b", "\\bmanual\\b"],
+    "size_by_changed_lines": [
+      { "max": 30, "label": "size:xs" },
+      { "max": 120, "label": "size:s" },
+      { "max": 400, "label": "size:m" },
+      { "max": 1000, "label": "size:l" },
+      { "max": 1000000000, "label": "size:xl" }
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+name: Auto label issues by title and content
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply smart labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("node:fs");
+            const config = JSON.parse(
+              fs.readFileSync(".github/labeler/config.json", "utf8"),
+            );
+
+            const issue = context.payload.issue;
+            const title = (issue.title || "").toLowerCase();
+            const body = (issue.body || "").toLowerCase();
+            const text = `${title}\n${body}`;
+            const bodyLength = body.replace(/\s+/g, "").length;
+
+            const current = (issue.labels || []).map((l) =>
+              typeof l === "string" ? l : l.name,
+            );
+
+            const toRegex = (pattern) => new RegExp(pattern, "iu");
+            const matchesAny = (patterns, value) =>
+              (patterns || []).some((pattern) => toRegex(pattern).test(value));
+
+            const issueCfg = config.issue || {};
+            const areaRules = issueCfg.area_rules || [];
+            const priorityRules = issueCfg.priority_rules || [];
+            const sizeRules = issueCfg.size_by_body_length || [];
+            const docPatterns = issueCfg.doc_patterns || [];
+            const defaultPriorityByType = issueCfg.default_priority_by_type || {};
+
+            let areaLabel =
+              areaRules.find((rule) => matchesAny(rule.patterns, text))?.label ||
+              issueCfg.default_area ||
+              "area:plugin";
+
+            let priorityLabel =
+              priorityRules.find((rule) => matchesAny(rule.patterns, text))?.label || null;
+            if (!priorityLabel) {
+              for (const [baseLabel, defaultPriority] of Object.entries(
+                defaultPriorityByType,
+              )) {
+                if (current.includes(baseLabel)) {
+                  priorityLabel = defaultPriority;
+                  break;
+                }
+              }
+            }
+
+            let sizeLabel = "size:m";
+            for (const rule of sizeRules) {
+              if (bodyLength <= Number(rule.max)) {
+                sizeLabel = rule.label;
+                break;
+              }
+            }
+
+            const needDocLabel = matchesAny(docPatterns, text)
+              ? "need-update-doc"
+              : null;
+
+            const toRemove = current.filter(
+              (name) =>
+                name.startsWith("area:") ||
+                name.startsWith("priority:") ||
+                name.startsWith("size:") ||
+                name === "need-update-doc",
+            );
+
+            for (const labelName of toRemove) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: labelName,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const toAdd = [areaLabel, priorityLabel, sizeLabel, needDocLabel].filter(
+              Boolean,
+            );
+            if (toAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: toAdd,
+              });
+            }
