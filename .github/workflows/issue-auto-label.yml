@@ -8,13 +8,22 @@ jobs:
   auto-label:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Apply smart labels
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require("node:fs");
+            const config = JSON.parse(
+              fs.readFileSync(".github/labeler/config.json", "utf8"),
+            );
+
             const issue = context.payload.issue;
             const title = (issue.title || "").toLowerCase();
             const body = (issue.body || "").toLowerCase();
@@ -25,88 +34,55 @@ jobs:
               typeof l === "string" ? l : l.name,
             );
 
-            const areaKeywords = [
-              { label: "area:webui", keys: ["webui", "dashboard", "frontend", "ui", "界面", "面板"] },
-              { label: "area:ci", keys: ["github actions", "workflow", "ci", "pipeline", "action", "工作流"] },
-              { label: "area:docs", keys: ["readme", "docs", "documentation", "文档", "教程"] },
-              { label: "area:core", keys: ["core", "provider", "adapter", "session", "权限", "白名单"] },
-              { label: "area:plugin", keys: ["plugin", "插件", "office_assistant", "astrbot_plugin_office_assistant", "read_file", "pdf"] },
-            ];
+            const toRegex = (pattern) => new RegExp(pattern, "iu");
+            const matchesAny = (patterns, value) =>
+              (patterns || []).some((pattern) => toRegex(pattern).test(value));
 
-            function detectByKeywords(rules) {
-              for (const rule of rules) {
-                if (rule.keys.some((k) => text.includes(k))) {
-                  return rule.label;
+            const issueCfg = config.issue || {};
+            const areaRules = issueCfg.area_rules || [];
+            const priorityRules = issueCfg.priority_rules || [];
+            const sizeRules = issueCfg.size_by_body_length || [];
+            const docPatterns = issueCfg.doc_patterns || [];
+            const defaultPriorityByType = issueCfg.default_priority_by_type || {};
+
+            let areaLabel =
+              areaRules.find((rule) => matchesAny(rule.patterns, text))?.label ||
+              issueCfg.default_area ||
+              "area:plugin";
+
+            let priorityLabel =
+              priorityRules.find((rule) => matchesAny(rule.patterns, text))?.label || null;
+            if (!priorityLabel) {
+              for (const [baseLabel, defaultPriority] of Object.entries(
+                defaultPriorityByType,
+              )) {
+                if (current.includes(baseLabel)) {
+                  priorityLabel = defaultPriority;
+                  break;
                 }
               }
-              return null;
-            }
-
-            let areaLabel = detectByKeywords(areaKeywords);
-            if (!areaLabel) {
-              areaLabel = "area:plugin";
-            }
-
-            const docKeywords = [
-              "readme",
-              "docs",
-              "documentation",
-              "doc",
-              "文档",
-              "教程",
-              "说明",
-              "示例",
-              "example",
-            ];
-            const needDocLabel =
-              areaLabel === "area:docs" || docKeywords.some((k) => text.includes(k))
-                ? "need-update-doc"
-                : null;
-
-            const p0Keys = ["priority:p0", "p0", "critical", "紧急", "严重", "阻塞", "无法使用", "不能用", "crash", "宕机", "data loss", "数据丢失", "security", "漏洞"];
-            const p1Keys = ["priority:p1", "p1", "high", "major", "高优先级", "重要", "严重影响"];
-            const p2Keys = ["priority:p2", "p2", "medium", "normal", "中优先级", "一般"];
-            const p3Keys = ["priority:p3", "p3", "low", "minor", "低优先级", "优化", "文案", "typo"];
-
-            function hasAny(keys) {
-              return keys.some((k) => text.includes(k));
-            }
-
-            let priorityLabel = null;
-            if (hasAny(p0Keys)) {
-              priorityLabel = "priority:p0";
-            } else if (hasAny(p1Keys)) {
-              priorityLabel = "priority:p1";
-            } else if (hasAny(p2Keys)) {
-              priorityLabel = "priority:p2";
-            } else if (hasAny(p3Keys)) {
-              priorityLabel = "priority:p3";
-            } else if (current.includes("bug")) {
-              priorityLabel = "priority:p2";
-            } else if (current.includes("enhancement") || current.includes("question")) {
-              priorityLabel = "priority:p3";
             }
 
             let sizeLabel = "size:m";
-            if (bodyLength <= 120) {
-              sizeLabel = "size:xs";
-            } else if (bodyLength <= 400) {
-              sizeLabel = "size:s";
-            } else if (bodyLength <= 1000) {
-              sizeLabel = "size:m";
-            } else if (bodyLength <= 2500) {
-              sizeLabel = "size:l";
-            } else {
-              sizeLabel = "size:xl";
+            for (const rule of sizeRules) {
+              if (bodyLength <= Number(rule.max)) {
+                sizeLabel = rule.label;
+                break;
+              }
             }
 
+            const needDocLabel = matchesAny(docPatterns, text)
+              ? "need-update-doc"
+              : null;
+
             const toRemove = current.filter(
-              (n) =>
-                n.startsWith("area:") ||
-                n.startsWith("priority:") ||
-                n.startsWith("size:") ||
-                n === "need-update-doc",
+              (name) =>
+                name.startsWith("area:") ||
+                name.startsWith("priority:") ||
+                name.startsWith("size:") ||
+                name === "need-update-doc",
             );
+
             for (const labelName of toRemove) {
               try {
                 await github.rest.issues.removeLabel({

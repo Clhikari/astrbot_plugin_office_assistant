@@ -8,14 +8,23 @@ jobs:
   auto-label-pr:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
       issues: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Apply PR labels
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require("node:fs");
+            const config = JSON.parse(
+              fs.readFileSync(".github/labeler/config.json", "utf8"),
+            );
+
             const pr = context.payload.pull_request;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -34,80 +43,59 @@ jobs:
               pull_number: issueNumber,
               per_page: 100,
             });
-
-            const changedPaths = files.map((f) => (f.filename || "").toLowerCase());
+            const changedPaths = files.map((file) =>
+              (file.filename || "").toLowerCase(),
+            );
             const totalChanges =
               Number(pr.additions || 0) + Number(pr.deletions || 0);
 
+            const toRegex = (pattern) => new RegExp(pattern, "iu");
+            const pathMatchesRule = (rule, path) => {
+              const prefixes = rule.prefixes || [];
+              const patterns = rule.patterns || [];
+              return (
+                prefixes.some((prefix) => path.startsWith(prefix.toLowerCase())) ||
+                patterns.some((pattern) => toRegex(pattern).test(path))
+              );
+            };
+            const matchesAnyPattern = (patterns, value) =>
+              (patterns || []).some((pattern) => toRegex(pattern).test(value));
+
+            const prCfg = config.pr || {};
+            const areaPathRules = prCfg.area_path_rules || [];
+            const sizeRules = prCfg.size_by_changed_lines || [];
+
             const areaLabels = new Set();
-
-            const hasPath = (rules) =>
-              changedPaths.some((p) => rules.some((r) => p.includes(r)));
-
-            if (hasPath(["dashboard/", "webui", "frontend", "ui/"])) {
-              areaLabels.add("area:webui");
+            for (const rule of areaPathRules) {
+              if (changedPaths.some((path) => pathMatchesRule(rule, path))) {
+                areaLabels.add(rule.label);
+              }
             }
-            if (hasPath([".github/workflows/", "ci", "pipeline", "action"])) {
-              areaLabels.add("area:ci");
-            }
-            if (hasPath(["readme", "docs/", ".md", "documentation"])) {
-              areaLabels.add("area:docs");
-            }
-            if (
-              hasPath([
-                "main.py",
-                "pdf_converter.py",
-                "office_generator.py",
-                "preview_generator.py",
-                "message_buffer.py",
-                "constants.py",
-                "utils.py",
-              ]) ||
-              text.includes("plugin") ||
-              text.includes("插件")
-            ) {
-              areaLabels.add("area:plugin");
-            }
-            if (
-              text.includes("core") ||
-              text.includes("session") ||
-              text.includes("provider")
-            ) {
-              areaLabels.add("area:core");
-            }
-
             if (areaLabels.size === 0) {
-              areaLabels.add("area:plugin");
+              areaLabels.add(prCfg.default_area || "area:plugin");
             }
 
+            const needDocFromPath = changedPaths.some((path) =>
+              matchesAnyPattern(prCfg.doc_path_patterns, path),
+            );
+            const needDocFromText = matchesAnyPattern(prCfg.doc_text_patterns, text);
             const needDocLabel =
-              text.includes("docs") ||
-              text.includes("documentation") ||
-              text.includes("文档") ||
-              hasPath(["readme", "docs/", ".md"])
-                ? "need-update-doc"
-                : null;
+              needDocFromPath || needDocFromText ? "need-update-doc" : null;
 
             let sizeLabel = "size:m";
-            if (totalChanges <= 30) {
-              sizeLabel = "size:xs";
-            } else if (totalChanges <= 120) {
-              sizeLabel = "size:s";
-            } else if (totalChanges <= 400) {
-              sizeLabel = "size:m";
-            } else if (totalChanges <= 1000) {
-              sizeLabel = "size:l";
-            } else {
-              sizeLabel = "size:xl";
+            for (const rule of sizeRules) {
+              if (totalChanges <= Number(rule.max)) {
+                sizeLabel = rule.label;
+                break;
+              }
             }
 
             const toRemove = current.filter(
-              (n) =>
-                n.startsWith("area:") ||
-                n.startsWith("size:") ||
-                n === "need-update-doc",
+              (name) =>
+                name.startsWith("area:") ||
+                name.startsWith("size:") ||
+                name === "need-update-doc",
             );
-
             for (const labelName of toRemove) {
               try {
                 await github.rest.issues.removeLabel({
