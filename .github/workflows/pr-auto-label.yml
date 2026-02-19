@@ -6,10 +6,11 @@ on:
 
 jobs:
   auto-label-pr:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
 
     steps:
@@ -29,6 +30,11 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issueNumber = pr.number;
+            const isIntegrationPermissionError = (error) =>
+              error?.status === 403 &&
+              /resource not accessible by integration/i.test(
+                error?.response?.data?.message || error?.message || "",
+              );
             const title = (pr.title || "").toLowerCase();
             const body = (pr.body || "").toLowerCase();
             const text = `${title}\n${body}`;
@@ -60,10 +66,26 @@ jobs:
             };
             const matchesAnyPattern = (patterns, value) =>
               (patterns || []).some((pattern) => toRegex(pattern).test(value));
+            const countMatches = (patterns, value) =>
+              (patterns || []).reduce(
+                (count, pattern) => count + (toRegex(pattern).test(value) ? 1 : 0),
+                0,
+              );
 
             const prCfg = config.pr || {};
+            const typeRules = prCfg.type_rules || [];
             const areaPathRules = prCfg.area_path_rules || [];
             const sizeRules = prCfg.size_by_changed_lines || [];
+            const managedTypeLabels = [
+              "bug",
+              "enhancement",
+              "question",
+              "documentation",
+              "dependencies",
+              "type:refactor",
+              "type:chore",
+              "type:performance",
+            ];
 
             const areaLabels = new Set();
             for (const rule of areaPathRules) {
@@ -71,16 +93,52 @@ jobs:
                 areaLabels.add(rule.label);
               }
             }
+            if (matchesAnyPattern(prCfg.security_text_patterns, text)) {
+              areaLabels.add("area:security");
+            }
             if (areaLabels.size === 0) {
               areaLabels.add(prCfg.default_area || "area:plugin");
             }
 
-            const needDocFromPath = changedPaths.some((path) =>
+            const typeLabel =
+              current.find((name) => managedTypeLabels.includes(name)) ||
+              typeRules
+                .map((rule) => ({
+                  label: rule.label,
+                  score:
+                    countMatches(rule.patterns, title) * 3 +
+                    countMatches(rule.patterns, body),
+                }))
+                .filter((item) => item.score > 0)
+                .sort((a, b) => b.score - a.score)[0]?.label ||
+              null;
+
+            const hasDocChanges = changedPaths.some((path) =>
               matchesAnyPattern(prCfg.doc_path_patterns, path),
             );
-            const needDocFromText = matchesAnyPattern(prCfg.doc_text_patterns, text);
+            const skipNeedDocFromText = matchesAnyPattern(
+              prCfg.doc_skip_text_patterns,
+              text,
+            );
+            const needDocMinChanges = Number(prCfg.need_doc_min_changes || 80);
+            const hasCodeChangeNeedingDoc = changedPaths.some(
+              (path) =>
+                matchesAnyPattern(prCfg.need_doc_code_path_patterns, path) &&
+                !matchesAnyPattern(prCfg.doc_exempt_path_patterns, path),
+            );
+            const onlyExemptChanges =
+              changedPaths.length > 0 &&
+              changedPaths.every((path) =>
+                matchesAnyPattern(prCfg.doc_exempt_path_patterns, path),
+              );
             const needDocLabel =
-              needDocFromPath || needDocFromText ? "need-update-doc" : null;
+              !hasDocChanges &&
+              !skipNeedDocFromText &&
+              hasCodeChangeNeedingDoc &&
+              !onlyExemptChanges &&
+              totalChanges >= needDocMinChanges
+                ? "need-update-doc"
+                : null;
 
             let sizeLabel = "size:m";
             for (const rule of sizeRules) {
@@ -94,6 +152,7 @@ jobs:
               (name) =>
                 name.startsWith("area:") ||
                 name.startsWith("size:") ||
+                managedTypeLabels.includes(name) ||
                 name === "need-update-doc",
             );
             for (const labelName of toRemove) {
@@ -106,17 +165,35 @@ jobs:
                 });
               } catch (error) {
                 if (error.status !== 404) {
+                  if (isIntegrationPermissionError(error)) {
+                    core.warning(
+                      "Skip PR auto-labeling: token cannot write labels in this context.",
+                    );
+                    return;
+                  }
                   throw error;
                 }
               }
             }
 
-            const toAdd = [...areaLabels, sizeLabel, needDocLabel].filter(Boolean);
+            const toAdd = [typeLabel, ...areaLabels, sizeLabel, needDocLabel].filter(
+              Boolean,
+            );
             if (toAdd.length > 0) {
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number: issueNumber,
-                labels: toAdd,
-              });
+              try {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  labels: toAdd,
+                });
+              } catch (error) {
+                if (isIntegrationPermissionError(error)) {
+                  core.warning(
+                    "Skip PR auto-labeling: token cannot write labels in this context.",
+                  );
+                  return;
+                }
+                throw error;
+              }
             }

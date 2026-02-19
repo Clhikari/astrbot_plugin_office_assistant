@@ -50,6 +50,22 @@ from .utils import (
     safe_error_message,
 )
 
+# 向后兼容性：旧版本的 AstrBot 未公开此钩子.
+_on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
+if _on_plugin_error_decorator is None:
+    logger.debug(
+        "[plugin-error-hook] on_plugin_error is unavailable in this AstrBot version; fallback to default error handling."
+    )
+
+    def on_plugin_error_filter(*args, **kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
+else:
+    on_plugin_error_filter = _on_plugin_error_decorator
+
 
 class FileOperationPlugin(Star):
     """基于工具调用的智能文件管理插件"""
@@ -1091,3 +1107,50 @@ class FileOperationPlugin(Star):
             lines.append("\n✅ 所有依赖已安装")
 
         yield event.plain_result("\n".join(lines))
+
+    @on_plugin_error_filter()
+    async def on_plugin_error(
+        self,
+        event: AstrMessageEvent,
+        plugin_name: str,
+        handler_name: str,
+        error: Exception,
+        traceback_text: str,
+    ) -> None:
+        """Intercept plugin errors and forward to target session."""
+        if plugin_name != "astrbot_plugin_office_assistant":
+            return
+
+        debug_settings = self.config.get("debug_settings", {})
+        target_session = debug_settings.get(
+            "debug_error_hook_target_session",
+            self.config.get("debug_error_hook_target_session"),
+        )
+        if target_session is None:
+            target_session = ""
+        else:
+            target_session = str(target_session).strip()
+        if not target_session:
+            target_session = event.unified_msg_origin
+
+        trace_lines = traceback_text.splitlines() if traceback_text else []
+        trace_tail = "\n".join(trace_lines[-3:]) if trace_lines else ""
+        if len(trace_tail) > 800:
+            trace_tail = trace_tail[-800:]
+
+        sent = await self.context.send_message(
+            target_session,
+            MessageChain().message(
+                "[plugin-error-hook]\n"
+                f"plugin={plugin_name}\n"
+                f"handler={handler_name}\n"
+                f"error={error}\n"
+                f"trace_tail={trace_tail}",
+            ),
+        )
+        if not sent:
+            logger.warning(
+                f"[plugin-error-hook] target session not found: {target_session}"
+            )
+
+        event.stop_event()
