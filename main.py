@@ -50,6 +50,19 @@ from .utils import (
     safe_error_message,
 )
 
+# 向后兼容性：旧版本的 AstrBot 未公开此钩子.
+_on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
+if _on_plugin_error_decorator is None:
+
+    def on_plugin_error_filter(*args, **kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
+else:
+    on_plugin_error_filter = _on_plugin_error_decorator
+
 
 class FileOperationPlugin(Star):
     """基于工具调用的智能文件管理插件"""
@@ -57,6 +70,13 @@ class FileOperationPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self._supports_plugin_error_hook = callable(
+            getattr(filter, "on_plugin_error", None)
+        )
+        if not self._supports_plugin_error_hook:
+            logger.warning(
+                "[plugin-error-hook] Current AstrBot version does not support on_plugin_error; fallback to default error handling."
+            )
 
         # 预加载常用配置
         file_settings = self.config.get("file_settings", {})
@@ -1091,3 +1111,43 @@ class FileOperationPlugin(Star):
             lines.append("\n✅ 所有依赖已安装")
 
         yield event.plain_result("\n".join(lines))
+
+    @on_plugin_error_filter()
+    async def on_plugin_error(
+        self,
+        event: AstrMessageEvent,
+        plugin_name: str,
+        handler_name: str,
+        error: Exception,
+        traceback_text: str,
+    ) -> None:
+        """Intercept plugin errors and forward to target session."""
+        if plugin_name != "astrbot_plugin_office_assistant":
+            return
+
+        debug_settings = self.config.get("debug_settings", {})
+        target_session = str(
+            debug_settings.get(
+                "debug_error_hook_target_session",
+                self.config.get("debug_error_hook_target_session", ""),
+            )
+        ).strip()
+        if not target_session:
+            target_session = event.unified_msg_origin
+
+        sent = await self.context.send_message(
+            target_session,
+            MessageChain().message(
+                "[plugin-error-hook]\n"
+                f"plugin={plugin_name}\n"
+                f"handler={handler_name}\n"
+                f"error={error}\n"
+                f"trace={traceback_text.splitlines()[-1] if traceback_text else ''}",
+            ),
+        )
+        if not sent:
+            logger.warning(
+                f"[plugin-error-hook] target session not found: {target_session}"
+            )
+
+        event.stop_event()

@@ -93,5 +93,18 @@
                 "default": 150
             }
         }
+    },
+    "debug_settings": {
+        "description": "调试设置",
+        "type": "object",
+        "hint": "用于插件报错的转发测试",
+        "items": {
+            "debug_error_hook_target_session": {
+                "description": "报错转发目标会话",
+                "type": "string",
+                "hint": "格式: <platform.id>:<MessageType>:<target_id>。群聊示例: default:GroupMessage:123456789；私聊示例: default:FriendMessage:123456789。注意前缀是 platform.id（如 default），不是 platform.type（如 aiocqhttp）。留空则回落到当前会话。",
+                "default": ""
+            }
+        }
     }
 }
