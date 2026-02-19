@@ -70,13 +70,6 @@ class FileOperationPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self._supports_plugin_error_hook = callable(
-            getattr(filter, "on_plugin_error", None)
-        )
-        if not self._supports_plugin_error_hook:
-            logger.warning(
-                "[plugin-error-hook] Current AstrBot version does not support on_plugin_error; fallback to default error handling."
-            )
 
         # 预加载常用配置
         file_settings = self.config.get("file_settings", {})
