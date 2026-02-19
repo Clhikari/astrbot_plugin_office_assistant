@@ -53,6 +53,9 @@ from .utils import (
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
 _on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
 if _on_plugin_error_decorator is None:
+    logger.debug(
+        "[plugin-error-hook] on_plugin_error is unavailable in this AstrBot version; fallback to default error handling."
+    )
 
     def on_plugin_error_filter(*args, **kwargs):
         def decorator(func):
@@ -1119,14 +1122,21 @@ class FileOperationPlugin(Star):
             return
 
         debug_settings = self.config.get("debug_settings", {})
-        target_session = str(
-            debug_settings.get(
-                "debug_error_hook_target_session",
-                self.config.get("debug_error_hook_target_session", ""),
-            )
-        ).strip()
+        target_session = debug_settings.get(
+            "debug_error_hook_target_session",
+            self.config.get("debug_error_hook_target_session"),
+        )
+        if target_session is None:
+            target_session = ""
+        else:
+            target_session = str(target_session).strip()
         if not target_session:
             target_session = event.unified_msg_origin
+
+        trace_lines = traceback_text.splitlines() if traceback_text else []
+        trace_tail = "\n".join(trace_lines[-3:]) if trace_lines else ""
+        if len(trace_tail) > 800:
+            trace_tail = trace_tail[-800:]
 
         sent = await self.context.send_message(
             target_session,
@@ -1135,7 +1145,7 @@ class FileOperationPlugin(Star):
                 f"plugin={plugin_name}\n"
                 f"handler={handler_name}\n"
                 f"error={error}\n"
-                f"trace={traceback_text.splitlines()[-1] if traceback_text else ''}",
+                f"trace_tail={trace_tail}",
             ),
         )
         if not sent:
