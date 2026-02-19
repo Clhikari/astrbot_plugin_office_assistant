@@ -37,22 +37,63 @@ jobs:
             const toRegex = (pattern) => new RegExp(pattern, "iu");
             const matchesAny = (patterns, value) =>
               (patterns || []).some((pattern) => toRegex(pattern).test(value));
+            const countMatches = (patterns, value) =>
+              (patterns || []).reduce(
+                (count, pattern) => count + (toRegex(pattern).test(value) ? 1 : 0),
+                0,
+              );
 
             const issueCfg = config.issue || {};
+            const typeRules = issueCfg.type_rules || [];
             const areaRules = issueCfg.area_rules || [];
             const priorityRules = issueCfg.priority_rules || [];
             const sizeRules = issueCfg.size_by_body_length || [];
-            const docPatterns = issueCfg.doc_patterns || [];
+            const docRequestPatterns =
+              issueCfg.doc_request_patterns || issueCfg.doc_patterns || [];
             const defaultPriorityByType = issueCfg.default_priority_by_type || {};
+            const managedTypeLabels = [
+              "bug",
+              "enhancement",
+              "question",
+              "documentation",
+              "dependencies",
+              "type:refactor",
+              "type:chore",
+              "type:performance",
+            ];
 
-            let areaLabel =
-              areaRules.find((rule) => matchesAny(rule.patterns, text))?.label ||
+            const areaLabel =
+              areaRules
+                .map((rule) => ({
+                  label: rule.label,
+                  score:
+                    countMatches(rule.patterns, title) * 3 +
+                    countMatches(rule.patterns, body),
+                }))
+                .filter((item) => item.score > 0)
+                .sort((a, b) => b.score - a.score)[0]?.label ||
               issueCfg.default_area ||
               "area:plugin";
+
+            const typeLabel =
+              current.find((name) => managedTypeLabels.includes(name)) ||
+              typeRules
+                .map((rule) => ({
+                  label: rule.label,
+                  score:
+                    countMatches(rule.patterns, title) * 3 +
+                    countMatches(rule.patterns, body),
+                }))
+                .filter((item) => item.score > 0)
+                .sort((a, b) => b.score - a.score)[0]?.label ||
+              null;
 
             let priorityLabel =
               priorityRules.find((rule) => matchesAny(rule.patterns, text))?.label || null;
             if (!priorityLabel) {
+              if (typeLabel && defaultPriorityByType[typeLabel]) {
+                priorityLabel = defaultPriorityByType[typeLabel];
+              }
               for (const [baseLabel, defaultPriority] of Object.entries(
                 defaultPriorityByType,
               )) {
@@ -71,7 +112,7 @@ jobs:
               }
             }
 
-            const needDocLabel = matchesAny(docPatterns, text)
+            const needDocLabel = matchesAny(docRequestPatterns, text)
               ? "need-update-doc"
               : null;
 
@@ -80,6 +121,7 @@ jobs:
                 name.startsWith("area:") ||
                 name.startsWith("priority:") ||
                 name.startsWith("size:") ||
+                managedTypeLabels.includes(name) ||
                 name === "need-update-doc",
             );
 
@@ -98,9 +140,13 @@ jobs:
               }
             }
 
-            const toAdd = [areaLabel, priorityLabel, sizeLabel, needDocLabel].filter(
-              Boolean,
-            );
+            const toAdd = [
+              typeLabel,
+              areaLabel,
+              priorityLabel,
+              sizeLabel,
+              needDocLabel,
+            ].filter(Boolean);
             if (toAdd.length > 0) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,

@@ -3,6 +3,8 @@
     { "name": "bug", "color": "d73a4a", "description": "Something is not working" },
     { "name": "enhancement", "color": "a2eeef", "description": "New feature or request" },
     { "name": "question", "color": "d876e3", "description": "Usage or configuration question" },
+    { "name": "documentation", "color": "0075ca", "description": "Improvements or additions to documentation" },
+    { "name": "dependencies", "color": "0366d6", "description": "Dependency updates" },
     { "name": "stale", "color": "cfd3d7", "description": "No recent activity" },
     { "name": "need-update-doc", "color": "5319e7", "description": "Documentation update is needed" },
     { "name": "area:webui", "color": "1d76db", "description": "WebUI related" },
@@ -10,6 +12,9 @@
     { "name": "area:plugin", "color": "0e8a16", "description": "Plugin behavior related" },
     { "name": "area:docs", "color": "5319e7", "description": "Documentation related" },
     { "name": "area:ci", "color": "fbca04", "description": "CI / workflow related" },
+    { "name": "area:tests", "color": "6f42c1", "description": "Tests related" },
+    { "name": "area:deps", "color": "1f883d", "description": "Dependency management related" },
+    { "name": "area:security", "color": "b60205", "description": "Security related" },
     { "name": "priority:p0", "color": "b60205", "description": "Critical priority" },
     { "name": "priority:p1", "color": "d93f0b", "description": "High priority" },
     { "name": "priority:p2", "color": "fbca04", "description": "Medium priority" },
@@ -18,7 +23,10 @@
     { "name": "size:s", "color": "7fd67f", "description": "Small issue" },
     { "name": "size:m", "color": "fbca04", "description": "Medium issue" },
     { "name": "size:l", "color": "f9d0c4", "description": "Large issue" },
-    { "name": "size:xl", "color": "b60205", "description": "Extra large issue" }
+    { "name": "size:xl", "color": "b60205", "description": "Extra large issue" },
+    { "name": "type:refactor", "color": "bfd4f2", "description": "Refactor related" },
+    { "name": "type:chore", "color": "d4c5f9", "description": "Maintenance related" },
+    { "name": "type:performance", "color": "fef2c0", "description": "Performance related" }
   ],
   "issue": {
     "default_area": "area:plugin",
@@ -27,6 +35,51 @@
       "enhancement": "priority:p3",
       "question": "priority:p3"
     },
+    "type_rules": [
+      {
+        "label": "bug",
+        "patterns": [
+          "\\bbug\\b",
+          "\\berror\\b",
+          "\\bexception\\b",
+          "\\btraceback\\b",
+          "\\bcrash\\b",
+          "\\bfail(ed|ure)?\\b",
+          "\\bbroken\\b",
+          "报错",
+          "异常",
+          "无法"
+        ]
+      },
+      {
+        "label": "enhancement",
+        "patterns": [
+          "\\bfeature\\b",
+          "\\benhancement\\b",
+          "\\bsupport\\b",
+          "\\badd\\b",
+          "\\bimprove\\b",
+          "\\boptimi[sz]e\\b",
+          "新增",
+          "支持",
+          "优化"
+        ]
+      },
+      {
+        "label": "question",
+        "patterns": [
+          "\\bhow\\b",
+          "\\bwhy\\b",
+          "\\bcan\\s+i\\b",
+          "\\bquestion\\b",
+          "\\bhelp\\b",
+          "怎么",
+          "如何",
+          "是否",
+          "\\?"
+        ]
+      }
+    ],
     "area_rules": [
       {
         "label": "area:webui",
@@ -38,7 +91,19 @@
       },
       {
         "label": "area:docs",
-        "patterns": ["\\breadme\\b", "\\bdocs?\\b", "\\bdocumentation\\b", "\\bguide\\b", "\\bmanual\\b"]
+        "patterns": ["\\breadme\\b", "\\bdocs?\\b", "\\bdocumentation\\b", "\\bguide\\b", "\\bmanual\\b", "文档"]
+      },
+      {
+        "label": "area:tests",
+        "patterns": ["\\btests?\\b", "\\bpytest\\b", "\\bunit\\s*test\\b", "\\bintegration\\s*test\\b", "测试"]
+      },
+      {
+        "label": "area:deps",
+        "patterns": ["\\bdependenc(y|ies)\\b", "\\bdeps?\\b", "requirements\\.txt", "pyproject\\.toml", "uv\\.lock", "版本"]
+      },
+      {
+        "label": "area:security",
+        "patterns": ["\\bsecurity\\b", "\\bvulnerability\\b", "\\bcve-?\\d+", "\\bauth\\b.*\\b(bypass|leak)\\b", "权限", "漏洞"]
       },
       {
         "label": "area:core",
@@ -67,7 +132,14 @@
         "patterns": ["priority\\s*:\\s*p3", "\\bp3\\b", "\\blow\\b", "\\bminor\\b", "\\btypo\\b", "polish"]
       }
     ],
-    "doc_patterns": ["\\breadme\\b", "\\bdocs?\\b", "\\bdocumentation\\b", "\\bguide\\b", "\\bmanual\\b"],
+    "doc_request_patterns": [
+      "need\\s*update\\s*docs?",
+      "update\\s*(the\\s*)?docs?",
+      "docs?\\s*(missing|outdated|incorrect|stale)",
+      "readme\\s*(missing|outdated|incorrect)",
+      "文档.*(需要|缺失|过期|不一致)",
+      "README.*(需要|缺失|过期|不一致)"
+    ],
     "size_by_body_length": [
       { "max": 120, "label": "size:xs" },
       { "max": 400, "label": "size:s" },
@@ -78,6 +150,15 @@
   },
   "pr": {
     "default_area": "area:plugin",
+    "type_rules": [
+      { "label": "bug", "patterns": ["^fix(\\(.+\\))?:", "\\bbug\\b", "\\bhotfix\\b"] },
+      { "label": "enhancement", "patterns": ["^feat(\\(.+\\))?:", "\\bfeature\\b", "\\benhancement\\b"] },
+      { "label": "documentation", "patterns": ["^docs(\\(.+\\))?:", "\\bdocumentation\\b", "\\breadme\\b"] },
+      { "label": "type:refactor", "patterns": ["^refactor(\\(.+\\))?:", "\\brefactor\\b", "\\bcleanup\\b"] },
+      { "label": "type:chore", "patterns": ["^chore(\\(.+\\))?:", "^build(\\(.+\\))?:", "^ci(\\(.+\\))?:", "\\bmaintenance\\b"] },
+      { "label": "type:performance", "patterns": ["^perf(\\(.+\\))?:", "\\bperformance\\b", "\\boptimi[sz]e\\b"] },
+      { "label": "dependencies", "patterns": ["^deps(\\(.+\\))?:", "\\bdependenc(y|ies)\\b", "\\bbump\\b"] }
+    ],
     "area_path_rules": [
       {
         "label": "area:webui",
@@ -95,6 +176,16 @@
         "patterns": ["(^|/)readme(\\.|$)", "\\.md$"]
       },
       {
+        "label": "area:tests",
+        "prefixes": ["tests/", "test/"],
+        "patterns": ["(^|/)test_.*\\.py$", "(^|/).*_test\\.py$", "(^|/)conftest\\.py$"]
+      },
+      {
+        "label": "area:deps",
+        "prefixes": [],
+        "patterns": ["(^|/)requirements(\\.dev)?\\.txt$", "(^|/)pyproject\\.toml$", "(^|/)uv\\.lock$", "(^|/)package(-lock)?\\.json$", "(^|/)pnpm-lock\\.yaml$"]
+      },
+      {
         "label": "area:plugin",
         "prefixes": [],
         "patterns": ["(^|/)main\\.py$", "(^|/)pdf_converter\\.py$", "(^|/)office_generator\\.py$", "(^|/)preview_generator\\.py$", "(^|/)message_buffer\\.py$", "(^|/)constants\\.py$", "(^|/)utils\\.py$", "(^|/)metadata\\.yaml$", "(^|/)_conf_schema\\.json$"]
@@ -105,8 +196,12 @@
         "patterns": []
       }
     ],
+    "security_text_patterns": ["\\bsecurity\\b", "\\bvulnerability\\b", "\\bcve-?\\d+", "漏洞", "安全"],
     "doc_path_patterns": ["(^|/)readme(\\.|$)", "^docs/", "\\.md$"],
-    "doc_text_patterns": ["\\bdocs?\\b", "\\bdocumentation\\b", "\\breadme\\b", "\\bguide\\b", "\\bmanual\\b"],
+    "doc_skip_text_patterns": ["no\\s*doc", "docs?\\s*:\\s*n/?a", "无需文档", "不需要文档"],
+    "need_doc_code_path_patterns": ["\\.py$", "\\.ts$", "\\.tsx$", "\\.js$", "\\.jsx$", "\\.vue$", "\\.go$", "\\.rs$", "\\.java$", "\\.kt$", "\\.yaml$", "\\.yml$", "\\.json$"],
+    "doc_exempt_path_patterns": ["^tests?/", "^test/", "^\\.github/workflows/", "^\\.github/actions/", "^docs/", "(^|/)readme(\\.|$)", "\\.md$"],
+    "need_doc_min_changes": 80,
     "size_by_changed_lines": [
       { "max": 30, "label": "size:xs" },
       { "max": 120, "label": "size:s" },
