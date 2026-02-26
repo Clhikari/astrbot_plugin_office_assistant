@@ -1,19 +1,20 @@
 name: "✨ Feature Request / 功能建议"
-description: Suggest an improvement for astrbot_plugin_office_assistant.
+description: 欢迎分享你的想法，一起把这个插件做得更好。Share an idea that could make this plugin better for everyone. 💡
 title: "[Feature] "
-labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion.
-        Please describe the problem and expected outcome clearly.
+        感谢你分享想法 🙌
+        只要把问题和预期结果说清楚，我们就能更快评估和推进。
+        Thanks for sharing your idea.
+        If you describe the problem and expected outcome clearly, we can evaluate it much faster.
 
   - type: textarea
     id: problem
     attributes:
       label: Problem to solve / 想解决的问题
-      description: What pain point are you facing now?
+      description: 你目前遇到了什么问题？What problem are you running into right now?
     validations:
       required: true
 
@@ -21,7 +22,7 @@ body:
     id: proposal
     attributes:
       label: Proposed solution / 建议方案
-      description: What behavior do you expect after this feature is added?
+      description: 你希望它具体如何工作？How would you like it to work?
     validations:
       required: true
 
@@ -29,28 +30,28 @@ body:
     id: alternatives
     attributes:
       label: Alternatives / 备选方案
-      description: Other options you considered.
+      description: 你是否考虑过其他方案？Any other approaches you have considered?
 
   - type: checkboxes
     id: willing-pr
     attributes:
       label: Are you willing to submit a PR? / 你愿意提交 PR 吗？
-      description: This is optional, but contributions are welcome.
+      description: 可选，但我们非常欢迎 PR ❤️ Optional, but PRs are always welcome.
       options:
-        - label: Yes, I can submit a PR for this feature.
+        - label: Yes, I can submit a PR for this feature. / 是的，我可以为这个功能提交 PR。
 
   - type: checkboxes
     id: checks
     attributes:
-      label: Checks
+      label: Checks / 检查项
       options:
-        - label: I searched existing issues and did not find a duplicate.
+        - label: I searched existing issues and did not find a duplicate. / 我已搜索现有 issues，未发现重复建议。
           required: true
 
   - type: checkboxes
     id: coc
     attributes:
-      label: Code of Conduct
+      label: Code of Conduct / 行为准则
       options:
-        - label: I agree to follow the repository Code of Conduct.
+        - label: I agree to follow the repository Code of Conduct. / 我同意遵守仓库的行为准则。
           required: true
