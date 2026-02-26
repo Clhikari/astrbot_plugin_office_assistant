@@ -1,20 +1,28 @@
-name: "🐛 Report Bug / 报告 Bug"
-description: Submit a reproducible bug report for astrbot_plugin_office_assistant.
-title: "[Bug] "
-labels: ["bug"]
+name: "Report Bug / 报告 Bug"
+description: |-
+  请告诉我们哪里出了问题，以及如何复现，方便我们更快修复
+  Tell us what broke and how to reproduce it so we can fix it faster
+title: "[问题/Bug] "
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting this issue.
-        Please provide clear steps and complete logs so we can locate the root cause quickly.
+        感谢你抽时间反馈这个问题
+        提供清晰步骤和可用日志，能帮助我们更快复现并定位根因
+
+        Thanks for taking the time to report this
+        Clear steps and available logs help us reproduce and fix the issue faster
 
   - type: textarea
     id: actual
     attributes:
       label: What happened / 发生了什么？
-      description: Describe what happened and why it is wrong.
-      placeholder: A clear and specific description of the bug.
+      description: |-
+        请描述你实际看到的现象；报错信息和截图会很有帮助
+        Tell us what you saw; error messages and screenshots are very helpful
+      placeholder: |-
+        请清晰、具体地描述这个 bug
+        A clear and specific description of the bug
     validations:
       required: true
 
@@ -22,8 +30,12 @@ body:
     id: expected
     attributes:
       label: What did you expect / 预期行为
-      description: Describe the expected behavior.
-      placeholder: What should happen instead?
+      description: |-
+        你期望发生什么？
+        What did you expect to happen instead?
+      placeholder: |-
+        你期望它应该如何表现？
+        What should happen instead?
     validations:
       required: true
 
@@ -31,7 +43,9 @@ body:
     id: steps
     attributes:
       label: Reproduce steps / 复现步骤
-      description: List exact steps to reproduce this issue.
+      description: |-
+        请按顺序列出可复现步骤，方便我们在本地复现
+        Please list exact steps so we can reproduce it on our side
       placeholder: |
         1. ...
         2. ...
@@ -43,7 +57,9 @@ body:
     id: env
     attributes:
       label: Environment / 环境信息
-      description: Include plugin version, AstrBot version, adapter, deployment method, and model provider.
+      description: |-
+        请提供版本与运行环境信息（plugin、AstrBot、adapter、部署方式、provider）
+        Share versions and runtime details (plugin, AstrBot, adapter, deployment, provider)
       placeholder: |
         Plugin: x.y.z
         AstrBot: x.y.z
@@ -56,8 +72,10 @@ body:
   - type: dropdown
     id: os
     attributes:
-      label: OS
-      description: Which OS are you using?
+      label: OS / 操作系统
+      description: |-
+        你当前使用的操作系统是？
+        Which OS are you using?
       multiple: false
       options:
         - Windows
@@ -71,33 +89,35 @@ body:
     id: logs
     attributes:
       label: Logs / 日志
-      description: Paste complete DEBUG logs and screenshots if available.
+      description: |-
+        请尽量粘贴相关日志；如果有截图也欢迎一并提供
+        Please share relevant logs if available. Screenshots are welcome too
       render: shell
-    validations:
-      required: true
 
   - type: checkboxes
     id: willing-pr
     attributes:
       label: Are you willing to submit a PR? / 你愿意提交 PR 吗？
-      description: This is optional, but contributions are welcome.
+      description: |-
+        可选，但非常欢迎你直接贡献代码
+        Optional, but we'd really appreciate contributions
       options:
-        - label: Yes, I can submit a PR for this issue.
+        - label: Yes, I can submit a PR for this issue / 是的，我可以为这个问题提交 PR
 
   - type: checkboxes
     id: checks
     attributes:
-      label: Checks
+      label: Checks / 检查项
       options:
-        - label: I searched existing issues and did not find a duplicate.
+        - label: I searched existing issues and did not find a duplicate / 我已搜索现有 issues，未发现重复问题
           required: true
-        - label: I can reproduce this issue consistently.
+        - label: I can reproduce this issue consistently / 我可以稳定复现这个问题
           required: true
 
   - type: checkboxes
     id: coc
     attributes:
-      label: Code of Conduct
+      label: Code of Conduct / 行为准则
       options:
-        - label: I agree to follow the repository Code of Conduct.
+        - label: I agree to follow the repository Code of Conduct / 我同意遵守仓库的行为准则
           required: true
