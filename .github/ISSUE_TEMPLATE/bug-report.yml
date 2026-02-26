@@ -1,28 +1,28 @@
 name: "Report Bug / 报告 Bug"
 description: |-
-  请告诉我们哪里出了问题，以及如何复现，方便我们更快修复。
-  Tell us what broke and how to reproduce it so we can fix it faster.
+  请告诉我们哪里出了问题，以及如何复现，方便我们更快修复
+  Tell us what broke and how to reproduce it so we can fix it faster
 title: "[问题/Bug] "
 body:
   - type: markdown
     attributes:
       value: |
-        感谢你抽时间反馈这个问题。
-        提供清晰步骤和可用日志，能帮助我们更快复现并定位根因。
+        感谢你抽时间反馈这个问题
+        提供清晰步骤和可用日志，能帮助我们更快复现并定位根因
 
-        Thanks for taking the time to report this.
-        Clear steps and available logs help us reproduce and fix the issue faster.
+        Thanks for taking the time to report this
+        Clear steps and available logs help us reproduce and fix the issue faster
 
   - type: textarea
     id: actual
     attributes:
       label: What happened / 发生了什么？
       description: |-
-        请描述你实际看到的现象；报错信息和截图会很有帮助。
-        Tell us what you saw; error messages and screenshots are very helpful.
+        请描述你实际看到的现象；报错信息和截图会很有帮助
+        Tell us what you saw; error messages and screenshots are very helpful
       placeholder: |-
-        请清晰、具体地描述这个 bug。
-        A clear and specific description of the bug.
+        请清晰、具体地描述这个 bug
+        A clear and specific description of the bug
     validations:
       required: true
 
@@ -44,8 +44,8 @@ body:
     attributes:
       label: Reproduce steps / 复现步骤
       description: |-
-        请按顺序列出可复现步骤，方便我们在本地复现。
-        Please list exact steps so we can reproduce it on our side.
+        请按顺序列出可复现步骤，方便我们在本地复现
+        Please list exact steps so we can reproduce it on our side
       placeholder: |
         1. ...
         2. ...
@@ -58,8 +58,8 @@ body:
     attributes:
       label: Environment / 环境信息
       description: |-
-        请提供版本与运行环境信息（plugin、AstrBot、adapter、部署方式、provider）。
-        Share versions and runtime details (plugin, AstrBot, adapter, deployment, provider).
+        请提供版本与运行环境信息（plugin、AstrBot、adapter、部署方式、provider）
+        Share versions and runtime details (plugin, AstrBot, adapter, deployment, provider)
       placeholder: |
         Plugin: x.y.z
         AstrBot: x.y.z
@@ -90,8 +90,8 @@ body:
     attributes:
       label: Logs / 日志
       description: |-
-        请尽量粘贴相关日志；如果有截图也欢迎一并提供。
-        Please share relevant logs if available. Screenshots are welcome too.
+        请尽量粘贴相关日志；如果有截图也欢迎一并提供
+        Please share relevant logs if available. Screenshots are welcome too
       render: shell
 
   - type: checkboxes
@@ -99,19 +99,19 @@ body:
     attributes:
       label: Are you willing to submit a PR? / 你愿意提交 PR 吗？
       description: |-
-        可选，但非常欢迎你直接贡献代码。
-        Optional, but we'd really appreciate contributions.
+        可选，但非常欢迎你直接贡献代码
+        Optional, but we'd really appreciate contributions
       options:
-        - label: Yes, I can submit a PR for this issue. / 是的，我可以为这个问题提交 PR。
+        - label: Yes, I can submit a PR for this issue / 是的，我可以为这个问题提交 PR
 
   - type: checkboxes
     id: checks
     attributes:
       label: Checks / 检查项
       options:
-        - label: I searched existing issues and did not find a duplicate. / 我已搜索现有 issues，未发现重复问题。
+        - label: I searched existing issues and did not find a duplicate / 我已搜索现有 issues，未发现重复问题
           required: true
-        - label: I can reproduce this issue consistently. / 我可以稳定复现这个问题。
+        - label: I can reproduce this issue consistently / 我可以稳定复现这个问题
           required: true
 
   - type: checkboxes
@@ -119,5 +119,5 @@ body:
     attributes:
       label: Code of Conduct / 行为准则
       options:
-        - label: I agree to follow the repository Code of Conduct. / 我同意遵守仓库的行为准则。
+        - label: I agree to follow the repository Code of Conduct / 我同意遵守仓库的行为准则
           required: true
