@@ -95,6 +95,10 @@ class FileOperationPlugin(Star):
             "allow_external_input_files", False
         )
         self._recent_text_ttl_seconds = max(10, int(self._buffer_wait) + 10)
+        self._recent_text_max_entries = 512
+        self._recent_text_cleanup_interval_seconds = max(
+            5, min(60, self._recent_text_ttl_seconds)
+        )
 
         # 根据配置决定使用临时目录还是持久化目录
         if self._auto_delete:
@@ -122,6 +126,7 @@ class FileOperationPlugin(Star):
 
         self._office_libs = self._check_office_libs()
         self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
+        self._recent_text_last_cleanup_ts = 0.0
 
         # 初始化消息缓冲器
         self._message_buffer = MessageBuffer(wait_seconds=self._buffer_wait)
@@ -349,11 +354,69 @@ class FileOperationPlugin(Star):
         self, event: AstrMessageEvent
     ) -> tuple[str, str, str]:
         """Build a stable key for per-session image attachments."""
+        platform_id = event.get_platform_id() or ""
+        sender_id_obj = event.get_sender_id()
+        sender_id = str(sender_id_obj) if sender_id_obj is not None else ""
+        origin = event.unified_msg_origin or ""
+
+        # 在字段缺失时做更细粒度回退，避免多个真实会话共享固定 "unknown" key。
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is not None:
+            if not platform_id:
+                platform_id = str(
+                    getattr(message_obj, "platform", "")
+                    or getattr(message_obj, "platform_id", "")
+                    or getattr(message_obj, "self_id", "")
+                )
+            if not sender_id:
+                sender_id = str(
+                    getattr(message_obj, "sender_id", "")
+                    or getattr(message_obj, "user_id", "")
+                    or getattr(message_obj, "qq", "")
+                )
+            if not origin:
+                origin = str(
+                    getattr(message_obj, "session_id", "")
+                    or getattr(message_obj, "conversation_id", "")
+                    or getattr(message_obj, "group_id", "")
+                    or getattr(message_obj, "channel_id", "")
+                    or getattr(message_obj, "target_id", "")
+                )
+
         return (
-            event.get_platform_id() or "unknown",
-            str(event.get_sender_id() or "unknown"),
-            event.unified_msg_origin or "unknown",
+            platform_id or f"unknown_platform:{id(self)}",
+            sender_id or f"unknown_sender:{id(message_obj) if message_obj else id(event)}",
+            origin or f"unknown_origin:{id(event)}",
         )
+
+    def _cleanup_recent_text_cache(self, now: float, *, force: bool = False) -> None:
+        """Cleanup expired entries and enforce hard capacity cap."""
+        if (
+            not force
+            and now - self._recent_text_last_cleanup_ts
+            < self._recent_text_cleanup_interval_seconds
+            and len(self._recent_text_by_session) <= self._recent_text_max_entries
+        ):
+            return
+
+        expire_before = now - self._recent_text_ttl_seconds
+        expired_keys = [
+            key
+            for key, (_, ts) in self._recent_text_by_session.items()
+            if ts <= expire_before
+        ]
+        for key in expired_keys:
+            self._recent_text_by_session.pop(key, None)
+
+        overflow = len(self._recent_text_by_session) - self._recent_text_max_entries
+        if overflow > 0:
+            oldest_keys = sorted(
+                self._recent_text_by_session.items(), key=lambda item: item[1][1]
+            )[:overflow]
+            for key, _ in oldest_keys:
+                self._recent_text_by_session.pop(key, None)
+
+        self._recent_text_last_cleanup_ts = now
 
     def _store_uploaded_file(self, src_path: Path, preferred_name: str) -> Path:
         """Store uploaded file in workspace with collision-safe naming."""
@@ -386,18 +449,24 @@ class FileOperationPlugin(Star):
             return
         if text.startswith("[系统通知]"):
             return
+        now = time.time()
+        self._cleanup_recent_text_cache(now)
         session_key = self._get_attachment_session_key(event)
-        self._recent_text_by_session[session_key] = (text, time.time())
+        self._recent_text_by_session[session_key] = (text, now)
+        if len(self._recent_text_by_session) > self._recent_text_max_entries:
+            self._cleanup_recent_text_cache(now, force=True)
 
     def _pop_recent_text(self, event: AstrMessageEvent) -> str:
         """Pop recent instruction text if still fresh for current session."""
+        now = time.time()
+        self._cleanup_recent_text_cache(now)
         session_key = self._get_attachment_session_key(event)
         item = self._recent_text_by_session.get(session_key)
         if not item:
             return ""
 
         text, ts = item
-        if time.time() - ts > self._recent_text_ttl_seconds:
+        if now - ts > self._recent_text_ttl_seconds:
             self._recent_text_by_session.pop(session_key, None)
             return ""
 
