@@ -86,6 +86,12 @@ FILE_TOOLS = [
     "convert_from_pdf",
 ]
 
+EXECUTION_TOOLS = [
+    "astrbot_execute_shell",
+    "astrbot_execute_python",
+    "astrbot_execute_ipython",
+]
+
 # PDF 相关常量
 PDF_SUFFIX = ".pdf"
 PDF_LIBS = {
