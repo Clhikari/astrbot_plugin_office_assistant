@@ -2,100 +2,226 @@
   <img src="https://count.getloli.com/@Clhikariproject2?name=Clhikariproject2&theme=booru-touhoulat&padding=7&offset=0&align=center&scale=0.8&pixelated=1&darkmode=1" alt="Moe Counter">
 </p>
 
-# 📁 Office 助手
+# 📁 Office 助手（astrbot_plugin_office_assistant）
 
-这是一个为 AstrBot 设计的 Office 助手插件。它赋予大语言模型（LLM）直接操作文件的能力，支持读取并分析多种格式文件，以及生成 Office 文档。
+一个给 AstrBot 用的「文件魔法工房」插件。目标很直接：让机器人更稳地读文件、做文档、跑转换。
 
-## 🌟 核心特性
+它主要做三件事：
 
-- **智能文件分析**：LLM 可读取 Python, JS, HTML, Markdown, JSON, PDF 等文件，并对内容进行总结、分析，提供帮助或建议。
-- **Office 文档生成**：原生支持生成 Word (.docx), Excel (.xlsx) 和 PowerPoint (.pptx) 文件。
-- **PDF 转换**：支持 Office⇄PDF 双向转换（需额外依赖）。
-- **预览图生成**：发送 Office/PDF 文件时自动生成第一页预览图（可配置）。
-- **流式处理**：大文件采用分块读取，避免内存溢出。
-- **安全防护**：内置路径验证机制，防止路径遍历攻击。
-- **精细权限控制**：
-  - **白名单机制**：支持指定特定用户调用，留空则仅管理员可用。
-  - **群聊安全逻辑**：支持"必须 @ 或引用机器人"才暴露工具，防止群聊误触发及 Token 浪费。
+1. 让模型读取并分析文件内容（文本 / 代码 / Office / PDF）。
+2. 让模型按结构化内容生成 Word、Excel、PPT。
+3. 提供 Office 与 PDF 的双向转换，并在发送时可附带预览图。
 
-## 🛠️ 安装与配置
+---
 
-### 依赖说明
+## 目录
 
-通过 AstrBot 插件管理器安装时，Python 包会自动安装。
+- [🌟 快速了解](#快速了解)
+- [🚀 快速开始](#快速开始)
+- [⚙️ 配置说明](#配置说明)
+- [🛠️ 工具与命令](#工具与命令)
+- [📚 支持的文件格式](#支持的文件格式)
+- [🧱 系统依赖安装](#系统依赖安装)
+- [🐳 Docker 使用建议](#docker-使用建议)
+- [🛡️ 安全与行为说明](#安全与行为说明)
+- [❓ 常见问题（Q/A）](#常见问题qa)
+- [💬 社群答疑与新想法](#社群答疑与新想法)
+- [🧭 升级与迁移说明](#升级与迁移说明)
+- [📄 许可证](#许可证)
+- [🤝 贡献](#贡献)
 
-**部分功能需要额外的系统依赖：**
+---
 
-| 功能            | 所需依赖                                    | 备注               |
-| --------------- | ------------------------------------------- | ------------------ |
-| 读取 .doc 文件  | antiword (Linux/macOS) 或 pywin32 (Windows) | 需手动安装         |
-| 读取 .xls 文件  | xlrd                                        | ✅ 自动安装        |
-| 读取 .ppt 文件  | pywin32 (Windows)                           | Linux/macOS 不支持 |
-| 读取 .pdf 文件  | pdfplumber                                  | ✅ 自动安装        |
-| 预览图生成      | pymupdf                                     | ✅ 自动安装        |
-| Office→PDF 转换 | LibreOffice 或 Microsoft Office             | 需手动安装         |
+## 快速了解
 
-### 系统依赖安装
+当前版本的核心行为：
 
-**Windows：**
+- 群聊默认不启用插件能力（`enable_features_in_group=false`）。
+- 若群聊启用后，默认仍要求 `@` / 引用机器人才会暴露文件工具（`require_at_in_group=true`）。
+- 默认会在插件能力生效时隐藏执行类工具：
+  - `astrbot_execute_shell`
+  - `astrbot_execute_python`
+  - `astrbot_execute_ipython`
+- 默认禁止读取工作区外路径；可通过配置开启外部绝对路径读取（仅对 `read_file`/PDF 转换生效）。
+
+---
+
+## 快速开始
+
+### 1 📦 安装插件（开箱）
+
+通过 AstrBot 插件管理器安装即可。Python 依赖会随插件自动安装。
+
+### 2 ✅ 启动后先做两条检查（验机）
+
+- `/fileinfo`：查看插件当前运行状态与配置生效情况。
+- `/pdf_status`（或 `/pdf状态`）：查看 PDF 转换可用性与缺失依赖。
+
+### 3 🧪 最小可用验证（跑一遍就安心）
+
+- 发一个 `.txt` 或 `.md` 给机器人，要求它读取并总结。
+- 让机器人生成一个 `.xlsx`。
+- 如果安装了转换依赖，再试一次 Office -> PDF。
+
+---
+
+## 配置说明
+
+以下配置均在 AstrBot 管理面板中设置。
+
+### 🔔 触发设置（`trigger_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 群聊需要@/引用机器人 (`require_at_in_group`) | bool | true | 群聊中仅在 `@` / 引用机器人时暴露文件工具。 |
+| 群聊启用插件功能 (`enable_features_in_group`) | bool | false | 关闭时，群聊里本插件完全不生效（工具/命令/文件拦截全部关闭）。 |
+| 自动屏蔽 shell/python 工具 (`auto_block_execution_tools`) | bool | true | 开启后，在插件功能生效时自动隐藏 `astrbot_execute_*` 三个执行工具。 |
+| 发送文件时@用户 (`reply_to_user`) | bool | true | 机器人发送文件时是否 `@` 发起人。 |
+
+### 🔐 权限管理（`permission_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 用户白名单 (`whitelist_users`) | list | [] | 允许使用插件的用户 ID；留空时仅管理员可用。 |
+
+### 🧩 功能开关（`feature_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 启用 Office 文件生成 (`enable_office_files`) | bool | true | 是否允许 `create_office_file`。 |
+| 启用 PDF 转换 (`enable_pdf_conversion`) | bool | true | 是否允许 Office <-> PDF 转换（仍需系统依赖）。 |
+
+### 📏 文件限制（`file_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 最大文件大小MB (`max_file_size_mb`) | int | 20 | 读取/发送文件大小上限。 |
+| 发送后自动删除文件 (`auto_delete_files`) | bool | true | 发送后删除生成文件；关闭则持久化到插件工作区。 |
+| 文件消息缓冲时间秒 (`message_buffer_seconds`) | float | 4 | 用于聚合“先发文件后发文本”的场景。 |
+
+### 🛣️ 路径访问（`path_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 允许外部绝对路径 (`allow_external_input_files`) | bool | false | 开启后，`read_file` / `convert_to_pdf` / `convert_from_pdf` 可访问工作区外绝对路径；`delete_file` 仍只允许工作区内删除。 |
+
+### 🖼️ 预览图（`preview_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 启用预览图 (`enable`) | bool | true | 发送 Office/PDF 时尝试发送第一页预览图。 |
+| 预览图分辨率 (`dpi`) | int | 150 | 推荐 100~200。 |
+
+---
+
+## 工具与命令
+
+### 🤖 LLM 工具
+
+| 工具名 | 作用 |
+| --- | --- |
+| `read_file` | 读取文本、代码、Office、PDF 内容。 |
+| `create_office_file` | 生成 Word / Excel / PowerPoint 文件。 |
+| `convert_to_pdf` | Office -> PDF。 |
+| `convert_from_pdf` | PDF -> Word 或 Excel。 |
+
+### ⌨️ 插件命令
+
+| 命令 | 别名 | 作用 |
+| --- | --- | --- |
+| `/list_files` | 兼容别名：`/file_ls`, `/文件列表`（建议优先主命令） | 查看工作区中的 Office 文件。 |
+| `/delete_file <文件名>` | 兼容别名：`/file_rm`, `/删除文件`（建议优先主命令） | 删除工作区内文件。 |
+| `/fileinfo` | 无 | 查看运行状态、开关状态、工作目录等信息。 |
+| `/pdf_status` | `/pdf状态` | 查看 PDF 转换可用性与缺失依赖。 |
+
+---
+
+## 支持的文件格式
+
+### 📖 可读取分析
+
+- Office：`.docx` `.xlsx` `.pptx` `.doc` `.xls` `.ppt`
+- PDF：`.pdf`
+- 文本/代码：
+  - `.txt` `.md` `.log` `.rst`
+  - `.json` `.yaml` `.yml` `.toml` `.xml` `.csv`
+  - `.html` `.css` `.sql` `.sh` `.bat`
+  - `.py` `.js` `.ts` `.jsx` `.tsx` `.c` `.cpp` `.h` `.java` `.go` `.rs`
+
+### 📝 可生成
+
+- Word：`.docx`
+- Excel：`.xlsx`
+- PowerPoint：`.pptx`
+
+说明：当前只支持基础内容生成，不覆盖复杂排版、图表、动画等高级能力。
+
+### 🔄 PDF 转换
+
+| 转换方向 | 依赖 | 说明 |
+| --- | --- | --- |
+| Office -> PDF | Windows: `docx2pdf`/`pywin32`（需 Office）；或 LibreOffice | 支持 Word/Excel/PPT 转 PDF |
+| PDF -> Word | `pdf2docx` | 文本型 PDF 效果更好 |
+| PDF -> Excel | `tabula-py`（需 Java）或 `pdfplumber` | 以表格提取为主，复杂版面会有损失 |
+
+---
+
+## 系统依赖安装
+
+> Python 包大多会自动安装。下面是系统层依赖（需手动）。
+
+### 🪟 Windows
 
 ```bash
-# pywin32（读取旧格式 + Office→PDF，需要已安装 Microsoft Office）
+# 旧格式读取 + win32com 转换
 pip install pywin32
 
-# 或安装 LibreOffice（无需 MS Office）：https://www.libreoffice.org/download/
+# Word 优先的 Office->PDF
+pip install docx2pdf
 ```
 
-**Linux (Debian/Ubuntu)：**
+也可以安装 LibreOffice 作为跨平台转换后端：
+
+- <https://www.libreoffice.org/download/>
+
+### 🐧 Linux（Debian/Ubuntu）
 
 ```bash
-# 读取 .doc 文件
+# 读取 .doc
 apt install antiword
 
-# Office→PDF 转换（可选，体积较大）
+# Office -> PDF
 apt install libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
-**macOS：**
+### 🍎 macOS
 
 ```bash
-# 读取 .doc 文件
+# 读取 .doc
 brew install antiword
 
-# Office→PDF 转换（可选）
+# Office -> PDF
 brew install --cask libreoffice
 ```
 
-> 💡 **建议**：优先使用新格式（.docx/.xlsx/.pptx），兼容性更好，无需额外依赖。
+安装系统依赖后，请重启 AstrBot。
 
-> ⚠️ **重要**：安装系统依赖后需要**重启 AstrBot** 才能生效。
+---
 
-### Docker 环境
+## Docker 使用建议
 
-**方式一：进入容器安装（简单，但容器删除后需重装）**
+### 方案 A：⚡ 进容器安装（快，但不持久）
 
 ```bash
-# 1. 查看容器名称
-docker ps
-
-# 2. 进入容器（将 <容器名> 替换为实际名称，如 astrbot）
 docker exec -it <容器名> bash
-
-# 3. 安装依赖（根据需要选择）
 apt-get update
-
-# 读取 .doc 旧格式文件
 apt-get install -y antiword
-
-# Office→PDF 转换（可选，体积较大）
 apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
-> ⚠️ 容器删除重建后需要重新安装，普通重启不影响。
+容器删除重建后需要重装。
 
-**方式二：修改 Dockerfile（永久生效，适合熟悉 Docker 的用户）**
-
-Dockerfile 是构建 Docker 镜像的配置文件。如果你有自己的 Dockerfile，添加以下内容：
+### 方案 B：🧰 写入 Dockerfile（推荐）
 
 ```dockerfile
 RUN apt-get update && apt-get install -y \
@@ -104,152 +230,95 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-然后重新构建镜像：`docker build -t my-astrbot .`
+---
 
-> 💡 **提示**：使用 `/pdf_status` 或 `/pdf状态` 命令可查看当前 PDF 转换功能的可用性和缺失依赖。
+## 安全与行为说明
 
-### 配置项说明
+1. 默认只允许访问插件工作区。
+2. 即使开启“允许外部绝对路径”，也只放开读取/转换输入文件，不放开删除。
+3. 群聊默认关闭插件；建议按需启用，避免误触发。
+4. 若白名单为空，默认只有管理员可用。
+5. 大文件会按块读取，超过上限会拒绝并返回提示。
 
-在 AstrBot 管理面板中，你可以配置以下内容：
+---
 
-#### 触发设置
+## 常见问题（Q/A）
 
-| 配置项               | 类型 | 默认值 | 说明                                                     |
-| -------------------- | ---- | ------ | -------------------------------------------------------- |
-| 群聊需要@/引用机器人 | bool | true   | 开启后，群聊中仅在@/引用机器人时模型才会获得文件操作能力 |
-| 发送文件时@用户      | bool | true   | 发送生成的文件时，是否@用户                              |
+### Q1：为什么在群聊里插件完全没反应？
 
-#### 权限管理
+A：先检查 `enable_features_in_group`。默认是 `false`，群聊里会直接禁用插件能力。
 
-| 配置项     | 类型 | 默认值 | 说明                                      |
-| ---------- | ---- | ------ | ----------------------------------------- |
-| 用户白名单 | list | []     | 允许使用插件的用户 ID，留空则仅管理员可用 |
+### Q2：我已经在群里开启插件，为什么还要 `@` 才能用？
 
-#### 功能开关
+A：`require_at_in_group` 默认是 `true`。如果不想强制 `@`，把它关掉。
 
-| 配置项               | 类型 | 默认值 | 说明                                             |
-| -------------------- | ---- | ------ | ------------------------------------------------ |
-| 启用 Office 文件生成 | bool | true   | 是否允许生成 Word/Excel/PPT 文件                 |
-| 启用 PDF 转换        | bool | true   | 是否允许 Office⇄PDF 互转（需安装对应依赖才可用） |
+### Q3：为什么我在私聊看不到文件工具？
 
-#### 文件限制
+A：检查白名单。白名单为空时，默认只有管理员可用。
 
-| 配置项             | 类型  | 默认值 | 说明                                                               |
-| ------------------ | ----- | ------ | ------------------------------------------------------------------ |
-| 最大文件大小(MB)   | int   | 20     | 允许读取/发送的最大文件大小                                        |
-| 发送后自动删除文件 | bool  | true   | 生成的文件发送后自动删除，关闭则持久化存储                         |
-| 文件消息缓冲时间   | float | 4      | 收到文件后等待后续消息的时间(秒)，用于聚合分离发送的文件和文本消息 |
+### Q4：为什么 `/rm`、`/lsf` 不能用了？
 
-#### 预览图设置
+A：这两个命令名容易和平台或其他插件冲突。当前统一使用：
 
-| 配置项       | 类型 | 默认值 | 说明                                                    |
-| ------------ | ---- | ------ | ------------------------------------------------------- |
-| 启用预览图   | bool | true   | 发送 Office/PDF 文件时是否同时发送第一页预览图          |
-| 预览图分辨率 | int  | 150    | 预览图的 DPI 分辨率，越高越清晰但文件越大，推荐 100-200 |
+- `/delete_file`
+- `/list_files`
 
-> 💡 **提示**：预览图功能对 PDF 和 Word 文件效果最好。Excel/PPT 暂不支持预览图（仅 Windows 的 Word 支持）。
+### Q5：为什么没有预览图？
 
-## 📖 提供的工具 (LLM Tools)
+A：常见原因有三类：
 
-| 工具名称             | 功能描述                                                                 |
-| -------------------- | ------------------------------------------------------------------------ |
-| `read_file`          | 读取文件内容（包括 PDF 文本提取），供 LLM 分析并提供总结、建议或帮助     |
-| `create_office_file` | 生成 Office 文档（Word/Excel/PPT）                                       |
-| `convert_to_pdf`     | 将 Office 文件转换为 PDF（Windows: docx2pdf/pywin32，其他: LibreOffice） |
-| `convert_from_pdf`   | 将 PDF 转换为 Word 或 Excel（需对应依赖）                                |
+- 关闭了 `preview_settings.enable`
+- 缺少 `pymupdf`
+- Office 预览目前仅支持 Windows 上的 Word（`.doc/.docx`）
 
-### 命令
+### Q6：为什么 PDF->Excel 结果是空表或结构很乱？
 
-| 命令          | 功能描述                        |
-| ------------- | ------------------------------- |
-| `/lsf`        | 查看工作区的 Office 文件        |
-| `/rm`        | 永久删除指定文件                |
-| `/fileinfo`   | 显示插件运行信息                |
-| `/pdf_status` | 查看 PDF 转换功能状态和缺失依赖 |
+A：PDF->Excel 本质是“表格提取”，对扫描件、跨页表格、复杂版面不稳定。可先尝试：
 
-### 支持的文件类型
+- 更干净的原始 PDF
+- 安装 Java + `tabula-py`
+- 或改走 PDF->Word 再人工整理
 
-#### 📖 可读取分析的文件格式
+### Q7：为什么 Office->PDF 失败？
 
-**Office 文档：**
-`.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pdf`
+A：先看 `/pdf_status` 输出。Windows 建议安装 Office + `pywin32`/`docx2pdf`；Linux/macOS 建议安装 LibreOffice。
 
-**文本/代码文件：**
-`.txt`, `.md`, `.log`, `.rst`, `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.csv`, `.html`, `.css`, `.sql`, `.sh`, `.bat`, `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.c`, `.cpp`, `.h`, `.java`, `.go`, `.rs`
+### Q8：开启“允许外部绝对路径”后，为什么还是删不了工作区外文件？
 
-> LLM 会读取这些文件的内容，并根据用户需求进行：代码审查、内容总结、问题排查、优化建议等。
+A：这是刻意限制。外部路径只允许读取和转换输入，不允许删除。
 
-#### 📝 可生成的文件格式（仅 Office）
+### Q9：这个插件现在还有哪些不足？
 
-| 格式       | 扩展名  | 类型参数     | 说明               |
-| ---------- | ------- | ------------ | ------------------ |
-| Word       | `.docx` | `word`       | 支持多段落文档生成 |
-| Excel      | `.xlsx` | `excel`      | 支持表格数据生成   |
-| PowerPoint | `.pptx` | `powerpoint` | 支持多页幻灯片生成 |
+A：有，而且是已知问题，先说清楚：
 
-> ⚠️ **注意**：本插件仅支持生成 Office 文件，不支持生成普通文本文件（如 .txt, .py 等）。
+- Office 文件生成目前偏基础，复杂排版、图表、动画不是强项。
+- PDF -> Excel 是表格提取路线，扫描件/跨页/复杂版式容易失真。
+- Office 预览图对平台有差异：目前 Word 预览在 Windows 上更稳。
+- 环境依赖对转换能力影响很大，尤其是 LibreOffice / Java / Office 组件是否齐全。
 
-> ⚠️ **功能限制**：目前仅支持生成**简单的** Office 文件（基本表格、纯文本文档、简单幻灯片）。不支持复杂样式、图表等高级功能。
+---
 
-#### 🔄 PDF 转换支持
+## 社群答疑与新想法
 
-| 转换方向   | 依赖                                      | 说明                         |
-| ---------- | ----------------------------------------- | ---------------------------- |
-| Office→PDF | docx2pdf/pywin32 (Windows) 或 LibreOffice | 支持 Word/Excel/PPT 转 PDF   |
-| PDF→Word   | pdf2docx                                  | 适用于文本为主的 PDF         |
-| PDF→Excel  | pdfplumber 或 tabula-py                   | 仅提取表格数据，非表格会丢失 |
+如果你在群聊里遇到奇怪行为、想提新点子，欢迎直接来群里聊：
 
-> Windows 用户推荐使用 docx2pdf（需已安装 MS Office），体积小、转换质量好。
+- QQ 群：`1072198212`
 
-## 💬 使用示例
+---
 
-与机器人对话即可触发文件操作：
+## 升级与迁移说明
 
-```
-用户：看看工作区有什么文件
-机器人：📂 工作区文件列表：
-       1. main.py (2.1 KB) - 2025-12-25 10:30
-       2. config.json (256 B) - 2025-12-25 09:15
-       共 2 个文件
+如果你从旧版本迁移，优先检查两件事：
 
-用户：帮我看看 main.py 有没有什么问题
-机器人：我来分析一下这个文件...
+1. 命令名是否已改为 `/list_files`、`/delete_file`。
+2. 群聊默认行为是否符合预期（默认关闭插件能力）。
 
-       📋 代码审查结果：
-       1. 第15行：建议添加异常处理
-       2. 第23行：变量命名可以更具描述性
-       ...
+---
 
-用户：帮我做一个Excel表格，包含本月销售数据
-机器人：好的，我来为你生成 Excel 文件。
-       ✅ 文件已处理成功：sales_report.xlsx
-       [sales_report.xlsx 文件]
-
-用户：把这个 Excel 转成 PDF
-机器人：✅ 已将 sales_report.xlsx 转换为 PDF
-       [sales_report.pdf 文件]
-
-用户：把这个 PDF 转成 Word
-机器人：✅ 已将 document.pdf 转换为 Word 文档
-       [document.docx 文件]
-```
-
-## ⚠️ 注意事项
-
-1. **安全性**：所有文件操作均限制在插件工作区目录内，无法访问系统其他目录。
-2. **写入限制**：本插件仅支持生成 Office 文档，不支持写入/生成普通文本文件。
-3. **文件大小**：建议根据服务器内存合理配置最大文件大小，过大可能导致发送失败。
-4. **Office 依赖**：如未安装 Office 相关库，对应格式的生成功能将自动禁用，插件会提示所需的包名。
-5. **权限配置**：建议在公开群聊中启用"群聊需要@机器人"选项，避免意外触发。
-6. **PDF 转换限制**：
-   - PDF→Word：复杂布局的 PDF 转换后可能有偏差
-   - PDF→Excel：仅能提取 PDF 中的表格，非表格内容会丢失
-   - Office→PDF：Windows 推荐 docx2pdf（需 MS Office）；Linux/Docker 需安装 LibreOffice
-
-## 📄 许可证
+## 许可证
 
 MIT License
 
-## 🤝 贡献
+## 贡献
 
-欢迎提交 Issue 和 Pull Request！
+欢迎提交 Issue 和 Pull Request。若是行为变更，请附上复现步骤和预期结果，便于快速定位。

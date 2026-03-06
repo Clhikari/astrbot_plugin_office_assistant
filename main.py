@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -24,23 +25,16 @@ from .constants import (
     FILE_TOOLS,
     OFFICE_LIBS,
     OFFICE_TYPE_MAP,
+    EXECUTION_TOOLS,
     PDF_SUFFIX,
     PDF_TARGET_FORMATS,
     SUFFIX_TO_OFFICE_TYPE,
     TEXT_SUFFIXES,
     OfficeType,
 )
-
-# 导入消息缓冲器
 from .message_buffer import BufferedMessage, MessageBuffer
-
-# 导入底层生成器
 from .office_generator import OfficeGenerator
-
-# 导入 PDF 转换器
 from .pdf_converter import PDFConverter
-
-# 导入预览图生成器
 from .preview_generator import PreviewGenerator
 from .utils import (
     extract_excel_text,
@@ -78,6 +72,7 @@ class FileOperationPlugin(Star):
         file_settings = self.config.get("file_settings", {})
         trigger_settings = self.config.get("trigger_settings", {})
         preview_settings = self.config.get("preview_settings", {})
+        path_settings = self.config.get("path_settings", {})
 
         self._auto_delete = file_settings.get("auto_delete_files", True)
         self._max_file_size = (
@@ -88,8 +83,22 @@ class FileOperationPlugin(Star):
         self._buffer_wait = file_settings.get("message_buffer_seconds", 4)
         self._reply_to_user = trigger_settings.get("reply_to_user", True)
         self._require_at_in_group = trigger_settings.get("require_at_in_group", True)
+        self._enable_features_in_group = trigger_settings.get(
+            "enable_features_in_group", False
+        )
+        self._auto_block_execution_tools = trigger_settings.get(
+            "auto_block_execution_tools", True
+        )
         self._enable_preview = preview_settings.get("enable", True)
         self._preview_dpi = preview_settings.get("dpi", 150)
+        self._allow_external_input_files = path_settings.get(
+            "allow_external_input_files", False
+        )
+        self._recent_text_ttl_seconds = max(10, int(self._buffer_wait) + 10)
+        self._recent_text_max_entries = 512
+        self._recent_text_cleanup_interval_seconds = max(
+            5, min(60, self._recent_text_ttl_seconds)
+        )
 
         # 根据配置决定使用临时目录还是持久化目录
         if self._auto_delete:
@@ -116,6 +125,8 @@ class FileOperationPlugin(Star):
         self.preview_gen = PreviewGenerator(dpi=self._preview_dpi)
 
         self._office_libs = self._check_office_libs()
+        self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
+        self._recent_text_last_cleanup_ts = 0.0
 
         # 初始化消息缓冲器
         self._message_buffer = MessageBuffer(wait_seconds=self._buffer_wait)
@@ -171,28 +182,46 @@ class FileOperationPlugin(Star):
 
         # 构建文件信息列表
         file_info_list = []
+        has_readable_file = False
         for f in files:
-            name = f.name or "未命名文件"
+            name = ""
+            if isinstance(f, Comp.File):
+                name = f.name or ""
+            name = name or "未命名文件"
             suffix = Path(name).suffix.lower() if name else ""
             file_info_list.append(f"文件名: {name} (类型: {suffix})")
+            if (
+                suffix in ALL_OFFICE_SUFFIXES
+                or suffix in TEXT_SUFFIXES
+                or suffix == PDF_SUFFIX
+            ):
+                has_readable_file = True
 
         # 合并用户的文本指令
         user_instruction = " ".join(texts) if texts else ""
+        if not user_instruction:
+            user_instruction = self._pop_recent_text(event)
 
         # 构建给 LLM 的提示文本
-        if user_instruction:
+        if has_readable_file and user_instruction:
             prompt_text = (
                 f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
                 + "\n".join(file_info_list)
                 + f"\n\n用户指令: {user_instruction}"
                 + "\n\n请使用 `read_file` 工具读取上述文件内容，然后根据用户指令进行处理。"
             )
-        else:
+        elif has_readable_file:
             prompt_text = (
                 f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
                 + "\n".join(file_info_list)
                 + "\n\n请立即使用 `read_file` 工具读取上述文件内容。"
                 "\n(注意：用户未提供具体指令，请读取文件后询问用户需要什么帮助)"
+            )
+        else:
+            prompt_text = (
+                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                + "\n".join(file_info_list)
+                + "\n\n请根据用户需求处理这些文件。"
             )
 
         # 重构消息链
@@ -251,6 +280,22 @@ class FileOperationPlugin(Star):
         user_id = str(event.get_sender_id())
         return user_id in [str(u) for u in whitelist]
 
+    def _is_group_message(self, event: AstrMessageEvent) -> bool:
+        """Return True if event is from group chat."""
+        return event.message_obj.type == MessageType.GROUP_MESSAGE
+
+    def _is_group_feature_enabled(self, event: AstrMessageEvent) -> bool:
+        """Return True when plugin features are allowed in current chat type."""
+        if not self._is_group_message(event):
+            return True
+        return bool(self._enable_features_in_group)
+
+    def _group_feature_disabled_error(self) -> str:
+        """Unified message when group features are disabled by configuration."""
+        return (
+            "错误：群聊中已禁用本插件功能，请私聊使用，或在配置中开启“群聊启用插件功能”"
+        )
+
     def _is_bot_mentioned(self, event: AstrMessageEvent) -> bool:
         """检查是否被@/回复"""
         try:
@@ -267,20 +312,191 @@ class FileOperationPlugin(Star):
             logger.error(f"未知错误{e}")
             return False
 
-    def _validate_path(self, filename: str) -> tuple[bool, Path, str]:
+    def _validate_path(
+        self, filename: str, *, allow_external: bool = False
+    ) -> tuple[bool, Path, str]:
         """
         验证文件路径安全性
         返回: (是否有效, 文件路径, 错误信息)
         """
-        file_path = self.plugin_data_path / filename
+        input_path = Path(filename).expanduser()
         try:
-            resolved = file_path.resolve()
+            if input_path.is_absolute():
+                resolved = input_path.resolve()
+            else:
+                resolved = (self.plugin_data_path / input_path).resolve()
+
             base = self.plugin_data_path.resolve()
-            if not resolved.is_relative_to(base):
-                return False, file_path, "非法路径：禁止访问工作区外的文件"
-            return True, file_path, ""
+            if resolved.is_relative_to(base):
+                return True, resolved, ""
+
+            if allow_external and input_path.is_absolute():
+                return True, resolved, ""
+
+            return False, resolved, "非法路径：禁止访问工作区外的文件"
         except Exception as e:
-            return False, file_path, f"路径解析失败: {e}"
+            fallback = (
+                input_path
+                if input_path.is_absolute()
+                else (self.plugin_data_path / input_path)
+            )
+            return False, fallback, f"路径解析失败: {e}"
+
+    def _display_name(self, filename: str | Path) -> str:
+        """Return a safe display name without directory path."""
+        value = str(filename).strip()
+        if not value:
+            return ""
+        name = Path(value).name
+        return name or value
+
+    def _get_attachment_session_key(
+        self, event: AstrMessageEvent
+    ) -> tuple[str, str, str]:
+        """Build a stable key for per-session image attachments."""
+        platform_id = event.get_platform_id() or ""
+        sender_id_obj = event.get_sender_id()
+        sender_id = str(sender_id_obj) if sender_id_obj is not None else ""
+        origin = event.unified_msg_origin or ""
+
+        # 在字段缺失时做更细粒度回退，避免多个真实会话共享固定 "unknown" key。
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is not None:
+            if not platform_id:
+                platform_id = str(
+                    getattr(message_obj, "platform", "")
+                    or getattr(message_obj, "platform_id", "")
+                    or getattr(message_obj, "self_id", "")
+                )
+            if not sender_id:
+                sender_id = str(
+                    getattr(message_obj, "sender_id", "")
+                    or getattr(message_obj, "user_id", "")
+                    or getattr(message_obj, "qq", "")
+                )
+            if not origin:
+                origin = str(
+                    getattr(message_obj, "session_id", "")
+                    or getattr(message_obj, "conversation_id", "")
+                    or getattr(message_obj, "group_id", "")
+                    or getattr(message_obj, "channel_id", "")
+                    or getattr(message_obj, "target_id", "")
+                )
+
+        return (
+            platform_id or f"unknown_platform:{id(self)}",
+            sender_id or f"unknown_sender:{id(message_obj) if message_obj else id(event)}",
+            origin or f"unknown_origin:{id(event)}",
+        )
+
+    def _cleanup_recent_text_cache(self, now: float, *, force: bool = False) -> None:
+        """Cleanup expired entries and enforce hard capacity cap."""
+        if (
+            not force
+            and now - self._recent_text_last_cleanup_ts
+            < self._recent_text_cleanup_interval_seconds
+            and len(self._recent_text_by_session) <= self._recent_text_max_entries
+        ):
+            return
+
+        expire_before = now - self._recent_text_ttl_seconds
+        expired_keys = [
+            key
+            for key, (_, ts) in self._recent_text_by_session.items()
+            if ts <= expire_before
+        ]
+        for key in expired_keys:
+            self._recent_text_by_session.pop(key, None)
+
+        overflow = len(self._recent_text_by_session) - self._recent_text_max_entries
+        if overflow > 0:
+            oldest_keys = sorted(
+                self._recent_text_by_session.items(), key=lambda item: item[1][1]
+            )[:overflow]
+            for key, _ in oldest_keys:
+                self._recent_text_by_session.pop(key, None)
+
+        self._recent_text_last_cleanup_ts = now
+
+    def _store_uploaded_file(self, src_path: Path, preferred_name: str) -> Path:
+        """Store uploaded file in workspace with collision-safe naming."""
+        safe_name = Path(preferred_name).name or "uploaded_file"
+        valid, dst_path, error = self._validate_path(safe_name)
+        if not valid:
+            raise ValueError(error)
+
+        if self._try_copy_uploaded_file(src_path, dst_path):
+            return dst_path
+
+        stem = dst_path.stem or "file"
+        suffix = dst_path.suffix
+        index = 1
+        while True:
+            candidate_name = f"{stem}_{index}{suffix}"
+            valid, candidate_path, error = self._validate_path(candidate_name)
+            if not valid:
+                raise ValueError(error)
+            if self._try_copy_uploaded_file(src_path, candidate_path):
+                return candidate_path
+            index += 1
+
+    def _try_copy_uploaded_file(self, src_path: Path, dst_path: Path) -> bool:
+        """Try to copy upload file with exclusive-create semantics.
+
+        Returns:
+            True: copy succeeded and target was created.
+            False: target already exists.
+        """
+        try:
+            with src_path.open("rb") as src, dst_path.open("xb") as dst:
+                shutil.copyfileobj(src, dst)
+            try:
+                shutil.copystat(src_path, dst_path)
+            except OSError:
+                pass
+            return True
+        except FileExistsError:
+            return False
+
+    def _remember_recent_text(self, event: AstrMessageEvent) -> None:
+        """Remember latest user instruction text for current session."""
+        text = str(event.message_str or "").strip()
+        if not text:
+            return
+        if text.startswith("[系统通知]"):
+            return
+        now = time.time()
+        self._cleanup_recent_text_cache(now)
+        session_key = self._get_attachment_session_key(event)
+        self._recent_text_by_session[session_key] = (text, now)
+        if len(self._recent_text_by_session) > self._recent_text_max_entries:
+            self._cleanup_recent_text_cache(now, force=True)
+
+    def _pop_recent_text(self, event: AstrMessageEvent) -> str:
+        """Pop recent instruction text if still fresh for current session."""
+        now = time.time()
+        self._cleanup_recent_text_cache(now)
+        session_key = self._get_attachment_session_key(event)
+        item = self._recent_text_by_session.get(session_key)
+        if not item:
+            return ""
+
+        text, ts = item
+        if now - ts > self._recent_text_ttl_seconds:
+            self._recent_text_by_session.pop(session_key, None)
+            return ""
+
+        self._recent_text_by_session.pop(session_key, None)
+        return text
+
+    async def _extract_upload_source(
+        self, component: Comp.File
+    ) -> tuple[Path | None, str]:
+        """Extract local source path and display name from upload component."""
+        file_path = await component.get_file()
+        if not file_path:
+            return None, component.name or "unknown_file"
+        return Path(file_path), component.name or Path(file_path).name
 
     def _pre_check(
         self,
@@ -292,6 +508,7 @@ class FileOperationPlugin(Star):
         require_exists: bool = False,
         allowed_suffixes: frozenset | set | None = None,
         required_suffix: str | None = None,
+        allow_external_path: bool = False,
     ) -> tuple[bool, Path | None, str | None]:
         """
         统一的前置检查方法
@@ -304,12 +521,16 @@ class FileOperationPlugin(Star):
             require_exists: 是否要求文件存在
             allowed_suffixes: 允许的文件后缀集合
             required_suffix: 必须的文件后缀（如 ".pdf"）
+            allow_external_path: 是否允许工作区外绝对路径
 
         Returns:
             (通过检查, 文件路径, 错误信息)
             - 通过时: (True, Path, None)
             - 失败时: (False, None, "错误信息")
         """
+        if not self._is_group_feature_enabled(event):
+            return False, None, self._group_feature_disabled_error()
+
         # 权限检查
         if check_permission and not self._check_permission(event):
             return False, None, "错误：权限不足"
@@ -323,14 +544,18 @@ class FileOperationPlugin(Star):
         if filename is None:
             return True, None, None
 
+        display_name = self._display_name(filename)
+
         # 路径验证
-        valid, file_path, error = self._validate_path(filename)
+        valid, file_path, error = self._validate_path(
+            filename, allow_external=allow_external_path
+        )
         if not valid:
             return False, None, f"错误：{error}"
 
         # 文件存在性检查
         if require_exists and not file_path.exists():
-            return False, None, f"错误：文件 '{filename}' 不存在"
+            return False, None, f"错误：文件 '{display_name}' 不存在"
 
         # 文件后缀检查
         suffix = file_path.suffix.lower()
@@ -527,9 +752,14 @@ class FileOperationPlugin(Star):
         if getattr(event, "_buffered", False):
             return
 
+        if not self._is_group_feature_enabled(event):
+            return
+
         # 过滤空消息（如"正在输入..."状态消息）
         if not event.message_obj.message:
             return
+
+        self._remember_recent_text(event)
 
         # 检查消息是否包含支持的文件格式
         has_supported_file = False
@@ -547,7 +777,7 @@ class FileOperationPlugin(Star):
                     break
 
         # 只有包含支持格式的文件才需要缓冲
-        # 不支持的文件（如图片、视频）直接放行
+        # 不支持的文件（如视频）直接放行
         if not has_supported_file:
             # 检查是否有正在等待的缓冲（用户可能先发文件再发文本）
             if self._message_buffer.is_buffering(event):
@@ -573,7 +803,16 @@ class FileOperationPlugin(Star):
         """动态控制工具可见性"""
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
+
+        if not self._is_group_feature_enabled(event):
+            if req.func_tool:
+                for tool_name in FILE_TOOLS:
+                    req.func_tool.remove_tool(tool_name)
+            logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
+            return
+
         has_permission = self._check_permission(event)
+        can_process_upload = has_permission or event.is_admin()
 
         # 判断是否暴露文件工具
         should_expose = (
@@ -597,60 +836,58 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
+
+        # 仅在插件功能实际生效时，按配置屏蔽执行类工具，避免误伤无权限会话。
+        if should_expose and req.func_tool and self._auto_block_execution_tools:
+            for tool_name in EXECUTION_TOOLS:
+                req.func_tool.remove_tool(tool_name)
+            logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
+
+        # 文件入库不依赖“是否@机器人”，只依赖权限，避免群聊先传文件后触发工具时文件丢失
+        if not can_process_upload:
             return
 
         # 处理文件消息
         for component in event.message_obj.message:
-            if isinstance(component, Comp.File):
-                try:
-                    # 获取文件路径
-                    file_path = await component.get_file()
-                    file_name = component.name or "unknown_file"
-                    if file_path and Path(file_path).exists():
-                        src_path = Path(file_path)
+            if not isinstance(component, Comp.File):
+                continue
 
-                        # 仅使用文件名，避免路径穿越
-                        safe_name = Path(file_name).name
-                        valid, dst_path, error = self._validate_path(safe_name)
-                        if not valid:
-                            logger.warning(
-                                f"[文件管理] 上传文件名不安全，已拒绝: {file_name}, 原因: {error}"
-                            )
-                            continue
+            try:
+                src_path, original_name = await self._extract_upload_source(component)
+                if not src_path or not src_path.exists():
+                    continue
 
-                        # 复制文件到工作区
-                        shutil.copy2(src_path, dst_path)
-                        file_suffix = dst_path.suffix.lower()
-                        type_desc = ""
-                        is_supported = False
+                stored_path = self._store_uploaded_file(src_path, original_name)
+                file_suffix = stored_path.suffix.lower()
+                type_desc = ""
+                is_supported = False
 
-                        if file_suffix in ALL_OFFICE_SUFFIXES:
-                            type_desc = "Office文档 (Word/Excel/PPT)"
-                            is_supported = True
-                        elif file_suffix in TEXT_SUFFIXES:
-                            type_desc = "文本/代码文件"
-                            is_supported = True
-                        elif file_suffix == PDF_SUFFIX:
-                            type_desc = "PDF文档"
-                            is_supported = True
+                if file_suffix in ALL_OFFICE_SUFFIXES:
+                    type_desc = "Office文档 (Word/Excel/PPT)"
+                    is_supported = True
+                elif file_suffix in TEXT_SUFFIXES:
+                    type_desc = "文本/代码文件"
+                    is_supported = True
+                elif file_suffix == PDF_SUFFIX:
+                    type_desc = "PDF文档"
+                    is_supported = True
 
-                        # 只有支持的格式才注入提示
-                        if is_supported:
-                            prompt = (
-                                f"\n[系统通知] 收到用户上传的 {type_desc}: {component.name} (后缀: {file_suffix})。"
-                                f"文件已存入工作区。如果用户需要读取或分析该文件，可使用 `read_file` 工具。"
-                                f"请先询问用户想对文件做什么，不要主动调用工具。"
-                            )
-                            req.system_prompt += prompt
-                            logger.info(
-                                f"[文件管理] 收到文件 {component.name}，已保存。"
-                            )
-                        else:
-                            logger.info(
-                                f"[文件管理] 文件 {component.name} 格式不支持 ({file_suffix})，跳过处理"
-                            )
-                except Exception as e:
-                    logger.error(f"[文件管理] 处理上传文件失败: {e}")
+                if not is_supported:
+                    logger.info(
+                        f"[文件管理] 文件 {original_name} 格式不支持 ({file_suffix})，跳过处理"
+                    )
+                    continue
+
+                prompt = (
+                    f"\n[系统通知] 收到用户上传的 {type_desc}: {original_name} (后缀: {file_suffix})。"
+                    f"文件已存入工作区。如果用户需要读取或分析该文件，可使用 `read_file` 工具。"
+                    "请先询问用户想对文件做什么，不要主动调用工具。"
+                )
+
+                req.system_prompt += prompt
+                logger.info(f"[文件管理] 收到文件 {original_name}，已保存。")
+            except Exception as e:
+                logger.error(f"[文件管理] 处理上传文件失败: {e}")
 
     @llm_tool(name="read_file")
     async def read_file(
@@ -658,27 +895,34 @@ class FileOperationPlugin(Star):
         event: AstrMessageEvent,
         filename: str = "",
     ) -> str | None:
-        """读取**文本文件、Office 文档或 PDF**内容并返回给 LLM 处理。
+        """Read a text, Office, or PDF file and return its content to the LLM.
 
-        【支持的格式】：
-        - 文本：.txt, .md, .log, .py, .js, .ts, .json, .yaml, .xml, .csv, .html, .css, .sql 等
-        - Office：.docx, .xlsx, .pptx, .doc, .xls, .ppt
-        - PDF：.pdf（需安装 pdfplumber 或 pdf2docx）
+        Supported formats:
+        - Text: .txt, .md, .log, .py, .js, .ts, .json, .yaml, .xml, .csv, .html, .css, .sql, etc.
+        - Office: .docx, .xlsx, .pptx, .doc, .xls, .ppt
+        - PDF: .pdf (requires pdfplumber or pdf2docx)
 
-        【不支持】：图片、视频、音频等二进制文件。
+        Unsupported:
+        - Binary files such as images, videos, and audio.
 
         Args:
-            filename(string): 要读取的文件名
+            filename(string): File name to read.
         """
         if not filename:
             return "错误：请提供要读取的文件名"
 
         # 统一前置检查
-        ok, resolved_path, err = self._pre_check(event, filename, require_exists=True)
+        ok, resolved_path, err = self._pre_check(
+            event,
+            filename,
+            require_exists=True,
+            allow_external_path=self._allow_external_input_files,
+        )
         if not ok:
             return err or "错误：未知错误"
 
         assert resolved_path is not None  # 类型断言：ok=True 时 resolved_path 必定存在
+        display_name = self._display_name(resolved_path)
         file_size = resolved_path.stat().st_size
         max_size = self._get_max_file_size()
         if file_size > max_size:
@@ -691,7 +935,7 @@ class FileOperationPlugin(Star):
             if suffix in TEXT_SUFFIXES:
                 try:
                     content = await self._read_text_file(resolved_path, max_size)
-                    return f"[文件: {filename}, 大小: {format_file_size(file_size)}]\n{content}"
+                    return f"[文件: {display_name}, 大小: {format_file_size(file_size)}]\n{content}"
                 except Exception as e:
                     logger.error(f"读取文件失败: {e}")
                     return f"错误：{safe_error_message(e, '读取文件失败')}"
@@ -701,17 +945,17 @@ class FileOperationPlugin(Star):
                 extracted = self._extract_office_text(resolved_path, office_type)
                 if extracted:
                     return self._format_file_result(
-                        filename, suffix, file_size, extracted
+                        display_name, suffix, file_size, extracted
                     )
-                return f"错误：文件 '{filename}' 无法读取，可能未安装对应解析库"
+                return f"错误：文件 '{display_name}' 无法读取，可能未安装对应解析库"
             # PDF 文件：使用 pdfplumber 提取文本
             if suffix == PDF_SUFFIX:
                 extracted = self._extract_pdf_text(resolved_path)
                 if extracted:
                     return self._format_file_result(
-                        filename, suffix, file_size, extracted
+                        display_name, suffix, file_size, extracted
                     )
-                return f"错误：无法从 PDF 文件 '{filename}' 中提取文本内容，文件可能为空、已损坏或只包含图片。"
+                return f"错误：无法从 PDF 文件 '{display_name}' 中提取文本内容，文件可能为空、已损坏或只包含图片。"
             return f"错误：不支持读取 '{suffix}' 格式的文件"
         except Exception as e:
             logger.error(f"读取文件失败: {e}")
@@ -725,18 +969,19 @@ class FileOperationPlugin(Star):
         content: str = "",
         file_type: str = "word",
     ):
-        """创建Office 文件（Excel/Word/PPT）并发送给用户。
-        仅支持简单格式，不支持复杂样式、图表等。
+        """Create an Office file (Excel/Word/PowerPoint) and send it to the user.
 
-        【content 格式说明】：
-        - Excel：用 | 分隔单元格，换行分隔行。如：姓名|年龄\\n张三|25
-        - Word：纯文本，用空行分段
-        - PPT：用 [幻灯片 1] 标记分页，或按空行自动分页
+        Only basic content is supported. Advanced styles, charts, and complex layouts are not supported.
+
+        Content format:
+        - Excel: use `|` to split cells and newline to split rows, e.g. `Name|Age\\nAlice|25`
+        - Word: plain text, with blank lines as paragraph separators.
+        - PowerPoint: mark slides with `[Slide 1]`, or let blank lines split slides automatically
 
         Args:
-            filename(string): 文件名（需包含扩展名 .docx/.xlsx/.pptx）
-            content(string): 文件内容（按上述格式）
-            file_type(string): 文件类型 word/excel/powerpoint（仅当文件名无扩展名时使用）
+            filename(string): Output file name (prefer .docx/.xlsx/.pptx).
+            content(string): File content in the format above.
+            file_type(string): Fallback type (word/excel/powerpoint) when filename has no extension.
         """
         # 统一前置检查（仅检查权限和功能开关，不检查文件）
         ok, _, err = self._pre_check(event, feature_key="enable_office_files")
@@ -744,7 +989,6 @@ class FileOperationPlugin(Star):
             await event.send(MessageChain().message(f"❌ {err}"))
             return err or "错误：未知错误"
 
-        # 参数验证
         if not content:
             return "错误：请提供 content（文件内容）"
 
@@ -775,6 +1019,7 @@ class FileOperationPlugin(Star):
                 MessageChain().message(f"❌ 需要安装 {package_name} 才能生成此类型文件")
             )
             return f"错误：需要安装 {package_name}"
+
         file_info = {
             "type": office_type,
             "filename": filename,
@@ -814,12 +1059,13 @@ class FileOperationPlugin(Star):
         filename: str = "",
         file_path: str = "",  # 别名，兼容 LLM 可能使用的参数名
     ) -> str:
-        """将 Office 文件 (Word/Excel/PPT) 转换为 PDF 格式。
-        支持新旧版格式：.docx/.doc, .xlsx/.xls, .pptx/.ppt
-        注意：直接调用此工具即可，无需先调用 read_file 读取文件。
+        """Convert an Office file (Word/Excel/PowerPoint) to PDF.
+
+        Supported extensions: .docx/.doc, .xlsx/.xls, .pptx/.ppt.
+        Call this tool directly; you do not need to call `read_file` first.
 
         Args:
-            filename(string): 要转换的 Office 文件名 (如 report.docx, data.xlsx, 报表.xls)
+            filename(string): Office file name to convert (for example: report.docx, data.xlsx, report.xls).
         """
         # 兼容 file_path 参数名
         if not filename and file_path:
@@ -828,7 +1074,9 @@ class FileOperationPlugin(Star):
         if not filename:
             return "错误：请提供要转换的 Office 文件名"
 
-        logger.debug(f"[PDF转换] convert_to_pdf 被调用，filename={filename}")
+        logger.debug(
+            f"[PDF转换] convert_to_pdf 被调用，filename={self._display_name(filename)}"
+        )
         # 统一前置检查
         ok, resolved_path, err = self._pre_check(
             event,
@@ -836,19 +1084,21 @@ class FileOperationPlugin(Star):
             feature_key="enable_pdf_conversion",
             require_exists=True,
             allowed_suffixes=CONVERTIBLE_TO_PDF,
+            allow_external_path=self._allow_external_input_files,
         )
         if not ok:
             logger.warning(f"[PDF转换] 前置检查失败: {err}")
             return err or "错误：未知错误"
 
         assert resolved_path is not None  # 类型断言：ok=True 时 resolved_path 必定存在
+        display_name = self._display_name(resolved_path)
 
         # 检查转换器是否可用
         if not self.pdf_converter.is_available("office_to_pdf"):
             return "错误：Office→PDF 转换不可用，需要安装 LibreOffice"
 
         try:
-            logger.info(f"[PDF转换] 开始转换: {filename} → PDF")
+            logger.info(f"[PDF转换] 开始转换: {display_name} → PDF")
             output_path = await self.pdf_converter.office_to_pdf(resolved_path)
 
             if output_path and output_path.exists():
@@ -861,10 +1111,10 @@ class FileOperationPlugin(Star):
 
                 # 发送文件（带预览图）
                 await self._send_file_with_preview(
-                    event, output_path, f"✅ 已将 {filename} 转换为 PDF"
+                    event, output_path, f"✅ 已将 {display_name} 转换为 PDF"
                 )
 
-                return f"已将 {filename} 转换为 {output_path.name} 并发送给用户"
+                return f"已将 {display_name} 转换为 {output_path.name} 并发送给用户"
 
             return "错误：PDF 转换失败，请检查文件格式是否正确"
 
@@ -880,16 +1130,17 @@ class FileOperationPlugin(Star):
         target_format: str = "word",
         file_id: str = "",  # 别名，兼容 LLM 可能使用的参数名
     ) -> str:
-        """将 PDF 文件转换为 Office 格式 (Word 或 Excel)。
-        直接调用此工具即可，无需先调用 read_file 读取文件。
+        """Convert a PDF file to an Office format (Word or Excel).
 
-        注意事项:
-        - PDF→Word: 适用于文本为主的 PDF，复杂布局可能有偏差
-        - PDF→Excel: 仅提取 PDF 中的表格数据，非表格内容会丢失
+        Call this tool directly; you do not need to call `read_file` first.
+
+        Notes:
+        - PDF -> Word works best for text-heavy PDFs; complex layouts may shift.
+        - PDF -> Excel extracts table data only; non-table content may be lost.
 
         Args:
-            filename(string): 要转换的 PDF 文件名 (如 document.pdf)
-            target_format(string): 目标格式，可选 word 或 excel，默认 word
+            filename(string): PDF file name to convert (for example: document.pdf).
+            target_format(string): Target format, `word` or `excel`. Default is `word`.
         """
         # 兼容 file_id 参数名
         if not filename and file_id:
@@ -904,11 +1155,13 @@ class FileOperationPlugin(Star):
             feature_key="enable_pdf_conversion",
             require_exists=True,
             required_suffix=PDF_SUFFIX,
+            allow_external_path=self._allow_external_input_files,
         )
         if not ok:
             return err or "错误：未知错误"
 
         assert file_path is not None  # 类型断言：ok=True 时 file_path 必定存在
+        display_name = self._display_name(file_path)
 
         # 验证目标格式
         target = target_format.lower().strip()
@@ -925,7 +1178,7 @@ class FileOperationPlugin(Star):
             return f"错误：PDF→{target_desc} 转换不可用，缺少依赖: {', '.join(missing)}"
 
         try:
-            logger.info(f"[PDF转换] 开始转换: {filename} → {target_desc}")
+            logger.info(f"[PDF转换] 开始转换: {display_name} → {target_desc}")
 
             if target == "word":
                 output_path = await self.pdf_converter.pdf_to_word(file_path)
@@ -944,10 +1197,10 @@ class FileOperationPlugin(Star):
 
                 # 发送文件（带预览图）
                 await self._send_file_with_preview(
-                    event, output_path, f"✅ 已将 {filename} 转换为 {target_desc}"
+                    event, output_path, f"✅ 已将 {display_name} 转换为 {target_desc}"
                 )
 
-                return f"已将 {filename} 转换为 {output_path.name} 并发送给用户"
+                return f"已将 {display_name} 转换为 {output_path.name} 并发送给用户"
 
             return f"错误：PDF→{target_desc} 转换失败"
 
@@ -955,9 +1208,14 @@ class FileOperationPlugin(Star):
             logger.error(f"[PDF转换] 转换失败: {e}", exc_info=True)
             return f"错误：{safe_error_message(e, '转换失败')}"
 
-    @filter.command("rm", alias={"删除文件", "rm"})
+    @filter.command("delete_file", alias={"删除文件", "file_rm"})
     async def delete_file(self, event: AstrMessageEvent):
         """从工作区中永久删除指定文件。用法: /delete_file 文件名"""
+        if not self._is_group_feature_enabled(event):
+            await event.send(
+                MessageChain().message("❌ " + self._group_feature_disabled_error())
+            )
+            return
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 权限不足"))
@@ -970,6 +1228,7 @@ class FileOperationPlugin(Star):
             await event.send(MessageChain().message("❌ 用法: /delete_file 文件名"))
             return
         filename = parts[1].strip()
+        display_name = self._display_name(filename)
 
         valid, file_path, error = self._validate_path(filename)
         if not valid:
@@ -980,11 +1239,13 @@ class FileOperationPlugin(Star):
             try:
                 file_path.unlink(missing_ok=True)
                 await event.send(
-                    MessageChain().message(f"成功：文件 '{filename}' 已删除。")
+                    MessageChain().message(f"成功：文件 '{display_name}' 已删除。")
                 )
                 return
             except IsADirectoryError:
-                await event.send(MessageChain().message(f"'{filename}'是目录,拒绝删除"))
+                await event.send(
+                    MessageChain().message(f"'{display_name}'是目录,拒绝删除")
+                )
                 return
             except PermissionError:
                 await event.send(MessageChain().message("❌ 权限不足，无法删除文件"))
@@ -993,12 +1254,16 @@ class FileOperationPlugin(Star):
                 logger.error(f"删除文件时发生错误{e}")
                 await event.send(MessageChain().message(f"删除文件时发生错误{e}"))
                 return
-        await event.send(MessageChain().message(f"错误：找不到文件 '{filename}'"))
+        await event.send(MessageChain().message(f"错误：找不到文件 '{display_name}'"))
         return
 
     @filter.command("fileinfo")
     async def fileinfo(self, event: AstrMessageEvent):
         """显示文件管理工具的运行信息"""
+        if not self._is_group_feature_enabled(event):
+            yield event.plain_result("❌ " + self._group_feature_disabled_error())
+            return
+
         storage_mode = "临时目录(自动删除)" if self._auto_delete else "持久化存储"
 
         # 获取 PDF 转换器状态
@@ -1021,13 +1286,21 @@ class FileOperationPlugin(Star):
             "📂 AstrBot 文件操作工具\n"
             f"存储模式: {storage_mode}\n"
             f"工作目录: {self.plugin_data_path}\n"
+            f"外部路径读取: {'开启' if self._allow_external_input_files else '关闭'}\n"
+            f"群聊启用插件功能: {'开启' if self._enable_features_in_group else '关闭'}\n"
+            f"自动屏蔽 shell/python 工具: {'开启' if self._auto_block_execution_tools else '关闭'}\n"
             f"回复模式: {'开启' if self._reply_to_user else '关闭'}\n"
             f"PDF转换: {', '.join(pdf_status)}"
         )
 
-    @filter.command("lsf", alias={"文件列表", "lsf"})
+    @filter.command("list_files", alias={"文件列表", "file_ls"})
     async def list_files(self, event: AstrMessageEvent):
         """列出机器人文件库中的所有文件。"""
+        if not self._is_group_feature_enabled(event):
+            await event.send(
+                MessageChain().message("❌ " + self._group_feature_disabled_error())
+            )
+            return
 
         if not self._check_permission(event):
             await event.send(MessageChain().message("❌ 权限不足"))
@@ -1062,6 +1335,12 @@ class FileOperationPlugin(Star):
     @filter.command("pdf_status", alias={"pdf状态"})
     async def pdf_status(self, event: AstrMessageEvent):
         """显示 PDF 转换功能的状态和依赖信息"""
+        if not self._is_group_feature_enabled(event):
+            await event.send(
+                MessageChain().message("❌ " + self._group_feature_disabled_error())
+            )
+            return
+
         status = self.pdf_converter.get_detailed_status()
         caps = status["capabilities"]
         missing = self.pdf_converter.get_missing_dependencies()

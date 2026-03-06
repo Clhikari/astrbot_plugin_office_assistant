@@ -10,6 +10,18 @@
                 "hint": "开启后，群聊中仅在@/引用机器人时模型才会获得文件操作能力。这能有效防止模型在群聊中误触发工具并节省Token。",
                 "default": true
             },
+            "enable_features_in_group": {
+                "description": "群聊启用插件功能",
+                "type": "bool",
+                "hint": "关闭后，本插件在群聊中完全不生效（LLM工具、文件拦截与插件命令均禁用），仅私聊可用。默认关闭以降低群聊误触发风险。",
+                "default": false
+            },
+            "auto_block_execution_tools": {
+                "description": "自动屏蔽 shell/python 工具",
+                "type": "bool",
+                "hint": "开启后，当插件功能生效时会自动隐藏 astrbot_execute_shell / astrbot_execute_python / astrbot_execute_ipython，避免模型误用系统执行工具导致文件定位跑偏。",
+                "default": true
+            },
             "reply_to_user": {
                 "description": "发送文件时@用户",
                 "type": "bool",
@@ -72,6 +84,19 @@
                 "type": "float",
                 "hint": "收到文件后等待后续消息的时间。用于聚合分离发送的文件和文本消息。",
                 "default": 4
+            }
+        }
+    },
+    "path_settings": {
+        "description": "路径访问设置",
+        "type": "object",
+        "hint": "控制 read_file / PDF 转换是否允许访问工作区外文件",
+        "items": {
+            "allow_external_input_files": {
+                "description": "允许外部绝对路径",
+                "type": "bool",
+                "hint": "开启后，read_file、convert_to_pdf、convert_from_pdf 可读取工作区外绝对路径文件。默认关闭更安全。delete_file 仍仅允许工作区内文件。",
+                "default": false
             }
         }
     },
