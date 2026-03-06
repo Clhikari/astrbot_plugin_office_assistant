@@ -425,8 +425,7 @@ class FileOperationPlugin(Star):
         if not valid:
             raise ValueError(error)
 
-        if not dst_path.exists():
-            shutil.copy2(src_path, dst_path)
+        if self._try_copy_uploaded_file(src_path, dst_path):
             return dst_path
 
         stem = dst_path.stem or "file"
@@ -437,10 +436,27 @@ class FileOperationPlugin(Star):
             valid, candidate_path, error = self._validate_path(candidate_name)
             if not valid:
                 raise ValueError(error)
-            if not candidate_path.exists():
-                shutil.copy2(src_path, candidate_path)
+            if self._try_copy_uploaded_file(src_path, candidate_path):
                 return candidate_path
             index += 1
+
+    def _try_copy_uploaded_file(self, src_path: Path, dst_path: Path) -> bool:
+        """Try to copy upload file with exclusive-create semantics.
+
+        Returns:
+            True: copy succeeded and target was created.
+            False: target already exists.
+        """
+        try:
+            with src_path.open("rb") as src, dst_path.open("xb") as dst:
+                shutil.copyfileobj(src, dst)
+            try:
+                shutil.copystat(src_path, dst_path)
+            except OSError:
+                pass
+            return True
+        except FileExistsError:
+            return False
 
     def _remember_recent_text(self, event: AstrMessageEvent) -> None:
         """Remember latest user instruction text for current session."""
