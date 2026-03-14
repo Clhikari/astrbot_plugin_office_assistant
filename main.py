@@ -743,7 +743,7 @@ class FileOperationPlugin(Star):
             logger.error(f"[文件管理] 提取 PDF 文本失败: {e}")
             return None
 
-    @filter.event_message_type(filter.EventMessageType.ALL, priority=114514)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def on_file_message(self, event: AstrMessageEvent):
         """
         拦截包含文件的消息，使用缓冲器聚合文件和后续文本消息
