@@ -385,7 +385,8 @@ class FileOperationPlugin(Star):
 
         return (
             platform_id or f"unknown_platform:{id(self)}",
-            sender_id or f"unknown_sender:{id(message_obj) if message_obj else id(event)}",
+            sender_id
+            or f"unknown_sender:{id(message_obj) if message_obj else id(event)}",
             origin or f"unknown_origin:{id(event)}",
         )
 
@@ -742,7 +743,7 @@ class FileOperationPlugin(Star):
             logger.error(f"[文件管理] 提取 PDF 文本失败: {e}")
             return None
 
-    @filter.event_message_type(filter.EventMessageType.ALL, priority=0)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def on_file_message(self, event: AstrMessageEvent):
         """
         拦截包含文件的消息，使用缓冲器聚合文件和后续文本消息
