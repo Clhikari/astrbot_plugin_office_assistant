@@ -33,35 +33,6 @@ _CONTINUE_UNTIL_EXPORT = (
     "Continue calling document tools until all requested sections are added and "
     "export_document succeeds. Do not send a final natural-language reply before export_document."
 )
-_EXPORT_REQUIRED_FLAG = "_office_doc_force_export_required"
-_EXPORT_REQUIRED_BUDGET = "_office_doc_force_export_budget"
-_EXPORT_REQUIRED_DOCUMENT_ID = "_office_doc_force_export_document_id"
-_EXPORT_REQUIRED_RETRY_BUDGET = 2
-
-
-def _set_export_required(
-    context: ContextWrapper[AstrAgentContext] | None, document_id: str
-) -> None:
-    if context is None:
-        return
-    event = getattr(getattr(context, "context", None), "event", None)
-    if event is None:
-        return
-    event.set_extra(_EXPORT_REQUIRED_FLAG, True)
-    event.set_extra(_EXPORT_REQUIRED_BUDGET, _EXPORT_REQUIRED_RETRY_BUDGET)
-    event.set_extra(_EXPORT_REQUIRED_DOCUMENT_ID, document_id)
-
-
-def _clear_export_required(context: ContextWrapper[AstrAgentContext] | None) -> None:
-    if context is None:
-        return
-    event = getattr(getattr(context, "context", None), "event", None)
-    if event is None:
-        return
-    extras = event.get_extra()
-    extras.pop(_EXPORT_REQUIRED_FLAG, None)
-    extras.pop(_EXPORT_REQUIRED_BUDGET, None)
-    extras.pop(_EXPORT_REQUIRED_DOCUMENT_ID, None)
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -127,7 +98,6 @@ class CreateDocumentTool(DocumentToolBase):
             accent_color=str(kwargs.get("accent_color") or ""),
         )
         document = self.store.create_document(request)
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -174,7 +144,6 @@ class AddHeadingTool(DocumentToolBase):
             document = self.store.add_heading(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -216,7 +185,6 @@ class AddParagraphTool(DocumentToolBase):
             document = self.store.add_paragraph(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -297,7 +265,6 @@ class AddSectionBundleTool(DocumentToolBase):
             document = self.store.add_section_bundle(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -358,7 +325,6 @@ class AddTableTool(DocumentToolBase):
             document = self.store.add_table(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -413,7 +379,6 @@ class AddSummaryCardTool(DocumentToolBase):
             document = self.store.add_summary_card(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -450,7 +415,6 @@ class FinalizeDocumentTool(DocumentToolBase):
             document = self.store.finalize_document(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _set_export_required(context, document.document_id)
         return _dump_result(
             ToolResult(
                 success=True,
@@ -514,7 +478,6 @@ class ExportDocumentTool(DocumentToolBase):
                 )
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
-        _clear_export_required(context)
         return _dump_result(
             ExportDocumentResult(
                 success=True,

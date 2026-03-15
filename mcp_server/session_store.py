@@ -29,6 +29,7 @@ from .schemas import (
     SectionCardInput,
     SectionParagraphInput,
     SectionTableInput,
+    _normalize_docx_filename,
 )
 
 PLUGIN_NAME = "astrbot_plugin_office_assistant"
@@ -36,6 +37,14 @@ PLUGIN_NAME = "astrbot_plugin_office_assistant"
 
 def _default_workspace_dir() -> Path:
     return Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME / "documents"
+
+
+def _is_within_workspace(path: Path, workspace_dir: Path) -> bool:
+    try:
+        path.relative_to(workspace_dir)
+        return True
+    except ValueError:
+        return False
 
 
 class DocumentSessionStore:
@@ -147,19 +156,21 @@ class DocumentSessionStore:
     ) -> tuple[DocumentModel, Path]:
         with self._lock:
             document = self.require_document(request.document_id)
-            file_name = (
-                request.output_name.strip() or document.metadata.preferred_filename
-            )
-            if not file_name.lower().endswith(".docx"):
-                file_name = f"{file_name}.docx"
+            preferred_name = request.output_name or document.metadata.preferred_filename
+            file_name = _normalize_docx_filename(preferred_name)
 
+            workspace_dir = self.workspace_dir.resolve()
             output_dir = (
-                Path(request.output_dir).expanduser()
+                (workspace_dir / request.output_dir).resolve()
                 if request.output_dir
-                else self.workspace_dir
+                else workspace_dir
             )
+            if not _is_within_workspace(output_dir, workspace_dir):
+                raise ValueError("output_dir cannot escape the document workspace")
             output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / file_name
+            output_path = (output_dir / file_name).resolve()
+            if not _is_within_workspace(output_path, workspace_dir):
+                raise ValueError("output_path cannot escape the document workspace")
             document.output_path = str(output_path)
             document.touch()
             return document, output_path

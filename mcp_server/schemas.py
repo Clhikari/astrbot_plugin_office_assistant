@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -10,6 +12,31 @@ SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
 SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
 SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
+WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
+
+
+def _split_path_parts(value: str) -> list[str]:
+    return [
+        part
+        for part in re.split(r"[\\/]+", value.strip())
+        if part and part not in {".", ""}
+    ]
+
+
+def _looks_like_absolute_path(value: str) -> bool:
+    candidate = value.strip()
+    return (
+        candidate.startswith(("/", "\\", "~"))
+        or WINDOWS_DRIVE_PATTERN.match(candidate) is not None
+    )
+
+
+def _normalize_docx_filename(value: str, default: str = "document.docx") -> str:
+    candidate = _split_path_parts(value)[-1] if value.strip() else default
+    candidate = candidate or default
+    if not candidate.lower().endswith(".docx"):
+        candidate = f"{candidate}.docx"
+    return candidate
 
 
 class CreateDocumentRequest(BaseModel):
@@ -26,10 +53,7 @@ class CreateDocumentRequest(BaseModel):
     @field_validator("output_name")
     @classmethod
     def validate_output_name(cls, value: str) -> str:
-        candidate = value.strip() or "document.docx"
-        if not candidate.lower().endswith(".docx"):
-            candidate = f"{candidate}.docx"
-        return candidate
+        return _normalize_docx_filename(value)
 
     @field_validator("theme_name")
     @classmethod
@@ -191,6 +215,27 @@ class ExportDocumentRequest(BaseModel):
     document_id: str
     output_dir: str = ""
     output_name: str = ""
+
+    @field_validator("output_dir")
+    @classmethod
+    def validate_output_dir(cls, value: str) -> str:
+        candidate = value.strip()
+        if not candidate:
+            return ""
+
+        if _looks_like_absolute_path(candidate):
+            raise ValueError("output_dir must be relative to the document workspace")
+
+        normalized_parts = _split_path_parts(candidate)
+        if any(part == ".." for part in normalized_parts):
+            raise ValueError("output_dir cannot escape the document workspace")
+
+        return "" if not normalized_parts else str(Path(*normalized_parts))
+
+    @field_validator("output_name")
+    @classmethod
+    def validate_output_name(cls, value: str) -> str:
+        return _normalize_docx_filename(value) if value.strip() else ""
 
 
 class DocumentSummary(BaseModel):
