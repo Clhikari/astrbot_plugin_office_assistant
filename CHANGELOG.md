@@ -12,18 +12,25 @@
 - 新增执行工具屏蔽配置 `auto_block_execution_tools`，支持在插件能力生效时自动隐藏 `astrbot_execute_shell` / `astrbot_execute_python` / `astrbot_execute_ipython`。
 - 新增路径访问配置 `allow_external_input_files`，允许按配置读取/转换工作区外绝对路径输入文件（删除仍限制在工作区内）。
 - 增加会话级最近文本缓存与文件消息聚合补全逻辑，优化“先发文件后发文本”场景下的指令衔接。
+- 新增复杂 Word 状态化工具链：`create_document`、`add_heading`、`add_paragraph`、`add_table`、`add_summary_card`、`finalize_document`、`export_document`。
+- 新增复杂 Word 的主题、表格模板、密度和强调色参数支持。
+- 新增复杂 Word 导出后自动回传文件的插件内发送链路。
 
 ### Changed
 
 - 命令名统一为 `/list_files` 与 `/delete_file`，避免与部分平台通用命令冲突。
 - 文件上传入库逻辑重构为安全命名+重名递增，减少覆盖风险。
 - `README.md` 重构：新增目录跳转、配置速查、迁移说明、FAQ、社群答疑入口。
+- 复杂 Word 的对外公开路径收敛为精细控制工具链，不再默认暴露章节级快捷写入工具。
+- `before_llm_chat` 现在会在合适场景下注入复杂 Word 的状态化使用提示，并将简单文档与复杂 Word 路径区分开。
+- `mcp_server/` 兼容层现在与插件内复杂 Word 工具集保持一致，补齐了 `add_summary_card`。
 
 ### Fixed
 
 - 修复 `EXECUTION_TOOLS` 未导入导致的运行期异常风险。
 - 修复执行工具屏蔽作用范围：仅在插件功能实际生效时屏蔽，避免误伤无权限会话。
 - 修复 `auto_block_execution_tools` 在文档、配置 schema 与代码默认值不一致的问题。
+- 修复 `export_document` 导出路径边界过宽的问题：输出目录现在限制为插件文档工作区内相对路径，输出文件名会做 basename 净化。
 
 ## [v1.2.4] - 2026-02-19
 

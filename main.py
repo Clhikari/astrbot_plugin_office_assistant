@@ -12,20 +12,23 @@ import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, llm_tool, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools
+from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.components import At, Reply
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 
+from .agent_tools import build_document_toolset
 from .constants import (
     ALL_OFFICE_SUFFIXES,
     CONVERTIBLE_TO_PDF,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MAX_FILE_SIZE_MB,
+    EXECUTION_TOOLS,
     FILE_TOOLS,
     OFFICE_LIBS,
     OFFICE_TYPE_MAP,
-    EXECUTION_TOOLS,
     PDF_SUFFIX,
     PDF_TARGET_FORMATS,
     SUFFIX_TO_OFFICE_TYPE,
@@ -127,6 +130,10 @@ class FileOperationPlugin(Star):
         self._office_libs = self._check_office_libs()
         self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
         self._recent_text_last_cleanup_ts = 0.0
+        self._document_toolset = build_document_toolset(
+            workspace_dir=self.plugin_data_path,
+            after_export=self._handle_exported_document_tool,
+        )
 
         # 初始化消息缓冲器
         self._message_buffer = MessageBuffer(wait_seconds=self._buffer_wait)
@@ -205,23 +212,22 @@ class FileOperationPlugin(Star):
         # 构建给 LLM 的提示文本
         if has_readable_file and user_instruction:
             prompt_text = (
-                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + f"\n\n用户指令: {user_instruction}"
-                + "\n\n请使用 `read_file` 工具读取上述文件内容，然后根据用户指令进行处理。"
+                + f"\n\nUser instruction: {user_instruction}"
+                + "\n\nUse `read_file` first, then continue from the instruction."
             )
         elif has_readable_file:
             prompt_text = (
-                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + "\n\n请立即使用 `read_file` 工具读取上述文件内容。"
-                "\n(注意：用户未提供具体指令，请读取文件后询问用户需要什么帮助)"
+                + "\n\nUse `read_file` now. No clear instruction yet, so ask a follow-up after reading."
             )
         else:
             prompt_text = (
-                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + "\n\n请根据用户需求处理这些文件。"
+                + "\n\nHandle them according to the user request."
             )
 
         # 重构消息链
@@ -464,7 +470,7 @@ class FileOperationPlugin(Star):
         text = str(event.message_str or "").strip()
         if not text:
             return
-        if text.startswith("[系统通知]"):
+        if text.startswith("[System Notice]"):
             return
         now = time.time()
         self._cleanup_recent_text_cache(now)
@@ -657,6 +663,20 @@ class FileOperationPlugin(Star):
             except Exception as del_e:
                 logger.warning(f"[文件管理] 自动删除文件失败: {del_e}")
 
+    async def _handle_exported_document_tool(
+        self, context: ContextWrapper[AstrAgentContext], output_path: str
+    ) -> str | None:
+        file_path = Path(output_path)
+        if not file_path.exists():
+            return f"Document exported to {output_path}, but the file does not exist."
+
+        await self._send_file_with_preview(
+            context.context.event,
+            file_path,
+            "✅ 已生成复杂 Word 文档",
+        )
+        return f"Document exported and sent to the user: {file_path.name}"
+
     async def _read_text_file(
         self, file_path: Path, max_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> str:
@@ -804,11 +824,18 @@ class FileOperationPlugin(Star):
         """动态控制工具可见性"""
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
+        denied_notice = (
+            "\n[System Notice] File/Office/PDF actions are unavailable in this chat."
+            " Say so and suggest private chat or admin enablement."
+            " Do not call file tools or use `astrbot_execute_python`, `astrbot_execute_shell`,"
+            " or `astrbot_execute_ipython` to bypass this restriction."
+        )
 
         if not self._is_group_feature_enabled(event):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
+            req.system_prompt = (req.system_prompt or "") + denied_notice
             logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
             return
 
@@ -837,12 +864,34 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
+            req.system_prompt = (req.system_prompt or "") + denied_notice
+
+        if should_expose and req.func_tool:
+            for tool in self._document_toolset.tools:
+                req.func_tool.add_tool(tool)
 
         # 仅在插件功能实际生效时，按配置屏蔽执行类工具，避免误伤无权限会话。
         if should_expose and req.func_tool and self._auto_block_execution_tools:
             for tool_name in EXECUTION_TOOLS:
                 req.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
+
+        if should_expose:
+            req.system_prompt = (req.system_prompt or "") + (
+                "\n[System Notice] For complex Word docs, use the stateful document tools:"
+                "`create_document(theme_name=..., table_template=..., density=..., accent_color=...)`"
+                " -> use `add_heading` / `add_paragraph` / `add_table(table_style=...)`"
+                " / `add_summary_card` for fine-grained control "
+                "-> `finalize_document` -> `export_document`."
+                " Prefer theme presets such as `business_report`, `project_review`, or `executive_brief`."
+                " Prefer table presets such as `report_grid`, `metrics_compact`, or `minimal`."
+                " Use `density=compact` for tighter layouts and `accent_color=RRGGBB` for brand accents."
+                " Use `variant=conclusion` when the summary card should feel like a closing takeaway."
+                " Once any document tool has been used, do not stop with a normal assistant reply while the document is still draft or finalized."
+                " Continue calling document tools until `export_document` succeeds."
+                " `export_document` sends the file."
+                " Use `create_office_file` only for simple one-shot output."
+            )
 
         # 文件入库不依赖“是否@机器人”，只依赖权限，避免群聊先传文件后触发工具时文件丢失
         if not can_process_upload:
@@ -880,12 +929,13 @@ class FileOperationPlugin(Star):
                     continue
 
                 prompt = (
-                    f"\n[系统通知] 收到用户上传的 {type_desc}: {original_name} (后缀: {file_suffix})。"
-                    f"文件已存入工作区。如果用户需要读取或分析该文件，可使用 `read_file` 工具。"
-                    "请先询问用户想对文件做什么，不要主动调用工具。"
+                    f"\n[System Notice] Received an uploaded {type_desc}: {original_name} (suffix: {file_suffix})."
+                    " Stored in workspace. Use `read_file` if needed."
+                    " Ask the user what they want before calling tools."
+                    " For complex Word output, prefer the stateful document tools over `create_office_file`."
                 )
 
-                req.system_prompt += prompt
+                req.system_prompt = (req.system_prompt or "") + prompt
                 logger.info(f"[文件管理] 收到文件 {original_name}，已保存。")
             except Exception as e:
                 logger.error(f"[文件管理] 处理上传文件失败: {e}")
@@ -973,6 +1023,9 @@ class FileOperationPlugin(Star):
         """Create an Office file (Excel/Word/PowerPoint) and send it to the user.
 
         Only basic content is supported. Advanced styles, charts, and complex layouts are not supported.
+        For complex Word documents, prefer the stateful document tools:
+        `create_document`, `add_heading`, `add_paragraph`, `add_table`,
+        `finalize_document`, and `export_document`.
 
         Content format:
         - Excel: use `|` to split cells and newline to split rows, e.g. `Name|Age\\nAlice|25`
