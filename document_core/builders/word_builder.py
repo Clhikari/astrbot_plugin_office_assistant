@@ -268,7 +268,7 @@ class WordDocumentBuilder:
         text = value or ""
         paragraph = cell.paragraphs[0]
         paragraph.alignment = alignment
-        paragraph.clear()
+        WordDocumentBuilder._clear_paragraph(paragraph)
         run = paragraph.add_run(text)
         WordDocumentBuilder._format_run(
             run,
@@ -280,6 +280,11 @@ class WordDocumentBuilder:
         paragraph.paragraph_format.space_after = 0
         if background:
             WordDocumentBuilder._set_cell_background(cell, background)
+
+    @staticmethod
+    def _clear_paragraph(paragraph) -> None:
+        for run in list(paragraph.runs):
+            run._element.getparent().remove(run._element)
 
     @staticmethod
     def _format_run(run, *, font_name: str, font_size, bold: bool, color=None) -> None:

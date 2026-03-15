@@ -16,5 +16,8 @@ def register_document_tools(server: FastMCP, store: DocumentSessionStore) -> Non
     register_add_paragraph_tool(server, store)
     register_add_table_tool(server, store)
     register_add_summary_card_tool(server, store)
+    # Keep section bundles internal for now. The public workflow intentionally
+    # stays on the fine-grained toolchain, while the bundle helper remains as a
+    # rollback option if the exposure strategy changes later.
     register_finalize_document_tool(server, store)
     register_export_document_tool(server, store)

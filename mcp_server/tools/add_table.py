@@ -14,11 +14,13 @@ def register_add_table_tool(server: FastMCP, store: DocumentSessionStore) -> Non
         document_id: str,
         headers: list[str] | None = None,
         rows: list[list[str]] | None = None,
+        table_style: str = "",
     ) -> ToolResult:
         request = AddTableRequest(
             document_id=document_id,
             headers=headers or [],
             rows=rows or [],
+            table_style=table_style,
         )
         document = store.add_table(request)
         return ToolResult(
