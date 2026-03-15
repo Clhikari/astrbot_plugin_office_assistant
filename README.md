@@ -74,6 +74,23 @@
 
 以下配置均在 AstrBot 管理面板中设置。
 
+先看这几个最常改、最影响体验的项：
+
+| 配置项 | 默认值 | 什么时候改 |
+| --- | --- | --- |
+| `enable_features_in_group` | `false` | 需要在群聊里启用插件时改。 |
+| `require_at_in_group` | `true` | 群聊里不想强制 `@` / 引用机器人时改。 |
+| `auto_block_execution_tools` | `true` | 不希望插件自动隐藏执行类工具时改。 |
+| `allow_external_input_files` | `false` | 需要读取或转换工作区外绝对路径文件时改。 |
+| `enable_pdf_conversion` | `true` | 不需要 Office/PDF 转换能力时改。 |
+| `auto_delete_files` | `true` | 想保留生成文件而不是发送后删除时改。 |
+
+> [!TIP]
+> 如果只是先把插件跑起来，通常只需要关注 `enable_features_in_group`、`require_at_in_group` 和 `allow_external_input_files` 这 3 项。
+
+<details>
+<summary>查看完整配置表</summary>
+
 ### 🔔 触发设置（`trigger_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -116,6 +133,8 @@
 | --- | --- | --- | --- |
 | 启用预览图 (`enable`) | bool | true | 发送 Office/PDF 时尝试发送第一页预览图。 |
 | 预览图分辨率 (`dpi`) | int | 150 | 推荐 100~200。 |
+
+</details>
 
 ---
 
@@ -262,7 +281,22 @@
 
 ## 系统依赖安装
 
-> Python 包大多会自动安装。下面是系统层依赖（需手动）。
+> [!NOTE]
+> Python 包大多会自动安装。这里列的是系统层依赖，需要你自己准备。
+
+默认先看这张简洁对照表就够了：
+
+| 平台 | 读取旧 `.doc` | Office -> PDF | 推荐方案 |
+| --- | --- | --- | --- |
+| Windows | `pywin32` | `docx2pdf` 或 LibreOffice | 有 Office 就优先 `docx2pdf`，没有就用 LibreOffice。 |
+| Linux | `antiword` | LibreOffice | 最稳的是 LibreOffice。 |
+| macOS | `antiword` | LibreOffice | Homebrew 安装最省事。 |
+
+> [!TIP]
+> 如果你只关心 PDF 转换是否可用，先执行 `/pdf_status`，缺什么依赖它会直接告诉你。
+
+<details>
+<summary>展开查看各平台安装命令</summary>
 
 ### 🪟 Windows
 
@@ -298,13 +332,29 @@ brew install antiword
 brew install --cask libreoffice
 ```
 
-安装系统依赖后，请重启 AstrBot。
+</details>
+
+> [!TIP]
+> 安装系统依赖后，请重启 AstrBot。
 
 ---
 
 ## Docker 使用建议
 
-### 方案 A：⚡ 进容器安装（快，但不持久）
+默认推荐直接写进 Dockerfile，镜像重建后也不会丢：
+
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    antiword \
+    libreoffice-writer libreoffice-calc libreoffice-impress \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+> [!TIP]
+> 如果你只是临时排查环境问题，再用“进容器安装”会更方便；正式部署还是建议写进镜像。
+
+<details>
+<summary>展开查看临时方案：进容器安装（快，但不持久）</summary>
 
 ```bash
 docker exec -it <容器名> bash
@@ -315,14 +365,7 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 
 容器删除重建后需要重装。
 
-### 方案 B：🧰 写入 Dockerfile（推荐）
-
-```dockerfile
-RUN apt-get update && apt-get install -y \
-    antiword \
-    libreoffice-writer libreoffice-calc libreoffice-impress \
-    && rm -rf /var/lib/apt/lists/*
-```
+</details>
 
 ---
 
