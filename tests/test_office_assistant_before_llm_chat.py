@@ -8,10 +8,10 @@ import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.main import (
+from astrbot_plugin_office_assistant.main import (
     FileOperationPlugin,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.message_buffer import (
+from astrbot_plugin_office_assistant.message_buffer import (
     BufferedMessage,
 )
 

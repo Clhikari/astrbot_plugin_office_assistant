@@ -1,33 +1,35 @@
 import json
 import tempfile
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.agent_tools import (
+from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.agent_tools.document_tools import (
+from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.document_core.models.blocks import (
+from astrbot_plugin_office_assistant.document_core.models.blocks import (
     GroupBlock,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.document_core.builders.word_builder import (
+from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
+    DOCX_TABLE_STYLES,
     WordDocumentBuilder,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.mcp_server.schemas import (
+from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.mcp_server.server import (
+from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
 )
-from data.plugins.plugin_upload_astrbot_plugin_office_assistant.mcp_server.session_store import (
+from astrbot_plugin_office_assistant.mcp_server.session_store import (
     DocumentSessionStore,
 )
 
@@ -472,6 +474,18 @@ def test_document_session_store_evicts_oldest_documents_when_capped():
     assert store.get_document(third.document_id) is not None
 
 
+def test_document_session_store_evicts_expired_documents_by_ttl():
+    store = DocumentSessionStore(ttl=timedelta(seconds=1))
+    expired = store.create_document(CreateDocumentRequest(title="expired"))
+    fresh = store.create_document(CreateDocumentRequest(title="fresh"))
+
+    expired.metadata.updated_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    fresh.metadata.updated_at = datetime.now(timezone.utc)
+
+    assert store.get_document(expired.document_id) is None
+    assert store.get_document(fresh.document_id) is not None
+
+
 def test_word_document_builder_resolves_logical_table_styles():
     assert WordDocumentBuilder._resolve_docx_table_style("report_grid") == "Table Grid"
     assert (
@@ -480,6 +494,56 @@ def test_word_document_builder_resolves_logical_table_styles():
     )
     assert WordDocumentBuilder._resolve_docx_table_style("minimal") == "Table Grid"
     assert WordDocumentBuilder._resolve_docx_table_style("") == "Table Grid"
+    assert (
+        WordDocumentBuilder._resolve_docx_table_style("custom_style") == "custom_style"
+    )
+
+
+@pytest.mark.asyncio
+async def test_document_toolset_falls_back_when_metrics_table_style_is_missing(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    docx = pytest.importorskip("docx")
+
+    monkeypatch.setitem(DOCX_TABLE_STYLES, "metrics_compact", "Missing Docx Style")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-missing-style")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Missing Style Fallback",
+            output_name="missing-style-fallback.docx",
+            table_template="metrics_compact",
+        )
+    )
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=created["document"]["document_id"],
+        blocks=[
+            {
+                "type": "table",
+                "headers": ["Metric", "Value"],
+                "rows": [["Users", "42"]],
+                "table_style": "metrics_compact",
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    assert exported["success"] is True
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.tables) == 1
+    assert loaded_doc.tables[0].style.name == "Table Grid"
 
 
 def test_document_session_store_expands_summary_card_blocks():

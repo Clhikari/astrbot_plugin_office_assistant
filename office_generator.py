@@ -297,10 +297,19 @@ class OfficeGenerator:
                 )
                 metadata.preferred_filename = file_path.name
                 block_payloads = content.get("blocks", [])
-                blocks = [
-                    self._normalize_document_block_payload(block_payload)
-                    for block_payload in block_payloads
-                ]
+                blocks = []
+                for idx, block_payload in enumerate(block_payloads):
+                    try:
+                        blocks.append(
+                            self._normalize_document_block_payload(block_payload)
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            "[文件生成器] 跳过无效文档块 index=%s file=%s: %s",
+                            idx,
+                            file_path,
+                            exc,
+                        )
                 return DocumentModel(
                     document_id=str(content.get("document_id") or file_path.stem),
                     session_id=str(content.get("session_id") or ""),
@@ -331,11 +340,20 @@ class OfficeGenerator:
 
         block_type = block_payload.get("type")
         if block_type == "heading":
-            return HeadingBlock.model_validate(block_payload)
+            try:
+                return HeadingBlock.model_validate(block_payload)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid heading block: {exc}") from exc
         if block_type == "paragraph":
-            return ParagraphBlock.model_validate(block_payload)
+            try:
+                return ParagraphBlock.model_validate(block_payload)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid paragraph block: {exc}") from exc
         if block_type == "table":
-            return TableBlock.model_validate(block_payload)
+            try:
+                return TableBlock.model_validate(block_payload)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid table block: {exc}") from exc
 
         raise ValueError(f"Unsupported document block type: {block_type}")
 
