@@ -7,10 +7,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..mcp_server.session_store import DocumentSessionStore
 from .document_tools import (
-    AddHeadingTool,
-    AddParagraphTool,
-    AddSummaryCardTool,
-    AddTableTool,
+    AddBlocksTool,
     CreateDocumentTool,
     ExportDocumentTool,
     FinalizeDocumentTool,
@@ -27,10 +24,7 @@ def build_document_toolset(
     return ToolSet(
         [
             CreateDocumentTool(store=store),
-            AddHeadingTool(store=store),
-            AddParagraphTool(store=store),
-            AddTableTool(store=store),
-            AddSummaryCardTool(store=store),
+            AddBlocksTool(store=store),
             FinalizeDocumentTool(store=store),
             ExportDocumentTool(store=store, after_export=after_export),
         ]

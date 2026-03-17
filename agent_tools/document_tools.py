@@ -3,18 +3,14 @@ from collections.abc import Awaitable, Callable
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
+from astrbot import logger
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..document_core.builders.word_builder import WordDocumentBuilder
-from ..document_core.models.document import DocumentStatus
 from ..mcp_server.schemas import (
-    AddHeadingRequest,
-    AddParagraphRequest,
-    AddSectionBundleRequest,
-    AddSummaryCardRequest,
-    AddTableRequest,
+    AddBlocksRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
     ExportDocumentResult,
@@ -33,6 +29,48 @@ _CONTINUE_UNTIL_EXPORT = (
     "Continue calling document tools until all requested sections are added and "
     "export_document succeeds. Do not send a final natural-language reply before export_document."
 )
+_FINALIZE_PROMPT = (
+    "Document finalized. Call export_document now. "
+    "Do not send a final natural-language reply before export_document."
+)
+
+
+_STYLE_SCHEMA = {
+    "type": "object",
+    "description": "Optional block style tokens such as align, emphasis, font_scale, table_grid, or cell_align.",
+    "properties": {
+        "align": {"type": "string"},
+        "emphasis": {"type": "string"},
+        "font_scale": {"type": "number"},
+        "table_grid": {"type": "string"},
+        "cell_align": {"type": "string"},
+    },
+}
+
+_LAYOUT_SCHEMA = {
+    "type": "object",
+    "description": "Optional block layout tokens such as spacing_before and spacing_after.",
+    "properties": {
+        "spacing_before": {"type": "number"},
+        "spacing_after": {"type": "number"},
+    },
+}
+
+_GENERIC_BLOCK_ITEM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": True,
+}
+
+_COLUMN_ITEM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "blocks": {
+            "type": "array",
+            "items": _GENERIC_BLOCK_ITEM_SCHEMA,
+        }
+    },
+}
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -45,7 +83,7 @@ class CreateDocumentTool(DocumentToolBase):
     name: str = "create_document"
     description: str = (
         "Create a draft Word document session and return its document_id. "
-        "Use this before adding headings, paragraphs, tables, or summary cards."
+        "Use this before adding headings, paragraphs, lists, tables, or summary cards."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -86,10 +124,12 @@ class CreateDocumentTool(DocumentToolBase):
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
+        session_id = kwargs.get("session_id")
+        if not session_id and context is not None:
+            event = getattr(getattr(context, "context", None), "event", None)
+            session_id = getattr(event, "unified_msg_origin", "")
         request = CreateDocumentRequest(
-            session_id=str(
-                kwargs.get("session_id") or context.context.event.unified_msg_origin
-            ),
+            session_id=str(session_id or ""),
             title=str(kwargs.get("title") or ""),
             output_name=str(kwargs.get("output_name") or "document.docx"),
             theme_name=str(kwargs.get("theme_name") or "business_report"),
@@ -107,99 +147,13 @@ class CreateDocumentTool(DocumentToolBase):
         )
 
 
-@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
-class AddHeadingTool(DocumentToolBase):
-    name: str = "add_heading"
-    description: str = "Append a heading block to the current draft document."
-    parameters: dict = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Target document_id returned by create_document.",
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Heading text.",
-                },
-                "level": {
-                    "type": "number",
-                    "description": "Heading level from 1 to 6.",
-                },
-            },
-            "required": ["document_id", "text"],
-        }
-    )
-
-    async def call(
-        self, context: ContextWrapper[AstrAgentContext], **kwargs
-    ) -> ToolExecResult:
-        try:
-            request = AddHeadingRequest(
-                document_id=str(kwargs.get("document_id") or ""),
-                text=str(kwargs.get("text") or ""),
-                level=int(kwargs.get("level", 1)),
-            )
-            document = self.store.add_heading(request)
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
-        return _dump_result(
-            ToolResult(
-                success=True,
-                message=f"Heading added. {_CONTINUE_UNTIL_EXPORT}",
-                document=build_document_summary(document),
-            )
-        )
-
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
-class AddParagraphTool(DocumentToolBase):
-    name: str = "add_paragraph"
-    description: str = "Append a paragraph block to the current draft document."
-    parameters: dict = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Target document_id returned by create_document.",
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Paragraph text.",
-                },
-            },
-            "required": ["document_id", "text"],
-        }
-    )
-
-    async def call(
-        self, context: ContextWrapper[AstrAgentContext], **kwargs
-    ) -> ToolExecResult:
-        try:
-            request = AddParagraphRequest(
-                document_id=str(kwargs.get("document_id") or ""),
-                text=str(kwargs.get("text") or ""),
-            )
-            document = self.store.add_paragraph(request)
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
-        return _dump_result(
-            ToolResult(
-                success=True,
-                message=f"Paragraph added. {_CONTINUE_UNTIL_EXPORT}",
-                document=build_document_summary(document),
-            )
-        )
-
-
-@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
-class AddSectionBundleTool(DocumentToolBase):
-    name: str = "add_section_bundle"
+class AddBlocksTool(DocumentToolBase):
+    name: str = "add_blocks"
     description: str = (
-        "Append one complete report section in a single tool call. "
-        "Use this to reduce tool-call count for complex Word reports."
+        "Append one or more blocks in order. Use this for mixed content such as "
+        "heading, paragraph, list, table, summary_card, page_break, group, or columns."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -208,23 +162,21 @@ class AddSectionBundleTool(DocumentToolBase):
                 "document_id": {
                     "type": "string",
                     "description": "Target document_id returned by create_document.",
-                },
-                "heading": {
-                    "type": "string",
-                    "description": "Section heading text.",
-                },
-                "level": {
-                    "type": "number",
-                    "description": "Heading level from 1 to 6. Usually use 1 for report sections.",
                 },
                 "blocks": {
                     "type": "array",
-                    "description": "Ordered section blocks. Each block must declare a type: paragraph, table, or summary_card.",
+                    "description": "Ordered block list. Supported block types: heading, paragraph, list, table, summary_card, page_break, group, columns.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "type": {"type": "string"},
                             "text": {"type": "string"},
+                            "level": {"type": "number"},
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "ordered": {"type": "boolean"},
                             "headers": {
                                 "type": "array",
                                 "items": {"type": "string"},
@@ -238,17 +190,23 @@ class AddSectionBundleTool(DocumentToolBase):
                             },
                             "table_style": {"type": "string"},
                             "title": {"type": "string"},
-                            "items": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
                             "variant": {"type": "string"},
+                            "blocks": {
+                                "type": "array",
+                                "items": _GENERIC_BLOCK_ITEM_SCHEMA,
+                            },
+                            "columns": {
+                                "type": "array",
+                                "items": _COLUMN_ITEM_SCHEMA,
+                            },
+                            "style": _STYLE_SCHEMA,
+                            "layout": _LAYOUT_SCHEMA,
                         },
                         "required": ["type"],
                     },
                 },
             },
-            "required": ["document_id", "heading", "blocks"],
+            "required": ["document_id", "blocks"],
         }
     )
 
@@ -256,136 +214,24 @@ class AddSectionBundleTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         try:
-            request = AddSectionBundleRequest(
+            request = AddBlocksRequest(
                 document_id=str(kwargs.get("document_id") or ""),
-                heading=str(kwargs.get("heading") or ""),
-                level=int(kwargs.get("level", 1)),
                 blocks=list(kwargs.get("blocks") or []),
             )
-            document = self.store.add_section_bundle(request)
+            document = self.store.add_blocks(request)
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
         return _dump_result(
             ToolResult(
                 success=True,
-                message=f"Section bundle added. {_CONTINUE_UNTIL_EXPORT}",
+                message=f"Blocks added. {_CONTINUE_UNTIL_EXPORT}",
                 document=build_document_summary(document),
             )
         )
 
 
-@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
-class AddTableTool(DocumentToolBase):
-    name: str = "add_table"
-    description: str = "Append a table block to the current draft document with an optional style preset."
-    parameters: dict = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Target document_id returned by create_document.",
-                },
-                "headers": {
-                    "type": "array",
-                    "description": "Optional table headers.",
-                    "items": {"type": "string"},
-                },
-                "rows": {
-                    "type": "array",
-                    "description": "Table rows, each item is an array of cell strings.",
-                    "items": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "table_style": {
-                    "type": "string",
-                    "description": "Optional table style preset, e.g. report_grid, metrics_compact, or minimal.",
-                },
-            },
-            "required": ["document_id"],
-        }
-    )
-
-    async def call(
-        self, context: ContextWrapper[AstrAgentContext], **kwargs
-    ) -> ToolExecResult:
-        try:
-            request = AddTableRequest(
-                document_id=str(kwargs.get("document_id") or ""),
-                headers=[str(item) for item in kwargs.get("headers") or []],
-                rows=[
-                    [str(cell) for cell in row]
-                    for row in (kwargs.get("rows") or [])
-                    if isinstance(row, list)
-                ],
-                table_style=str(kwargs.get("table_style") or ""),
-            )
-            document = self.store.add_table(request)
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
-        return _dump_result(
-            ToolResult(
-                success=True,
-                message=f"Table added. {_CONTINUE_UNTIL_EXPORT}",
-                document=build_document_summary(document),
-            )
-        )
 
 
-@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
-class AddSummaryCardTool(DocumentToolBase):
-    name: str = "add_summary_card"
-    description: str = (
-        "Append a summary or conclusion card block to the current draft document."
-    )
-    parameters: dict = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Target document_id returned by create_document.",
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Card title.",
-                },
-                "items": {
-                    "type": "array",
-                    "description": "Card bullet items.",
-                    "items": {"type": "string"},
-                },
-                "variant": {
-                    "type": "string",
-                    "description": "Card variant, use summary or conclusion.",
-                },
-            },
-            "required": ["document_id", "title", "items"],
-        }
-    )
-
-    async def call(
-        self, context: ContextWrapper[AstrAgentContext], **kwargs
-    ) -> ToolExecResult:
-        try:
-            request = AddSummaryCardRequest(
-                document_id=str(kwargs.get("document_id") or ""),
-                title=str(kwargs.get("title") or ""),
-                items=[str(item) for item in kwargs.get("items") or []],
-                variant=str(kwargs.get("variant") or "summary"),
-            )
-            document = self.store.add_summary_card(request)
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
-        return _dump_result(
-            ToolResult(
-                success=True,
-                message=f"Summary card added. {_CONTINUE_UNTIL_EXPORT}",
-                document=build_document_summary(document),
-            )
-        )
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -418,10 +264,7 @@ class FinalizeDocumentTool(DocumentToolBase):
         return _dump_result(
             ToolResult(
                 success=True,
-                message=(
-                    "Document finalized. Call export_document now. "
-                    "Do not send a final natural-language reply before export_document."
-                ),
+                message=_FINALIZE_PROMPT,
                 document=build_document_summary(document),
             )
         )
@@ -469,15 +312,25 @@ class ExportDocumentTool(DocumentToolBase):
             )
             document, output_path = self.store.prepare_export_path(request)
             self.builder.build(document, output_path)
-            document.status = DocumentStatus.EXPORTED
-            document.touch()
-            callback_message = ""
-            if self.after_export is not None and context is not None:
+            document = self.store.complete_export(request.document_id)
+        except Exception as exc:
+            return _dump_result(ToolResult(success=False, message=str(exc)))
+
+        callback_message = ""
+        if self.after_export is not None and context is not None:
+            try:
                 callback_message = (
                     await self.after_export(context, str(output_path)) or ""
                 )
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
+            except Exception as exc:
+                logger.warning(
+                    "[office-assistant] after_export callback failed for %s: %s",
+                    output_path,
+                    exc,
+                )
+                callback_message = (
+                    f"Document exported, but post-export delivery failed: {exc}"
+                )
         return _dump_result(
             ExportDocumentResult(
                 success=True,
@@ -489,11 +342,7 @@ class ExportDocumentTool(DocumentToolBase):
 
 
 __all__ = [
-    "AddHeadingTool",
-    "AddParagraphTool",
-    "AddSectionBundleTool",
-    "AddSummaryCardTool",
-    "AddTableTool",
+    "AddBlocksTool",
     "CreateDocumentTool",
     "ExportDocumentTool",
     "FinalizeDocumentTool",

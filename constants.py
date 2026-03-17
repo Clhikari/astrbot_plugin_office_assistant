@@ -79,14 +79,14 @@ ALL_OFFICE_SUFFIXES = frozenset(SUFFIX_TO_OFFICE_TYPE.keys())
 
 DEFAULT_MAX_FILE_SIZE_MB = 20
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
+# 所有文件类工具名称，用于 before_llm_chat 中的可见性控制。
+# 同步点：@llm_tool(name=...) 定义在 main.py，
+#         document tool 名称定义在 agent_tools/document_tools.py 的 name 字段。
 FILE_TOOLS = [
     "read_file",
     "create_office_file",
     "create_document",
-    "add_heading",
-    "add_paragraph",
-    "add_table",
-    "add_summary_card",
+    "add_blocks",
     "finalize_document",
     "export_document",
     "convert_to_pdf",

@@ -1,7 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 
 from ...document_core.builders.word_builder import WordDocumentBuilder
-from ...document_core.models.document import DocumentStatus
 from ..schemas import (
     ExportDocumentRequest,
     ExportDocumentResult,
@@ -15,7 +14,9 @@ def register_export_document_tool(server: FastMCP, store: DocumentSessionStore) 
 
     @server.tool(
         name="export_document",
-        description="Export the current Word draft to a .docx file and return the file path.",
+        description=(
+            "Export the current Word draft to a .docx file and return the file path."
+        ),
         structured_output=True,
     )
     def export_document(
@@ -30,8 +31,7 @@ def register_export_document_tool(server: FastMCP, store: DocumentSessionStore) 
         )
         document, output_path = store.prepare_export_path(request)
         builder.build(document, output_path)
-        document.status = DocumentStatus.EXPORTED
-        document.touch()
+        document = store.complete_export(request.document_id)
         return ExportDocumentResult(
             success=True,
             message="Document exported.",

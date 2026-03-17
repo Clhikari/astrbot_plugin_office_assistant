@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..document_core.models.blocks import BlockLayout, BlockStyle
 from ..document_core.models.document import DocumentModel
 
 SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
@@ -92,6 +93,18 @@ class AddHeadingRequest(BaseModel):
     document_id: str
     text: str = Field(min_length=1)
     level: int = Field(default=1, ge=1, le=6)
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+
+class BlockHeadingInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["heading"] = "heading"
+    text: str = Field(min_length=1)
+    level: int = Field(default=1, ge=1, le=6)
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
 
 
 class AddParagraphRequest(BaseModel):
@@ -99,6 +112,8 @@ class AddParagraphRequest(BaseModel):
 
     document_id: str
     text: str = Field(min_length=1)
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
 
 
 class SectionParagraphInput(BaseModel):
@@ -106,6 +121,44 @@ class SectionParagraphInput(BaseModel):
 
     type: Literal["paragraph"] = "paragraph"
     text: str = Field(min_length=1)
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+
+class AddListRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    items: list[str] = Field(min_length=1)
+    ordered: bool = False
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator("items")
+    @classmethod
+    def validate_items(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        if not cleaned:
+            raise ValueError("items must contain at least one non-empty item")
+        return cleaned
+
+
+class SectionListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["list"] = "list"
+    items: list[str] = Field(min_length=1)
+    ordered: bool = False
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator("items")
+    @classmethod
+    def validate_items(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        if not cleaned:
+            raise ValueError("items must contain at least one non-empty item")
+        return cleaned
 
 
 class AddTableRequest(BaseModel):
@@ -115,6 +168,8 @@ class AddTableRequest(BaseModel):
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
     table_style: str = ""
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("table_style")
     @classmethod
@@ -132,6 +187,8 @@ class SectionTableInput(BaseModel):
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
     table_style: str = ""
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("table_style")
     @classmethod
@@ -149,6 +206,8 @@ class AddSummaryCardRequest(BaseModel):
     title: str = Field(min_length=1)
     items: list[str] = Field(min_length=1)
     variant: str = "summary"
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("items")
     @classmethod
@@ -172,6 +231,8 @@ class SectionCardInput(BaseModel):
     title: str = Field(min_length=1)
     items: list[str] = Field(min_length=1)
     variant: str = "summary"
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("items")
     @classmethod
@@ -188,10 +249,62 @@ class SectionCardInput(BaseModel):
         return candidate if candidate in SUPPORTED_CARD_VARIANTS else "summary"
 
 
-SectionBundleBlock = Annotated[
-    SectionParagraphInput | SectionTableInput | SectionCardInput,
+class AddPageBreakRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+
+
+class SectionPageBreakInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["page_break"] = "page_break"
+
+
+class BlockGroupInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["group"] = "group"
+    blocks: list[BlockInput] = Field(min_length=1)
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+
+class BlockColumnInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[BlockInput] = Field(min_length=1)
+
+
+class BlockColumnsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["columns"] = "columns"
+    columns: list[BlockColumnInput] = Field(min_length=1, max_length=3)
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+
+BlockInput = Annotated[
+    BlockHeadingInput
+    | SectionParagraphInput
+    | SectionListInput
+    | SectionTableInput
+    | SectionCardInput
+    | SectionPageBreakInput
+    | BlockGroupInput
+    | BlockColumnsInput,
     Field(discriminator="type"),
 ]
+
+SectionBundleBlock = BlockInput
+
+
+class AddBlocksRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    blocks: list[BlockInput] = Field(min_length=1)
 
 
 class AddSectionBundleRequest(BaseModel):
@@ -282,3 +395,8 @@ def build_document_summary(document_model: DocumentModel) -> DocumentSummary:
         density=document_model.metadata.density,
         accent_color=document_model.metadata.accent_color,
     )
+
+
+BlockGroupInput.model_rebuild()
+BlockColumnInput.model_rebuild()
+BlockColumnsInput.model_rebuild()

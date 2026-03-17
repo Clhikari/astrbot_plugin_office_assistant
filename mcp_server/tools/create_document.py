@@ -7,7 +7,10 @@ from ..session_store import DocumentSessionStore
 def register_create_document_tool(server: FastMCP, store: DocumentSessionStore) -> None:
     @server.tool(
         name="create_document",
-        description="Create a draft Word document session and return its document_id.",
+        description=(
+            "Create a draft Word document session and return its document_id. "
+            "Use this before adding headings, paragraphs, lists, tables, or summary cards."
+        ),
         structured_output=True,
     )
     def create_document(

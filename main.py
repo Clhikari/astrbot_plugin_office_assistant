@@ -3,6 +3,7 @@ import importlib
 import shutil
 import tempfile
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -46,6 +47,46 @@ from .utils import (
     format_file_size,
     safe_error_message,
 )
+
+_NOTICE_TOOLS_DENIED = (
+    "\n[System Notice] File/Office/PDF actions are unavailable in this chat."
+    " Say so and suggest private chat or admin enablement."
+    " Do not call file tools or use `astrbot_execute_python`, `astrbot_execute_shell`,"
+    " or `astrbot_execute_ipython` to bypass this restriction."
+)
+
+_NOTICE_DOCUMENT_TOOLS_GUIDE = (
+    "\n[System Notice] For Word documents, use the stateful document tools:"
+    " `create_document(theme_name=..., table_template=..., density=..., accent_color=...)`"
+    " -> `add_blocks(blocks=[...])`"
+    " -> `finalize_document` -> `export_document`."
+    " Prefer one `add_blocks` call per section or logical chunk,"
+    " and only call it again when appending more content."
+    " Prefer theme presets such as `business_report`, `project_review`, or `executive_brief`."
+    " Prefer table presets such as `report_grid`, `metrics_compact`, or `minimal`."
+    " Use `density=compact` for tighter layouts and `accent_color=RRGGBB` for brand accents."
+    " Use block-level `style={align, emphasis, font_scale, table_grid, cell_align}`"
+    " and `layout={spacing_before, spacing_after}` tokens when presets are not enough."
+    " Once any document tool has been used, do not stop with a normal assistant reply"
+    " while the document is still draft or finalized."
+    " Continue calling document tools until `export_document` succeeds."
+    " `export_document` sends the file."
+    " If the user request depends on uploaded readable files,"
+    " call `read_file` before `create_document` or `create_office_file`."
+    " Use `create_office_file` only for simple one-shot output (Excel/PPT)."
+)
+
+_NOTICE_UPLOADED_FILE_TEMPLATE = (
+    "\n[System Notice] Received an uploaded {type_desc}: {original_name} (suffix: {file_suffix})."
+    " Stored in workspace."
+    " If the user request depends on this uploaded file,"
+    " call `read_file` before `create_document` or `create_office_file`."
+    " Do not create a new document before reading the uploaded source at least once."
+    " Ask the user what they want before calling tools only when the task is still unclear."
+    " For complex Word output, prefer the stateful document tools over `create_office_file`."
+)
+
+_MSG_DOCUMENT_EXPORTED = "✅ 文档已导出"
 
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
 _on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
@@ -216,12 +257,14 @@ class FileOperationPlugin(Star):
                 + "\n".join(file_info_list)
                 + f"\n\nUser instruction: {user_instruction}"
                 + "\n\nUse `read_file` first, then continue from the instruction."
+                + " Do not create a new document before reading the uploaded source."
             )
         elif has_readable_file:
             prompt_text = (
                 f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + "\n\nUse `read_file` now. No clear instruction yet, so ask a follow-up after reading."
+                + "\n\nUse `read_file` now. Do not create a new document before reading the uploaded source."
+                + " No clear instruction yet, so ask a follow-up after reading."
             )
         else:
             prompt_text = (
@@ -670,10 +713,17 @@ class FileOperationPlugin(Star):
         if not file_path.exists():
             return f"Document exported to {output_path}, but the file does not exist."
 
+        return await self._send_exported_document(context.context.event, file_path)
+
+    async def _send_exported_document(
+        self, event: AstrMessageEvent, file_path: Path
+    ) -> str:
+        if not file_path.exists():
+            return f"Document exported to {file_path}, but the file does not exist."
         await self._send_file_with_preview(
-            context.context.event,
+            event,
             file_path,
-            "✅ 已生成复杂 Word 文档",
+            _MSG_DOCUMENT_EXPORTED,
         )
         return f"Document exported and sent to the user: {file_path.name}"
 
@@ -824,18 +874,12 @@ class FileOperationPlugin(Star):
         """动态控制工具可见性"""
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
-        denied_notice = (
-            "\n[System Notice] File/Office/PDF actions are unavailable in this chat."
-            " Say so and suggest private chat or admin enablement."
-            " Do not call file tools or use `astrbot_execute_python`, `astrbot_execute_shell`,"
-            " or `astrbot_execute_ipython` to bypass this restriction."
-        )
 
         if not self._is_group_feature_enabled(event):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
-            req.system_prompt = (req.system_prompt or "") + denied_notice
+            req.system_prompt = (req.system_prompt or "") + _NOTICE_TOOLS_DENIED
             logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
             return
 
@@ -864,7 +908,7 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
-            req.system_prompt = (req.system_prompt or "") + denied_notice
+            req.system_prompt = (req.system_prompt or "") + _NOTICE_TOOLS_DENIED
 
         if should_expose and req.func_tool:
             for tool in self._document_toolset.tools:
@@ -877,21 +921,7 @@ class FileOperationPlugin(Star):
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
 
         if should_expose:
-            req.system_prompt = (req.system_prompt or "") + (
-                "\n[System Notice] For complex Word docs, use the stateful document tools:"
-                "`create_document(theme_name=..., table_template=..., density=..., accent_color=...)`"
-                " -> use `add_heading` / `add_paragraph` / `add_table(table_style=...)`"
-                " / `add_summary_card` for fine-grained control "
-                "-> `finalize_document` -> `export_document`."
-                " Prefer theme presets such as `business_report`, `project_review`, or `executive_brief`."
-                " Prefer table presets such as `report_grid`, `metrics_compact`, or `minimal`."
-                " Use `density=compact` for tighter layouts and `accent_color=RRGGBB` for brand accents."
-                " Use `variant=conclusion` when the summary card should feel like a closing takeaway."
-                " Once any document tool has been used, do not stop with a normal assistant reply while the document is still draft or finalized."
-                " Continue calling document tools until `export_document` succeeds."
-                " `export_document` sends the file."
-                " Use `create_office_file` only for simple one-shot output."
-            )
+            req.system_prompt = (req.system_prompt or "") + _NOTICE_DOCUMENT_TOOLS_GUIDE
 
         # 文件入库不依赖“是否@机器人”，只依赖权限，避免群聊先传文件后触发工具时文件丢失
         if not can_process_upload:
@@ -928,11 +958,10 @@ class FileOperationPlugin(Star):
                     )
                     continue
 
-                prompt = (
-                    f"\n[System Notice] Received an uploaded {type_desc}: {original_name} (suffix: {file_suffix})."
-                    " Stored in workspace. Use `read_file` if needed."
-                    " Ask the user what they want before calling tools."
-                    " For complex Word output, prefer the stateful document tools over `create_office_file`."
+                prompt = _NOTICE_UPLOADED_FILE_TEMPLATE.format(
+                    type_desc=type_desc,
+                    original_name=original_name,
+                    file_suffix=file_suffix,
                 )
 
                 req.system_prompt = (req.system_prompt or "") + prompt
@@ -1022,10 +1051,13 @@ class FileOperationPlugin(Star):
     ):
         """Create an Office file (Excel/Word/PowerPoint) and send it to the user.
 
+        .. deprecated::
+            For Word documents, use the stateful document tools instead:
+            ``create_document`` -> ``add_blocks`` -> ``finalize_document`` -> ``export_document``.
+            This tool will be removed in a future version. Only use it for simple
+            one-shot Excel/PPT output.
+
         Only basic content is supported. Advanced styles, charts, and complex layouts are not supported.
-        For complex Word documents, prefer the stateful document tools:
-        `create_document`, `add_heading`, `add_paragraph`, `add_table`,
-        `finalize_document`, and `export_document`.
 
         Content format:
         - Excel: use `|` to split cells and newline to split rows, e.g. `Name|Age\\nAlice|25`
@@ -1037,6 +1069,12 @@ class FileOperationPlugin(Star):
             content(string): File content in the format above.
             file_type(string): Fallback type (word/excel/powerpoint) when filename has no extension.
         """
+        warnings.warn(
+            "create_office_file is deprecated for Word documents. "
+            "Use create_document -> add_blocks -> finalize_document -> export_document instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # 统一前置检查（仅检查权限和功能开关，不检查文件）
         ok, _, err = self._pre_check(event, feature_key="enable_office_files")
         if not ok:
