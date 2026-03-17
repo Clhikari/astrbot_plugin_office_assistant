@@ -541,10 +541,20 @@ class WordDocumentBuilder:
         return "".join(f"{channel:02X}" for channel in blended)
 
     def _add_image(self, doc: WordDocument, block: ImageBlock) -> None:
+        from docx.shared import Inches
+
         image_path = Path(block.path)
         if not image_path.exists():
             return
-        doc.add_picture(str(image_path))
+        section = doc.sections[0]
+        max_width = section.page_width - section.left_margin - section.right_margin
+        picture = doc.add_picture(str(image_path))
+
+        if block.width_px is not None:
+            picture.width = min(Inches(block.width_px / 96.0), max_width)
+        elif picture.width > max_width:
+            picture.width = max_width
+
         if block.caption:
             doc.add_paragraph(block.caption)
 

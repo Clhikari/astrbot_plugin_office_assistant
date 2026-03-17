@@ -28,6 +28,10 @@ from .constants import (
     DEFAULT_MAX_FILE_SIZE_MB,
     EXECUTION_TOOLS,
     FILE_TOOLS,
+    MSG_DOCUMENT_EXPORTED,
+    NOTICE_DOCUMENT_TOOLS_GUIDE,
+    NOTICE_TOOLS_DENIED,
+    NOTICE_UPLOADED_FILE_TEMPLATE,
     OFFICE_LIBS,
     OFFICE_TYPE_MAP,
     PDF_SUFFIX,
@@ -47,46 +51,6 @@ from .utils import (
     format_file_size,
     safe_error_message,
 )
-
-_NOTICE_TOOLS_DENIED = (
-    "\n[System Notice] File/Office/PDF actions are unavailable in this chat."
-    " Say so and suggest private chat or admin enablement."
-    " Do not call file tools or use `astrbot_execute_python`, `astrbot_execute_shell`,"
-    " or `astrbot_execute_ipython` to bypass this restriction."
-)
-
-_NOTICE_DOCUMENT_TOOLS_GUIDE = (
-    "\n[System Notice] For Word documents, use the stateful document tools:"
-    " `create_document(theme_name=..., table_template=..., density=..., accent_color=...)`"
-    " -> `add_blocks(blocks=[...])`"
-    " -> `finalize_document` -> `export_document`."
-    " Prefer one `add_blocks` call per section or logical chunk,"
-    " and only call it again when appending more content."
-    " Prefer theme presets such as `business_report`, `project_review`, or `executive_brief`."
-    " Prefer table presets such as `report_grid`, `metrics_compact`, or `minimal`."
-    " Use `density=compact` for tighter layouts and `accent_color=RRGGBB` for brand accents."
-    " Use block-level `style={align, emphasis, font_scale, table_grid, cell_align}`"
-    " and `layout={spacing_before, spacing_after}` tokens when presets are not enough."
-    " Once any document tool has been used, do not stop with a normal assistant reply"
-    " while the document is still draft or finalized."
-    " Continue calling document tools until `export_document` succeeds."
-    " `export_document` sends the file."
-    " If the user request depends on uploaded readable files,"
-    " call `read_file` before `create_document` or `create_office_file`."
-    " Use `create_office_file` only for simple one-shot output (Excel/PPT)."
-)
-
-_NOTICE_UPLOADED_FILE_TEMPLATE = (
-    "\n[System Notice] Received an uploaded {type_desc}: {original_name} (suffix: {file_suffix})."
-    " Stored in workspace."
-    " If the user request depends on this uploaded file,"
-    " call `read_file` before `create_document` or `create_office_file`."
-    " Do not create a new document before reading the uploaded source at least once."
-    " Ask the user what they want before calling tools only when the task is still unclear."
-    " For complex Word output, prefer the stateful document tools over `create_office_file`."
-)
-
-_MSG_DOCUMENT_EXPORTED = "✅ 文档已导出"
 
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
 _on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
@@ -723,7 +687,7 @@ class FileOperationPlugin(Star):
         await self._send_file_with_preview(
             event,
             file_path,
-            _MSG_DOCUMENT_EXPORTED,
+            MSG_DOCUMENT_EXPORTED,
         )
         return f"Document exported and sent to the user: {file_path.name}"
 
@@ -879,7 +843,7 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
-            req.system_prompt = (req.system_prompt or "") + _NOTICE_TOOLS_DENIED
+            req.system_prompt = (req.system_prompt or "") + NOTICE_TOOLS_DENIED
             logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
             return
 
@@ -908,7 +872,7 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
-            req.system_prompt = (req.system_prompt or "") + _NOTICE_TOOLS_DENIED
+            req.system_prompt = (req.system_prompt or "") + NOTICE_TOOLS_DENIED
 
         if should_expose and req.func_tool:
             for tool in self._document_toolset.tools:
@@ -921,7 +885,7 @@ class FileOperationPlugin(Star):
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
 
         if should_expose:
-            req.system_prompt = (req.system_prompt or "") + _NOTICE_DOCUMENT_TOOLS_GUIDE
+            req.system_prompt = (req.system_prompt or "") + NOTICE_DOCUMENT_TOOLS_GUIDE
 
         # 文件入库不依赖“是否@机器人”，只依赖权限，避免群聊先传文件后触发工具时文件丢失
         if not can_process_upload:
@@ -958,7 +922,7 @@ class FileOperationPlugin(Star):
                     )
                     continue
 
-                prompt = _NOTICE_UPLOADED_FILE_TEMPLATE.format(
+                prompt = NOTICE_UPLOADED_FILE_TEMPLATE.format(
                     type_desc=type_desc,
                     original_name=original_name,
                     file_suffix=file_suffix,

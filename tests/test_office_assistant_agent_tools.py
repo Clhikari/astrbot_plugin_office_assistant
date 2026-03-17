@@ -1,5 +1,7 @@
 import json
+import struct
 import tempfile
+import zlib
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -56,6 +58,26 @@ def _make_workspace(workspace_root: Path, name: str) -> Path:
     workspace_dir = workspace_root / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     return workspace_dir
+
+
+def _write_png(path: Path, *, width: int, height: int) -> None:
+    def chunk(chunk_type: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + chunk_type
+            + data
+            + struct.pack(">I", zlib.crc32(chunk_type + data) & 0xFFFFFFFF)
+        )
+
+    scanline = b"\x00" + (b"\xFF\x66\x33" * width)
+    raw = scanline * height
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
 
 
 def test_build_document_toolset_uses_shared_store_and_default_workspace():
@@ -497,6 +519,48 @@ def test_word_document_builder_resolves_logical_table_styles():
     assert (
         WordDocumentBuilder._resolve_docx_table_style("custom_style") == "custom_style"
     )
+
+
+def test_word_document_builder_uses_image_width_px_with_page_cap(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.shared import Inches
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-image-width")
+    image_path = workspace_dir / "wide.png"
+    output_path = workspace_dir / "image-width.docx"
+    _write_png(image_path, width=2000, height=400)
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import ImageBlock
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="image-width-test",
+        metadata=DocumentMetadata(title="Image Width"),
+        blocks=[
+            ImageBlock(
+                path=str(image_path),
+                width_px=1600,
+                caption="Image caption",
+            )
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.inline_shapes) == 1
+    max_width = (
+        loaded_doc.sections[0].page_width
+        - loaded_doc.sections[0].left_margin
+        - loaded_doc.sections[0].right_margin
+    )
+    assert loaded_doc.inline_shapes[0].width == min(Inches(1600 / 96.0), max_width)
+    assert "Image caption" in [paragraph.text for paragraph in loaded_doc.paragraphs]
 
 
 @pytest.mark.asyncio
