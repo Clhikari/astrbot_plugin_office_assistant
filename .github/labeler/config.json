@@ -19,11 +19,12 @@
     { "name": "priority:p1", "color": "d93f0b", "description": "High priority" },
     { "name": "priority:p2", "color": "fbca04", "description": "Medium priority" },
     { "name": "priority:p3", "color": "0e8a16", "description": "Low priority" },
-    { "name": "size:xs", "color": "c2e0c6", "description": "Tiny issue" },
-    { "name": "size:s", "color": "7fd67f", "description": "Small issue" },
-    { "name": "size:m", "color": "fbca04", "description": "Medium issue" },
-    { "name": "size:l", "color": "f9d0c4", "description": "Large issue" },
-    { "name": "size:xl", "color": "b60205", "description": "Extra large issue" },
+    { "name": "size:XS", "color": "c2e0c6", "description": "Tiny issue" },
+    { "name": "size:S", "color": "7fd67f", "description": "Small issue" },
+    { "name": "size:M", "color": "fbca04", "description": "Medium issue" },
+    { "name": "size:L", "color": "f9d0c4", "description": "Large issue" },
+    { "name": "size:XL", "color": "d93f0b", "description": "Extra large issue" },
+    { "name": "size:XXL", "color": "b60205", "description": "Huge issue" },
     { "name": "type:refactor", "color": "bfd4f2", "description": "Refactor related" },
     { "name": "type:chore", "color": "d4c5f9", "description": "Maintenance related" },
     { "name": "type:performance", "color": "fef2c0", "description": "Performance related" }
@@ -141,11 +142,12 @@
       "README.*(需要|缺失|过期|不一致)"
     ],
     "size_by_body_length": [
-      { "max": 120, "label": "size:xs" },
-      { "max": 400, "label": "size:s" },
-      { "max": 1000, "label": "size:m" },
-      { "max": 2500, "label": "size:l" },
-      { "max": 1000000000, "label": "size:xl" }
+      { "max": 80, "label": "size:XS" },
+      { "max": 240, "label": "size:S" },
+      { "max": 700, "label": "size:M" },
+      { "max": 1600, "label": "size:L" },
+      { "max": 3200, "label": "size:XL" },
+      { "max": 1000000000, "label": "size:XXL" }
     ]
   },
   "pr": {
@@ -203,11 +205,12 @@
     "doc_exempt_path_patterns": ["^tests?/", "^test/", "^\\.github/workflows/", "^\\.github/actions/", "^docs/", "(^|/)readme(\\.|$)", "\\.md$"],
     "need_doc_min_changes": 80,
     "size_by_changed_lines": [
-      { "max": 30, "label": "size:xs" },
-      { "max": 120, "label": "size:s" },
-      { "max": 400, "label": "size:m" },
-      { "max": 1000, "label": "size:l" },
-      { "max": 1000000000, "label": "size:xl" }
+      { "max": 20, "label": "size:XS" },
+      { "max": 80, "label": "size:S" },
+      { "max": 250, "label": "size:M" },
+      { "max": 700, "label": "size:L" },
+      { "max": 1500, "label": "size:XL" },
+      { "max": 1000000000, "label": "size:XXL" }
     ]
   }
 }

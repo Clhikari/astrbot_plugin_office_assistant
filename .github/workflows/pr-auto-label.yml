@@ -140,7 +140,7 @@ jobs:
                 ? "need-update-doc"
                 : null;
 
-            let sizeLabel = "size:m";
+            let sizeLabel = "size:M";
             for (const rule of sizeRules) {
               if (totalChanges <= Number(rule.max)) {
                 sizeLabel = rule.label;

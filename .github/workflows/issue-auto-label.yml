@@ -104,7 +104,7 @@ jobs:
               }
             }
 
-            let sizeLabel = "size:m";
+            let sizeLabel = "size:M";
             for (const rule of sizeRules) {
               if (bodyLength <= Number(rule.max)) {
                 sizeLabel = rule.label;
