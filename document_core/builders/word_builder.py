@@ -87,14 +87,20 @@ class WordDocumentBuilder:
         if document_model.metadata.title:
             self._add_title(doc, document_model.metadata.title, theme)
 
+        workspace_dir = output_path.parent.resolve()
         for block in document_model.blocks:
-            self._append_block(doc, block, theme, document_model)
+            self._append_block(doc, block, theme, document_model, workspace_dir)
 
         doc.save(str(output_path))
         return output_path
 
     def _append_block(
-        self, doc: WordDocument, block, theme: dict, document_model: DocumentModel
+        self,
+        doc: WordDocument,
+        block,
+        theme: dict,
+        document_model: DocumentModel,
+        workspace_dir: Path,
     ) -> None:
         if isinstance(block, HeadingBlock):
             self._add_heading(doc, block, theme)
@@ -105,11 +111,11 @@ class WordDocumentBuilder:
         elif isinstance(block, TableBlock):
             self._add_table(doc, block, theme, document_model)
         elif isinstance(block, ImageBlock):
-            self._add_image(doc, block)
+            self._add_image(doc, block, workspace_dir)
         elif isinstance(block, GroupBlock):
-            self._add_group(doc, block, theme, document_model)
+            self._add_group(doc, block, theme, document_model, workspace_dir)
         elif isinstance(block, ColumnsBlock):
-            self._add_columns(doc, block, theme, document_model)
+            self._add_columns(doc, block, theme, document_model, workspace_dir)
         elif isinstance(block, PageBreakBlock):
             self._add_page_break(doc)
         elif SummaryCardBlock is not None and isinstance(block, SummaryCardBlock):
@@ -118,6 +124,7 @@ class WordDocumentBuilder:
                 expand_summary_card_block(block),
                 theme,
                 document_model,
+                workspace_dir,
             )
 
     def _resolve_theme(self, document_model: DocumentModel) -> dict:
@@ -460,9 +467,10 @@ class WordDocumentBuilder:
         block: GroupBlock,
         theme: dict,
         document_model: DocumentModel,
+        workspace_dir: Path,
     ) -> None:
         for child in block.blocks:
-            self._append_block(doc, child, theme, document_model)
+            self._append_block(doc, child, theme, document_model, workspace_dir)
 
     def _add_columns(
         self,
@@ -470,6 +478,7 @@ class WordDocumentBuilder:
         block: ColumnsBlock,
         theme: dict,
         document_model: DocumentModel,
+        workspace_dir: Path,
     ) -> None:
         # Word multi-column layout requires section-level changes. For now we
         # keep the primitive in the model and render it sequentially as a safe
@@ -478,7 +487,7 @@ class WordDocumentBuilder:
             if column_index > 0:
                 doc.add_paragraph("")
             for child in column.blocks:
-                self._append_block(doc, child, theme, document_model)
+                self._append_block(doc, child, theme, document_model, workspace_dir)
 
     @staticmethod
     def _add_page_break(doc: WordDocument) -> None:
@@ -540,11 +549,13 @@ class WordDocumentBuilder:
         ]
         return "".join(f"{channel:02X}" for channel in blended)
 
-    def _add_image(self, doc: WordDocument, block: ImageBlock) -> None:
+    def _add_image(
+        self, doc: WordDocument, block: ImageBlock, workspace_dir: Path
+    ) -> None:
         from docx.shared import Inches
 
-        image_path = Path(block.path)
-        if not image_path.exists():
+        image_path = self._resolve_workspace_image_path(block.path, workspace_dir)
+        if image_path is None:
             return
         section = doc.sections[0]
         max_width = section.page_width - section.left_margin - section.right_margin
@@ -557,6 +568,23 @@ class WordDocumentBuilder:
 
         if block.caption:
             doc.add_paragraph(block.caption)
+
+    @staticmethod
+    def _resolve_workspace_image_path(
+        path_value: str, workspace_dir: Path
+    ) -> Path | None:
+        workspace_root = workspace_dir.resolve()
+        candidate = Path(path_value)
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+
+        resolved_candidate = candidate.resolve(strict=False)
+        try:
+            resolved_candidate.relative_to(workspace_root)
+        except ValueError:
+            return None
+
+        return resolved_candidate if resolved_candidate.is_file() else None
 
     @staticmethod
     def _resolved_spacing(value: float | None, default: float) -> float:

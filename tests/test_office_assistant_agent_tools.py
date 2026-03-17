@@ -563,6 +563,41 @@ def test_word_document_builder_uses_image_width_px_with_page_cap(
     assert "Image caption" in [paragraph.text for paragraph in loaded_doc.paragraphs]
 
 
+def test_word_document_builder_skips_images_outside_workspace(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-image-sandbox")
+    external_dir = _make_workspace(workspace_root, "pytest-agent-tools-image-external")
+    external_image_path = external_dir / "outside.png"
+    output_path = workspace_dir / "image-sandbox.docx"
+    _write_png(external_image_path, width=400, height=200)
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import ImageBlock
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="image-sandbox-test",
+        metadata=DocumentMetadata(title="Image Sandbox"),
+        blocks=[
+            ImageBlock(
+                path=str(external_image_path),
+                caption="Should be skipped",
+            )
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.inline_shapes) == 0
+    assert "Should be skipped" not in [paragraph.text for paragraph in loaded_doc.paragraphs]
+
+
 @pytest.mark.asyncio
 async def test_document_toolset_falls_back_when_metrics_table_style_is_missing(
     workspace_root: Path, monkeypatch: pytest.MonkeyPatch
