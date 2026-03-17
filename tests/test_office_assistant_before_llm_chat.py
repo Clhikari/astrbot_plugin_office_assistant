@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,6 +10,9 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 from data.plugins.plugin_upload_astrbot_plugin_office_assistant.main import (
     FileOperationPlugin,
+)
+from data.plugins.plugin_upload_astrbot_plugin_office_assistant.message_buffer import (
+    BufferedMessage,
 )
 
 
@@ -48,7 +51,11 @@ def _build_event(
     event = MagicMock()
     event.message_obj = SimpleNamespace(type=message_type, message=[], self_id="bot-1")
     event.get_sender_id.return_value = sender_id
+    event.get_platform_id.return_value = "platform-1"
     event.is_admin.return_value = is_admin
+    event.unified_msg_origin = "session-1"
+    event.message_str = ""
+    event._buffer_reentry_count = 0
     return event
 
 
@@ -221,5 +228,53 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
             "Do not create a new document before reading the uploaded source at least once."
             in req.system_prompt
         )
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_remember_recent_text_skips_system_notice_messages():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event()
+        session_key = plugin._get_attachment_session_key(event)
+
+        event.message_str = "[System Notice] internal guidance"
+        plugin._remember_recent_text(event)
+        assert session_key not in plugin._recent_text_by_session
+
+        event.message_str = "整理成正式汇报"
+        plugin._remember_recent_text(event)
+        assert plugin._recent_text_by_session[session_key][0] == "整理成正式汇报"
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_buffered_upload_without_prompt_requires_read_file_first():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event()
+        upload = Comp.File(name="report.docx", file="report.docx")
+        buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+        await plugin._on_buffer_complete(buf)
+
+        assert isinstance(event.message_obj.message[0], Comp.Plain)
+        prompt_text = event.message_obj.message[0].text
+        assert "Use `read_file` now." in prompt_text
+        assert (
+            "Do not create a new document before reading the uploaded source."
+            in prompt_text
+        )
+        assert (
+            "No clear instruction yet, so ask a follow-up after reading." in prompt_text
+        )
+        assert event.message_str == prompt_text.strip()
+        event_queue.put.assert_awaited_once_with(event)
     finally:
         await plugin.terminate()

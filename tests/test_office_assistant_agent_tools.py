@@ -1,4 +1,6 @@
 import json
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -40,6 +42,18 @@ def _cell_fill(cell) -> str | None:
     if shd is None:
         return None
     return shd.get(qn("w:fill"))
+
+
+@pytest.fixture
+def workspace_root() -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+        yield Path(temp_dir)
+
+
+def _make_workspace(workspace_root: Path, name: str) -> Path:
+    workspace_dir = workspace_root / f"{name}-{uuid4().hex}"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    return workspace_dir
 
 
 def test_build_document_toolset_uses_shared_store_and_default_workspace():
@@ -95,18 +109,12 @@ async def test_create_document_tool_does_not_stringify_missing_session():
 
 
 @pytest.mark.asyncio
-async def test_document_toolset_smoke_export():
+async def test_document_toolset_smoke_export(workspace_root: Path):
     docx = pytest.importorskip("docx")
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import RGBColor
 
-    plugin_temp_root = (
-        Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_office_assistant"
-    )
-    plugin_temp_root.mkdir(parents=True, exist_ok=True)
-
-    workspace_dir = plugin_temp_root / f"pytest-agent-tools-{uuid4().hex}"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
     tool_by_name = {tool.name: tool for tool in toolset.tools}
 
@@ -217,16 +225,10 @@ async def test_document_toolset_smoke_export():
 
 
 @pytest.mark.asyncio
-async def test_add_blocks_tool_supports_nested_primitives():
+async def test_add_blocks_tool_supports_nested_primitives(workspace_root: Path):
     docx = pytest.importorskip("docx")
 
-    plugin_temp_root = (
-        Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_office_assistant"
-    )
-    plugin_temp_root.mkdir(parents=True, exist_ok=True)
-
-    workspace_dir = plugin_temp_root / f"pytest-agent-add-blocks-{uuid4().hex}"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-add-blocks")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
     tool_by_name = {tool.name: tool for tool in toolset.tools}
 
@@ -301,16 +303,10 @@ async def test_add_blocks_tool_supports_nested_primitives():
 
 
 @pytest.mark.asyncio
-async def test_document_toolset_export_callback_runs():
+async def test_document_toolset_export_callback_runs(workspace_root: Path):
     pytest.importorskip("docx")
 
-    plugin_temp_root = (
-        Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_office_assistant"
-    )
-    plugin_temp_root.mkdir(parents=True, exist_ok=True)
-
-    workspace_dir = plugin_temp_root / f"pytest-agent-tools-callback-{uuid4().hex}"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-callback")
     callback_calls: list[str] = []
 
     async def after_export(_context, output_path: str) -> str:
@@ -345,16 +341,12 @@ async def test_document_toolset_export_callback_runs():
 
 
 @pytest.mark.asyncio
-async def test_export_document_tool_keeps_success_when_callback_fails():
+async def test_export_document_tool_keeps_success_when_callback_fails(
+    workspace_root: Path,
+):
     pytest.importorskip("docx")
 
-    plugin_temp_root = (
-        Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_office_assistant"
-    )
-    plugin_temp_root.mkdir(parents=True, exist_ok=True)
-
-    workspace_dir = plugin_temp_root / f"pytest-agent-tools-callback-fail-{uuid4().hex}"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-callback-fail")
 
     async def after_export(_context, _output_path: str) -> str:
         raise RuntimeError("send failed")
@@ -407,14 +399,8 @@ async def test_mcp_registers_only_core_document_tools():
     assert add_blocks_items["additionalProperties"] is True
 
 
-def test_document_session_store_keeps_exports_inside_workspace():
-    plugin_temp_root = (
-        Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_office_assistant"
-    )
-    plugin_temp_root.mkdir(parents=True, exist_ok=True)
-
-    workspace_dir = plugin_temp_root / f"pytest-agent-tools-paths-{uuid4().hex}"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
+def test_document_session_store_keeps_exports_inside_workspace(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-paths")
     store = DocumentSessionStore(workspace_dir=workspace_dir)
     document = store.create_document(
         CreateDocumentRequest(
