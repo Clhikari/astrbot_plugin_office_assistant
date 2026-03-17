@@ -11,10 +11,14 @@ from data.plugins.plugin_upload_astrbot_plugin_office_assistant.agent_tools impo
 from data.plugins.plugin_upload_astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
+from data.plugins.plugin_upload_astrbot_plugin_office_assistant.document_core.models.blocks import (
+    GroupBlock,
+)
 from data.plugins.plugin_upload_astrbot_plugin_office_assistant.document_core.builders.word_builder import (
     WordDocumentBuilder,
 )
 from data.plugins.plugin_upload_astrbot_plugin_office_assistant.mcp_server.schemas import (
+    AddBlocksRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
 )
@@ -490,3 +494,27 @@ def test_word_document_builder_resolves_logical_table_styles():
     )
     assert WordDocumentBuilder._resolve_docx_table_style("minimal") == "Table Grid"
     assert WordDocumentBuilder._resolve_docx_table_style("") == "Table Grid"
+
+
+def test_document_session_store_expands_summary_card_blocks():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Summary Test"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    assert updated.blocks[0].blocks[0].text == "Conclusion"
+    assert updated.blocks[0].blocks[1].items == ["First takeaway"]

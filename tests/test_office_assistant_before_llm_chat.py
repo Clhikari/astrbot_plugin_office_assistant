@@ -186,16 +186,17 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
+        source_path = Path(__file__).resolve()
         event = _build_event(
             message_type=MessageType.FRIEND_MESSAGE,
             sender_id="user-1",
         )
         event.message_obj.message = [
-            Comp.File(name="source.docx", file="D:/aobo/open_source/AstrBot/README.md"),
+            Comp.File(name="source.docx", file=str(source_path)),
         ]
 
         async def _fake_extract_upload_source(_component):
-            return Path("D:/aobo/open_source/AstrBot/README.md"), "source.docx"
+            return source_path, "source.docx"
 
         plugin._extract_upload_source = _fake_extract_upload_source
         plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source.docx")

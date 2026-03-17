@@ -219,15 +219,17 @@ class DocumentSessionStore:
 
     def _expand_summary_card_block(self, block: SectionCardInput) -> list:
         try:
-            from ..document_core.macros.summary_card import expand_summary_card_blocks
+            from ..document_core.macros import build_summary_card_group
 
-            return expand_summary_card_blocks(
-                title=block.title,
-                items=block.items,
-                variant=block.variant,
-                style=block.style,
-                layout=block.layout,
-            )
+            return [
+                build_summary_card_group(
+                    title=block.title,
+                    items=block.items,
+                    variant=block.variant,
+                    style=block.style,
+                    layout=block.layout,
+                )
+            ]
         except Exception:
             return [
                 SummaryCardBlock(
