@@ -6,11 +6,21 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.message.message_event_result import MessageChain
 
 from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
+from .document_core.builders.word_builder import WordDocumentBuilder
+from .document_core.models.blocks import (
+    DocumentBlock,
+    HeadingBlock,
+    ParagraphBlock,
+    TableBlock,
+)
+from .document_core.models.document import DocumentMetadata, DocumentModel
 
 
 class OfficeGenerator:
@@ -19,6 +29,7 @@ class OfficeGenerator:
     def __init__(self, data_path: Path, executor: ThreadPoolExecutor | None = None):
         self.data_path = data_path
         self.support = self._check_support()
+        self._word_builder = WordDocumentBuilder()
         self._executor = executor  # 使用外部传入的线程池
         self._owns_executor = executor is None  # 标记是否自己管理线程池
         if self._owns_executor:
@@ -259,25 +270,160 @@ class OfficeGenerator:
 
     def _generate_word_sync(self, file_path: Path, content: dict):
         """生成Word文档"""
-        from docx import Document
+        try:
+            document_model = self._build_word_document_model(file_path, content)
+            self._word_builder.build(document_model, file_path)
+        except Exception as exc:
+            logger.warning(
+                f"[文件生成器] Word builder 路径失败，回退到旧版生成逻辑: {exc}"
+            )
+            self._generate_word_legacy_sync(file_path, content)
 
-        doc = Document()
+    def _build_word_document_model(
+        self, file_path: Path, content: dict | DocumentModel
+    ) -> DocumentModel:
+        if isinstance(content, DocumentModel):
+            document_model = content.model_copy(deep=True)
+            document_model.metadata.preferred_filename = file_path.name
+            return document_model
 
-        # 添加标题
-        if "title" in content:
-            title = doc.add_heading(content["title"], 0)
-            title.alignment = 1  # 居中
+        if self._looks_like_document_model_payload(content):
+            try:
+                metadata_data = content.get("metadata", {})
+                metadata = (
+                    metadata_data
+                    if isinstance(metadata_data, DocumentMetadata)
+                    else DocumentMetadata.model_validate(metadata_data)
+                )
+                metadata.preferred_filename = file_path.name
+                block_payloads = content.get("blocks", [])
+                blocks = []
+                for idx, block_payload in enumerate(block_payloads):
+                    try:
+                        blocks.append(
+                            self._normalize_document_block_payload(block_payload)
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            "[文件生成器] 跳过无效文档块 index=%s file=%s: %s",
+                            idx,
+                            file_path,
+                            exc,
+                        )
+                return DocumentModel(
+                    document_id=str(content.get("document_id") or file_path.stem),
+                    session_id=str(content.get("session_id") or ""),
+                    format="word",
+                    status=content.get("status", "draft"),
+                    metadata=metadata,
+                    blocks=blocks,
+                    output_path=str(file_path),
+                )
+            except ValidationError as exc:
+                logger.warning(
+                    f"[文件生成器] 文档块模型校验失败，回退到旧版 Word 内容适配: {exc}"
+                )
 
-        # 添加段落
+        return self._build_legacy_word_document_model(file_path, content)
+
+    def _looks_like_document_model_payload(self, content: dict) -> bool:
+        return isinstance(content, dict) and "blocks" in content
+
+    def _normalize_document_block_payload(
+        self, block_payload: dict | DocumentBlock
+    ) -> DocumentBlock:
+        if isinstance(block_payload, (HeadingBlock, ParagraphBlock, TableBlock)):
+            return block_payload
+
+        if not isinstance(block_payload, dict):
+            raise ValueError("Document block payload must be a dict or block model.")
+
+        block_type = block_payload.get("type")
+        if block_type == "heading":
+            try:
+                return HeadingBlock.model_validate(block_payload)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid heading block: {exc}") from exc
+        if block_type == "paragraph":
+            try:
+                return ParagraphBlock.model_validate(block_payload)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid paragraph block: {exc}") from exc
+        if block_type == "table":
+            try:
+                return TableBlock.model_validate(block_payload)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid table block: {exc}") from exc
+
+        raise ValueError(f"Unsupported document block type: {block_type}")
+
+    def _build_legacy_word_document_model(
+        self, file_path: Path, content: dict
+    ) -> DocumentModel:
+        metadata = DocumentMetadata(
+            title=str(content.get("title", "")),
+            preferred_filename=file_path.name,
+        )
+        blocks: list[DocumentBlock] = []
+
         paragraphs = content.get("paragraphs", [])
         if isinstance(paragraphs, str):
             paragraphs = [paragraphs]
 
         for para_text in paragraphs:
-            if para_text.strip():
-                doc.add_paragraph(para_text)
+            normalized = str(para_text).strip()
+            if normalized:
+                blocks.append(ParagraphBlock(text=normalized))
 
-        # 添加表格（如果有）
+        table_block = self._build_legacy_table_block(content.get("table"))
+        if table_block is not None:
+            blocks.append(table_block)
+
+        return DocumentModel(
+            document_id=file_path.stem,
+            format="word",
+            metadata=metadata,
+            blocks=blocks,
+            output_path=str(file_path),
+        )
+
+    def _build_legacy_table_block(self, table_data: object) -> TableBlock | None:
+        if not isinstance(table_data, list) or not table_data:
+            return None
+
+        normalized_rows: list[list[str]] = []
+        for row in table_data:
+            if isinstance(row, list):
+                normalized_rows.append(
+                    ["" if cell is None else str(cell) for cell in row]
+                )
+            else:
+                normalized_rows.append([str(row)])
+
+        if not normalized_rows:
+            return None
+
+        headers = normalized_rows[0]
+        body_rows = normalized_rows[1:] if len(normalized_rows) > 1 else []
+        return TableBlock(headers=headers, rows=body_rows)
+
+    def _generate_word_legacy_sync(self, file_path: Path, content: dict) -> None:
+        from docx import Document
+
+        doc = Document()
+
+        if "title" in content:
+            title = doc.add_heading(content["title"], 0)
+            title.alignment = 1
+
+        paragraphs = content.get("paragraphs", [])
+        if isinstance(paragraphs, str):
+            paragraphs = [paragraphs]
+
+        for para_text in paragraphs:
+            if str(para_text).strip():
+                doc.add_paragraph(str(para_text))
+
         if "table" in content:
             table_data = content["table"]
             if table_data and len(table_data) > 0:

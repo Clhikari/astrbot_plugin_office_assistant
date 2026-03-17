@@ -28,6 +28,40 @@ jobs:
               fs.readFileSync(".github/labeler/config.json", "utf8"),
             );
             const labels = config.labels || [];
+            const legacyLabelRenames = new Map([
+              ["size:xs", "size:XS"],
+              ["size:s", "size:S"],
+              ["size:m", "size:M"],
+              ["size:l", "size:L"],
+              ["size:xl", "size:XL"],
+            ]);
+
+            for (const [oldName, newName] of legacyLabelRenames.entries()) {
+              const target = labels.find((label) => label.name === newName);
+              if (!target) {
+                continue;
+              }
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: oldName,
+                });
+
+                await github.rest.issues.updateLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: oldName,
+                  new_name: newName,
+                  color: target.color,
+                  description: target.description,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
 
             for (const label of labels) {
               try {

@@ -20,6 +20,8 @@
 - [🚀 快速开始](#快速开始)
 - [⚙️ 配置说明](#配置说明)
 - [🛠️ 工具与命令](#工具与命令)
+- [🧭 复杂 Word 工作流](#复杂-word-工作流)
+- [🗺️ 未来规划](#未来规划)
 - [📚 支持的文件格式](#支持的文件格式)
 - [🧱 系统依赖安装](#系统依赖安装)
 - [🐳 Docker 使用建议](#docker-使用建议)
@@ -43,6 +45,8 @@
   - `astrbot_execute_python`
   - `astrbot_execute_ipython`
 - 默认禁止读取工作区外路径；可通过配置开启外部绝对路径读取（仅对 `read_file`/PDF 转换生效）。
+- 复杂 Word 走四步工具链：`create_document → add_blocks → finalize_document → export_document`，一个 `add_blocks` 搞定标题、正文、列表、表格、卡片、分页、分组、分栏。
+- `create_office_file` 还在，但已标记 deprecated；复杂 Word 走四步链更稳。
 
 ---
 
@@ -68,6 +72,23 @@
 ## 配置说明
 
 以下配置均在 AstrBot 管理面板中设置。
+
+先看这几个最常改、最影响体验的项：
+
+| 配置项 | 默认值 | 什么时候改 |
+| --- | --- | --- |
+| `enable_features_in_group` | `false` | 需要在群聊里启用插件时改。 |
+| `require_at_in_group` | `true` | 群聊里不想强制 `@` / 引用机器人时改。 |
+| `auto_block_execution_tools` | `true` | 不希望插件自动隐藏执行类工具时改。 |
+| `allow_external_input_files` | `false` | 需要读取或转换工作区外绝对路径文件时改。 |
+| `enable_pdf_conversion` | `true` | 不需要 Office/PDF 转换能力时改。 |
+| `auto_delete_files` | `true` | 想保留生成文件而不是发送后删除时改。 |
+
+> [!TIP]
+> 如果只是先把插件跑起来，通常只需要关注 `enable_features_in_group`、`require_at_in_group` 和 `allow_external_input_files` 这 3 项。
+
+<details>
+<summary>查看完整配置表</summary>
 
 ### 🔔 触发设置（`trigger_settings`）
 
@@ -112,6 +133,8 @@
 | 启用预览图 (`enable`) | bool | true | 发送 Office/PDF 时尝试发送第一页预览图。 |
 | 预览图分辨率 (`dpi`) | int | 150 | 推荐 100~200。 |
 
+</details>
+
 ---
 
 ## 工具与命令
@@ -121,9 +144,13 @@
 | 工具名 | 作用 |
 | --- | --- |
 | `read_file` | 读取文本、代码、Office、PDF 内容。 |
-| `create_office_file` | 生成 Word / Excel / PowerPoint 文件。 |
-| `convert_to_pdf` | Office -> PDF。 |
-| `convert_from_pdf` | PDF -> Word 或 Excel。 |
+| `create_office_file` | 生成 Word / Excel / PPT（已 deprecated，Word 建议走四步链）。 |
+| `create_document` | 建 Word 草稿会话，定主题、表格模板、密度和强调色。 |
+| `add_blocks` | 往草稿里追加内容块：heading / paragraph / list / table / summary_card / page_break / group / columns。 |
+| `finalize_document` | 草稿定稿。 |
+| `export_document` | 导出 .docx，插件自动发给用户。 |
+| `convert_to_pdf` | Office → PDF。 |
+| `convert_from_pdf` | PDF → Word 或 Excel。 |
 
 ### ⌨️ 插件命令
 
@@ -133,6 +160,144 @@
 | `/delete_file <文件名>` | 兼容别名：`/file_rm`, `/删除文件`（建议优先主命令） | 删除工作区内文件。 |
 | `/fileinfo` | 无 | 查看运行状态、开关状态、工作目录等信息。 |
 | `/pdf_status` | `/pdf状态` | 查看 PDF 转换可用性与缺失依赖。 |
+
+---
+
+## 复杂 Word 工作流
+
+复杂 Word 这条链路，现在已经不是“让模型一次性吐完整篇文档”了。更接近真实使用方式的是：先建一个草稿，再把标题、正文、表格和卡片一点点补进去，最后再导出。
+
+简单说，它更像是在搭一份报告，而不是赌一次大 prompt。
+
+适合拿来做这些东西：
+
+- 管理层汇报材料
+- 经营复盘
+- 周报 / 月报
+- 带标题、正文、表格、列表、摘要卡片的报告型 Word
+
+推荐顺序也很直接：
+
+1. `create_document`：建草稿，把 `theme_name`、`table_template`、`density`、`accent_color` 定好
+2. `add_blocks`：往里塞内容，heading / paragraph / list / table / summary_card / page_break / group / columns 都行，一次调用可以传多个块
+3. `finalize_document`：内容没问题就定稿
+4. `export_document`：导出 `.docx`，插件直接把文件和预览图发出去
+
+流程图：
+
+```
+┌───────────────────────────┐
+│     create_document       │
+│                           │
+│  theme_name               │
+│  table_template           │
+│  density                  │
+│  accent_color             │
+└─────────────┬─────────────┘
+              │
+              ▼
+┌───────────────────────────┐
+│       add_blocks          │◄──┐
+│                           │   │
+│  heading    paragraph     │   │
+│  list       table         │   │ 可多次调用
+│  summary_card             │   │
+│  page_break               │   │
+│  group      columns       │   │
+└─────────────┬─────────────┘   │
+              │ 内容完成        │
+              │─────────────────┘
+              ▼
+┌───────────────────────────┐
+│   finalize_document       │
+│       锁定草稿            │
+└─────────────┬─────────────┘
+              │
+              ▼
+┌───────────────────────────┐
+│    export_document        │
+│  导出 .docx + 自动发送    │
+└───────────────────────────┘
+```
+
+能用的：
+
+- 八种块类型：heading、paragraph、list、table、summary_card、page_break、group、columns
+- 三套主题：`business_report`、`project_review`、`executive_brief`
+- 三套表格样式：`report_grid`、`metrics_compact`、`minimal`
+- 两种密度：`comfortable`、`compact`
+- 强调色覆盖：`accent_color=RRGGBB`
+- 卡片变体：`summary`、`conclusion`
+
+用的时候注意：
+
+- 中途炸了别硬补旧草稿，直接重新来一份更稳
+- 想参考旧版内容，重新上传旧文档，先提取再生成
+
+> [!WARNING]
+> 已知在Gemini预览模型下，复杂 Word 工具链偶尔会遇到 AstrBot core/provider 抛出的空响应异常，例如 `gemini-3-flash-preview` 返回 `candidate.content.parts` 为空，日志里会看到 `API 返回的 candidate.content.parts 为空。`
+>
+> 这不是 Office Assistant 自己的文档状态机逻辑报错，而是底层模型/Provider 的已知不稳定响应。
+>
+> 如果你在复杂 Word 场景里频繁遇到这类报错，建议优先：
+>
+> - 换用更稳定的非gemini模型
+> - 减少一次请求里要求模型完成的内容量
+> - 中断后直接重新生成新文档，而不是硬续旧草稿
+>
+> 当前插件不会在 README 中把它视为“已支持能力的一部分”，它属于底层模型兼容性问题。
+
+> [!TIP]
+> 复杂 Word 工作流提升的主要是“上限”和“可控性”，不是无条件抬高“下限”。
+>
+> 它能让模型在合适的工具链里按步骤构建报告，减少一次性长文本硬生成的失控概率，但如果你的提示本身很模糊，或者模型本身不稳定，最终结果仍然可能一般，甚至继续乱发挥。
+>
+> 想让复杂 Word 的效果更稳，最好把需求说具体，至少明确这些信息：
+>
+> - 文档用途和目标读者
+> - 需要哪些章节
+> - 哪些内容必须用表格、列表或结论卡片表达
+> - 语气是正式汇报、复盘，还是简洁摘要
+> - 是否要求 `business_report`、`project_review`、`executive_brief` 这类风格，以及排版偏紧凑还是偏宽松
+>
+> 这套能力解决的是“模型有能力时能做得更好、更稳”，不是“任何模型、任何随口一句话都能稳定产出高质量复杂 Word”。
+
+还差的：
+
+- 目录自动生成、页眉页脚、分节符
+- 图片块和图文混排
+- 合并单元格、复杂跨列布局
+- 任意局部字体、颜色、边框的自由编辑
+
+---
+
+## 未来规划
+
+这块先把话说直白一点：后面不是一股脑把 Word、Excel、PPT 全堆上，而是按实际价值往前推。
+
+### 📝 Word 下一步
+
+- [ ] 先补“导入已有 Word，再转 Markdown / 结构化文本”的能力。这样中途失败时，不用死磕旧草稿，可以直接重新生成新版
+- [ ] 继续把报告型场景做扎实，比如图片、说明文字、二级 / 三级标题、多表混排
+- [ ] 目录、分页控制、页眉页脚这些版式能力会评估，但不会抢在核心报告能力前面做
+
+### 📊 Excel 规划
+
+- [ ] Excel 不会硬套 Word 这套块模型，后面会单独抽象 `Workbook / Worksheet / Range / Table / Chart`
+- [ ] 目标很明确：多工作表、仪表盘表、图表、列宽、数字格式、条件格式
+- [ ] 更适合经营复盘、预算表、指标追踪、区域 / 行业分析这类结构化表格场景
+
+### 🖼️ PPT 规划
+
+- [ ] PPT 也会单独抽象 `Presentation / Slide / Layout / SlideBlock`
+- [ ] 重点会放在版式和层级，不是连续文档流
+- [ ] 目标能力包括标题页、目录页、结论页、图表页、图文混排页、主题套版
+
+### 🚦 推进顺序
+
+- [ ] 先把 Word 的报告型文档能力做稳
+- [ ] 再推进 Excel 的报表和图表能力
+- [ ] 最后做 PPT 的版式化生成能力
 
 ---
 
@@ -168,7 +333,22 @@
 
 ## 系统依赖安装
 
-> Python 包大多会自动安装。下面是系统层依赖（需手动）。
+> [!NOTE]
+> Python 包大多会自动安装。这里列的是系统层依赖，需要你自己准备。
+
+默认先看这张简洁对照表就够了：
+
+| 平台 | 读取旧 `.doc` | Office -> PDF | 推荐方案 |
+| --- | --- | --- | --- |
+| Windows | `pywin32` | `docx2pdf` 或 LibreOffice | 有 Office 就优先 `docx2pdf`，没有就用 LibreOffice。 |
+| Linux | `antiword` | LibreOffice | 最稳的是 LibreOffice。 |
+| macOS | `antiword` | LibreOffice | Homebrew 安装最省事。 |
+
+> [!TIP]
+> 如果你只关心 PDF 转换是否可用，先执行 `/pdf_status`，缺什么依赖它会直接告诉你。
+
+<details>
+<summary>展开查看各平台安装命令</summary>
 
 ### 🪟 Windows
 
@@ -204,13 +384,29 @@ brew install antiword
 brew install --cask libreoffice
 ```
 
-安装系统依赖后，请重启 AstrBot。
+</details>
+
+> [!TIP]
+> 安装系统依赖后，请重启 AstrBot。
 
 ---
 
 ## Docker 使用建议
 
-### 方案 A：⚡ 进容器安装（快，但不持久）
+默认推荐直接写进 Dockerfile，镜像重建后也不会丢：
+
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    antiword \
+    libreoffice-writer libreoffice-calc libreoffice-impress \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+> [!TIP]
+> 如果你只是临时排查环境问题，再用“进容器安装”会更方便；正式部署还是建议写进镜像。
+
+<details>
+<summary>展开查看临时方案：进容器安装（快，但不持久）</summary>
 
 ```bash
 docker exec -it <容器名> bash
@@ -221,14 +417,7 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 
 容器删除重建后需要重装。
 
-### 方案 B：🧰 写入 Dockerfile（推荐）
-
-```dockerfile
-RUN apt-get update && apt-get install -y \
-    antiword \
-    libreoffice-writer libreoffice-calc libreoffice-impress \
-    && rm -rf /var/lib/apt/lists/*
-```
+</details>
 
 ---
 

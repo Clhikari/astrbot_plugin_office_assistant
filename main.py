@@ -3,6 +3,7 @@ import importlib
 import shutil
 import tempfile
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,20 +13,27 @@ import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, llm_tool, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools
+from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.components import At, Reply
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 
+from .agent_tools import build_document_toolset
 from .constants import (
     ALL_OFFICE_SUFFIXES,
     CONVERTIBLE_TO_PDF,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MAX_FILE_SIZE_MB,
+    EXECUTION_TOOLS,
     FILE_TOOLS,
+    MSG_DOCUMENT_EXPORTED,
+    NOTICE_DOCUMENT_TOOLS_GUIDE,
+    NOTICE_TOOLS_DENIED,
+    NOTICE_UPLOADED_FILE_TEMPLATE,
     OFFICE_LIBS,
     OFFICE_TYPE_MAP,
-    EXECUTION_TOOLS,
     PDF_SUFFIX,
     PDF_TARGET_FORMATS,
     SUFFIX_TO_OFFICE_TYPE,
@@ -127,6 +135,10 @@ class FileOperationPlugin(Star):
         self._office_libs = self._check_office_libs()
         self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
         self._recent_text_last_cleanup_ts = 0.0
+        self._document_toolset = build_document_toolset(
+            workspace_dir=self.plugin_data_path,
+            after_export=self._handle_exported_document_tool,
+        )
 
         # 初始化消息缓冲器
         self._message_buffer = MessageBuffer(wait_seconds=self._buffer_wait)
@@ -205,23 +217,24 @@ class FileOperationPlugin(Star):
         # 构建给 LLM 的提示文本
         if has_readable_file and user_instruction:
             prompt_text = (
-                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + f"\n\n用户指令: {user_instruction}"
-                + "\n\n请使用 `read_file` 工具读取上述文件内容，然后根据用户指令进行处理。"
+                + f"\n\nUser instruction: {user_instruction}"
+                + "\n\nUse `read_file` first, then continue from the instruction."
+                + " Do not create a new document before reading the uploaded source."
             )
         elif has_readable_file:
             prompt_text = (
-                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + "\n\n请立即使用 `read_file` 工具读取上述文件内容。"
-                "\n(注意：用户未提供具体指令，请读取文件后询问用户需要什么帮助)"
+                + "\n\nUse `read_file` now. Do not create a new document before reading the uploaded source."
+                + " No clear instruction yet, so ask a follow-up after reading."
             )
         else:
             prompt_text = (
-                f"\n[系统通知] 用户上传了 {len(file_info_list)} 个文件:\n"
+                f"\n[System Notice] The user uploaded {len(file_info_list)} file(s):\n"
                 + "\n".join(file_info_list)
-                + "\n\n请根据用户需求处理这些文件。"
+                + "\n\nHandle them according to the user request."
             )
 
         # 重构消息链
@@ -464,7 +477,7 @@ class FileOperationPlugin(Star):
         text = str(event.message_str or "").strip()
         if not text:
             return
-        if text.startswith("[系统通知]"):
+        if text.startswith("[System Notice]"):
             return
         now = time.time()
         self._cleanup_recent_text_cache(now)
@@ -657,6 +670,27 @@ class FileOperationPlugin(Star):
             except Exception as del_e:
                 logger.warning(f"[文件管理] 自动删除文件失败: {del_e}")
 
+    async def _handle_exported_document_tool(
+        self, context: ContextWrapper[AstrAgentContext], output_path: str
+    ) -> str | None:
+        file_path = Path(output_path)
+        if not file_path.exists():
+            return f"Document exported to {output_path}, but the file does not exist."
+
+        return await self._send_exported_document(context.context.event, file_path)
+
+    async def _send_exported_document(
+        self, event: AstrMessageEvent, file_path: Path
+    ) -> str:
+        if not file_path.exists():
+            return f"Document exported to {file_path}, but the file does not exist."
+        await self._send_file_with_preview(
+            event,
+            file_path,
+            MSG_DOCUMENT_EXPORTED,
+        )
+        return f"Document exported and sent to the user: {file_path.name}"
+
     async def _read_text_file(
         self, file_path: Path, max_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> str:
@@ -809,6 +843,7 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
+            req.system_prompt = (req.system_prompt or "") + NOTICE_TOOLS_DENIED
             logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
             return
 
@@ -837,12 +872,20 @@ class FileOperationPlugin(Star):
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
+            req.system_prompt = (req.system_prompt or "") + NOTICE_TOOLS_DENIED
+
+        if should_expose and req.func_tool:
+            for tool in self._document_toolset.tools:
+                req.func_tool.add_tool(tool)
 
         # 仅在插件功能实际生效时，按配置屏蔽执行类工具，避免误伤无权限会话。
         if should_expose and req.func_tool and self._auto_block_execution_tools:
             for tool_name in EXECUTION_TOOLS:
                 req.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
+
+        if should_expose:
+            req.system_prompt = (req.system_prompt or "") + NOTICE_DOCUMENT_TOOLS_GUIDE
 
         # 文件入库不依赖“是否@机器人”，只依赖权限，避免群聊先传文件后触发工具时文件丢失
         if not can_process_upload:
@@ -879,13 +922,13 @@ class FileOperationPlugin(Star):
                     )
                     continue
 
-                prompt = (
-                    f"\n[系统通知] 收到用户上传的 {type_desc}: {original_name} (后缀: {file_suffix})。"
-                    f"文件已存入工作区。如果用户需要读取或分析该文件，可使用 `read_file` 工具。"
-                    "请先询问用户想对文件做什么，不要主动调用工具。"
+                prompt = NOTICE_UPLOADED_FILE_TEMPLATE.format(
+                    type_desc=type_desc,
+                    original_name=original_name,
+                    file_suffix=file_suffix,
                 )
 
-                req.system_prompt += prompt
+                req.system_prompt = (req.system_prompt or "") + prompt
                 logger.info(f"[文件管理] 收到文件 {original_name}，已保存。")
             except Exception as e:
                 logger.error(f"[文件管理] 处理上传文件失败: {e}")
@@ -972,6 +1015,12 @@ class FileOperationPlugin(Star):
     ):
         """Create an Office file (Excel/Word/PowerPoint) and send it to the user.
 
+        .. deprecated::
+            For Word documents, use the stateful document tools instead:
+            ``create_document`` -> ``add_blocks`` -> ``finalize_document`` -> ``export_document``.
+            This tool will be removed in a future version. Only use it for simple
+            one-shot Excel/PPT output.
+
         Only basic content is supported. Advanced styles, charts, and complex layouts are not supported.
 
         Content format:
@@ -984,6 +1033,12 @@ class FileOperationPlugin(Star):
             content(string): File content in the format above.
             file_type(string): Fallback type (word/excel/powerpoint) when filename has no extension.
         """
+        warnings.warn(
+            "create_office_file is deprecated for Word documents. "
+            "Use create_document -> add_blocks -> finalize_document -> export_document instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # 统一前置检查（仅检查权限和功能开关，不检查文件）
         ok, _, err = self._pre_check(event, feature_key="enable_office_files")
         if not ok:

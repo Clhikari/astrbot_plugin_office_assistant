@@ -46,10 +46,8 @@ Thumbs.db
 
 # 插件生成的临时文件
 *.tmp
-
-# agent开发相关
 TEST_CHECKLIST.md
+
+# agent相关
 .gitnexus
-CLAUDE.md
 .claude
-AGENTS.md
