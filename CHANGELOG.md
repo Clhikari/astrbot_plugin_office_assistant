@@ -4,35 +4,41 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
-## [Unreleased]
+## [v1.3.0] - 2026-03-17
+
+这个版本的核心目标不是再补几个零散接口，而是把复杂 Word 生成从“一次性输出”升级为“可分步构建、可持续追加、可控导出”的状态化工作流。
 
 ### Added
 
-- 群聊总开关 `enable_features_in_group`，群聊里可以一键关掉插件能力（工具、命令、文件拦截全部静默）。
-- 执行工具屏蔽 `auto_block_execution_tools`，插件生效时自动隐藏 `astrbot_execute_shell` / `astrbot_execute_python` / `astrbot_execute_ipython`。
-- 路径访问 `allow_external_input_files`，可按配置读取或转换工作区外的绝对路径文件（删除仍限工作区内）。
-- 会话级文本缓存与文件消息聚合，优化”先发文件再发指令”的场景衔接。
-- Word 四步工具链 `create_document → add_blocks → finalize_document → export_document`，通过 `add_blocks` 统一添加 heading / paragraph / list / table / summary_card / page_break / group / columns 八种块类型。
-- Word 主题预设（`business_report` / `project_review` / `executive_brief`）、表格模板、密度和强调色参数。
-- Word 导出后自动回传文件。
+- 新增复杂 Word 四步工具链：`create_document -> add_blocks -> finalize_document -> export_document`。
+- 新增统一块模型，`add_blocks` 可按顺序追加 `heading`、`paragraph`、`list`、`table`、`summary_card`、`page_break`、`group`、`columns` 八类内容块。
+- 新增文档会话存储 `DocumentSessionStore`，支持草稿创建、块追加、定稿、导出和导出状态管理。
+- 新增 Word 文档核心模块 `document_core/`，将文档模型、渲染器和卡片宏从主流程中拆分出来。
+- 新增 Word 主题和样式能力，支持 `business_report`、`project_review`、`executive_brief` 三套主题，以及表格模板、密度、强调色等参数。
+- 新增 MCP 文档工具层与 Agent 工具层，复杂 Word 工作流可通过统一协议暴露给上层调用。
+- 新增针对文档工具链、`before_llm_chat` 工具注入逻辑、Office 生成器兼容路径的专项测试。
 
 ### Changed
 
-- 命令名统一为 `/list_files` 和 `/delete_file`，避免跟平台通用命令撞名。
-- 文件上传入库改为安全命名 + 重名自增，减少覆盖风险。
-- `README.md` 重写，补了目录、配置速查、迁移说明和 FAQ。
-- 原来的 `add_heading` / `add_paragraph` / `add_table` / `add_summary_card` 四个独立工具合并为 `add_blocks`，工具链从 7 步收到 4 步。
-- `create_office_file` 标记 deprecated，Word 文档优先走四步链。
-- `before_llm_chat` 里的系统提示字符串提取为模块级常量。
-- Word 渲染器里 5 处硬编码的 `”Microsoft YaHei”` 提取为 `_DEFAULT_FONT_NAME` 常量，主题配置加了 `font_name` 字段。
-- 导出状态转换收进 `DocumentSessionStore.complete_export()`。
-- `_send_orchestrated_document` 重命名为 `_send_exported_document`。
+- 原先的多工具 Word 流程被收敛为四步链路，`add_heading`、`add_paragraph`、`add_table`、`add_summary_card` 等分散能力统一归入 `add_blocks`。
+- `before_llm_chat` 现在会按权限和上下文动态注入文档工具、补充系统提示，并在插件实际生效时自动收敛执行类工具。
+- `create_office_file` 仍保留，但已明确标记为 deprecated；复杂 Word 场景优先走四步工具链，简单一次性输出继续兼容旧入口。
+- `office_generator.py` 现在优先走新的 `DocumentModel + WordDocumentBuilder` 路径，失败时再回退旧版生成逻辑，兼顾新能力和兼容性。
+- 项目目录结构从偏扁平改为分层设计，新增 `agent_tools/`、`document_core/`、`mcp_server/`、`tests/` 等目录，主流程、协议层、文档核心层和测试层职责更清晰。
+- `README.md`、`CHANGELOG.md` 和复杂 Word 相关说明整体重写，文档表述与新工具链保持一致。
 
 ### Fixed
 
-- `EXECUTION_TOOLS` 未导入的运行期异常风险。
-- 执行工具屏蔽范围修正：只在插件功能实际生效时屏蔽，不误伤无权限的会话。
-- `auto_block_execution_tools` 在文档、配置 schema 和代码默认值之间不一致。
+- 修复复杂 Word 导出路径与沙箱路径处理问题，减少导出后文件不可访问或图片路径异常的情况。
+- 修复摘要卡片宏展开错误，避免卡片内容结构异常。
+- 修复文档块容错问题，遇到无效块输入时不再轻易导致整条生成链路失败。
+- 修复文件消息与后续文本消息的衔接处理，改善“先发文件再发指令”的识别稳定性。
+- 修复事件处理优先级带来的插件冲突和文件拦截时序问题。
+
+### Upgrade Notes
+
+- `create_office_file` 目前仍可用于简单 Word/Excel/PPT 生成，但后续复杂 Word 能力将以四步链为主继续演进。
+- 本次版本已经具备明显的能力升级和结构升级，建议作为 `v1.3.0` 发布，而不是继续沿用 `v1.2.x` 补丁版本号。
 
 ## [v1.2.4] - 2026-02-19
 
