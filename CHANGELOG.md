@@ -6,39 +6,38 @@
 
 ## [v1.3.0] - 2026-03-17
 
-这个版本的核心目标不是再补几个零散接口，而是把复杂 Word 生成从“一次性输出”升级为“可分步构建、可持续追加、可控导出”的状态化工作流。
+这一版主要把复杂 Word 的生成方式改成了分步工作流，同时把相关模块拆开，补上了测试，也顺手把一些实现细节理顺了。
 
 ### Added
 
-- 新增复杂 Word 四步工具链：`create_document -> add_blocks -> finalize_document -> export_document`。
-- 新增统一块模型，`add_blocks` 可按顺序追加 `heading`、`paragraph`、`list`、`table`、`summary_card`、`page_break`、`group`、`columns` 八类内容块。
-- 新增文档会话存储 `DocumentSessionStore`，支持草稿创建、块追加、定稿、导出和导出状态管理。
-- 新增 Word 文档核心模块 `document_core/`，将文档模型、渲染器和卡片宏从主流程中拆分出来。
-- 新增 Word 主题和样式能力，支持 `business_report`、`project_review`、`executive_brief` 三套主题，以及表格模板、密度、强调色等参数。
-- 新增 MCP 文档工具层与 Agent 工具层，复杂 Word 工作流可通过统一协议暴露给上层调用。
-- 新增针对文档工具链、`before_llm_chat` 工具注入逻辑、Office 生成器兼容路径的专项测试。
+- 增加复杂 Word 四步工具链：`create_document -> add_blocks -> finalize_document -> export_document`。
+- 增加统一块模型，`add_blocks` 可按顺序追加 `heading`、`paragraph`、`list`、`table`、`summary_card`、`page_break`、`group`、`columns` 八类内容块。
+- 增加文档会话存储 `DocumentSessionStore`，支持草稿创建、块追加、定稿、导出和导出状态管理。
+- 增加 `document_core/`，把文档模型、Word 渲染器和卡片宏单独拆出来。
+- 增加 Word 主题和样式参数，支持 `business_report`、`project_review`、`executive_brief` 三套主题，以及表格模板、密度、强调色等配置。
+- 增加 MCP 文档工具层和 Agent 工具层，复杂 Word 工作流可以通过统一协议暴露给上层调用。
+- 增加针对文档工具链、`before_llm_chat` 工具注入逻辑、Office 生成器兼容路径的专项测试。
 
 ### Changed
 
-- 原先的多工具 Word 流程被收敛为四步链路，`add_heading`、`add_paragraph`、`add_table`、`add_summary_card` 等分散能力统一归入 `add_blocks`。
-- `before_llm_chat` 现在会按权限和上下文动态注入文档工具、补充系统提示，并在插件实际生效时自动收敛执行类工具。
-- `create_office_file` 仍保留，但已明确标记为 deprecated；复杂 Word 场景优先走四步工具链，简单一次性输出继续兼容旧入口。
-- `office_generator.py` 现在优先走新的 `DocumentModel + WordDocumentBuilder` 路径，失败时再回退旧版生成逻辑，兼顾新能力和兼容性。
-- 项目目录结构从偏扁平改为分层设计，新增 `agent_tools/`、`document_core/`、`mcp_server/`、`tests/` 等目录，主流程、协议层、文档核心层和测试层职责更清晰。
-- `README.md`、`CHANGELOG.md` 和复杂 Word 相关说明整体重写，文档表述与新工具链保持一致。
+- 原先分散的 Word 工具调用方式收敛成四步链路，`add_heading`、`add_paragraph`、`add_table`、`add_summary_card` 等能力统一归入 `add_blocks`。
+- `before_llm_chat` 会按权限和上下文动态注入文档工具、补系统提示，并在插件实际生效时自动隐藏执行类工具。
+- `create_office_file` 还保留，但已经标记为 deprecated；复杂 Word 场景改为优先走四步工具链，简单一次性输出继续兼容旧入口。
+- `office_generator.py` 现在优先走新的 `DocumentModel + WordDocumentBuilder` 路径，失败时再回退旧版生成逻辑。
+- 项目目录从偏扁平调整为分层结构，新增 `agent_tools/`、`document_core/`、`mcp_server/`、`tests/` 等目录。
+- `README.md`、`CHANGELOG.md` 和复杂 Word 相关说明同步重写，文档表述与新工具链保持一致。
 
-### Fixed
+### Improved
 
-- 修复复杂 Word 导出路径与沙箱路径处理问题，减少导出后文件不可访问或图片路径异常的情况。
-- 修复摘要卡片宏展开错误，避免卡片内容结构异常。
-- 修复文档块容错问题，遇到无效块输入时不再轻易导致整条生成链路失败。
-- 修复文件消息与后续文本消息的衔接处理，改善“先发文件再发指令”的识别稳定性。
-- 修复事件处理优先级带来的插件冲突和文件拦截时序问题。
+- 调整复杂 Word 导出路径与沙箱路径处理逻辑，减少导出后文件不可访问或图片路径异常的情况。
+- 调整摘要卡片宏展开逻辑，避免卡片内容结构异常。
+- 提高文档块输入的容错性，遇到无效块时不容易把整条链路带崩。
+- 优化文件消息与后续文本消息的衔接处理，改善“先发文件再发指令”的识别稳定性。
+- 调整事件处理优先级，减少插件冲突和文件拦截时序问题。
 
-### Upgrade Notes
+### Notes
 
-- `create_office_file` 目前仍可用于简单 Word/Excel/PPT 生成，但后续复杂 Word 能力将以四步链为主继续演进。
-- 本次版本已经具备明显的能力升级和结构升级，建议作为 `v1.3.0` 发布，而不是继续沿用 `v1.2.x` 补丁版本号。
+- `create_office_file` 目前仍可用于简单 Word/Excel/PPT 生成，复杂 Word 场景建议改走四步工具链。
 
 ## [v1.2.4] - 2026-02-19
 
