@@ -45,9 +45,8 @@
   - `astrbot_execute_python`
   - `astrbot_execute_ipython`
 - 默认禁止读取工作区外路径；可通过配置开启外部绝对路径读取（仅对 `read_file`/PDF 转换生效）。
-- 复杂 Word 已支持状态化多步生成：`create_document -> add_heading/add_paragraph/add_table/add_summary_card -> finalize_document -> export_document`。
-- `create_office_file` 仍保留，但更适合简单一次性文档；复杂 Word 优先走状态化工具链。
-- 当前公开路径已收敛为精细控制，不再对外暴露章节级快捷写入工具。
+- 复杂 Word 走四步工具链：`create_document → add_blocks → finalize_document → export_document`，一个 `add_blocks` 搞定标题、正文、列表、表格、卡片、分页、分组、分栏。
+- `create_office_file` 还在，但已标记 deprecated；复杂 Word 走四步链更稳。
 
 ---
 
@@ -145,16 +144,13 @@
 | 工具名 | 作用 |
 | --- | --- |
 | `read_file` | 读取文本、代码、Office、PDF 内容。 |
-| `create_office_file` | 生成 Word / Excel / PowerPoint 文件。 |
-| `create_document` | 创建复杂 Word 草稿会话，支持主题、表格模板、密度和强调色。 |
-| `add_heading` | 向复杂 Word 草稿追加标题块。 |
-| `add_paragraph` | 向复杂 Word 草稿追加正文段落。 |
-| `add_table` | 向复杂 Word 草稿追加表格，并可指定表格样式。 |
-| `add_summary_card` | 向复杂 Word 草稿追加摘要/结论卡片。 |
-| `finalize_document` | 将复杂 Word 草稿标记为定稿。 |
-| `export_document` | 导出复杂 Word，并由插件直接发送给用户。 |
-| `convert_to_pdf` | Office -> PDF。 |
-| `convert_from_pdf` | PDF -> Word 或 Excel。 |
+| `create_office_file` | 生成 Word / Excel / PPT（已 deprecated，Word 建议走四步链）。 |
+| `create_document` | 建 Word 草稿会话，定主题、表格模板、密度和强调色。 |
+| `add_blocks` | 往草稿里追加内容块：heading / paragraph / list / table / summary_card / page_break / group / columns。 |
+| `finalize_document` | 草稿定稿。 |
+| `export_document` | 导出 .docx，插件自动发给用户。 |
+| `convert_to_pdf` | Office → PDF。 |
+| `convert_from_pdf` | PDF → Word 或 Excel。 |
 
 ### ⌨️ 插件命令
 
@@ -175,49 +171,75 @@
 
 适合拿来做这些东西：
 
-- 📌 管理层汇报材料
-- 📌 经营复盘
-- 📌 周报 / 月报
-- 📌 带标题、正文、表格、摘要卡片、结论卡片的报告型 Word
+- 管理层汇报材料
+- 经营复盘
+- 周报 / 月报
+- 带标题、正文、表格、列表、摘要卡片的报告型 Word
 
 推荐顺序也很直接：
 
-1. `create_document`：先建草稿，把 `theme_name`、`table_template`、`density`、`accent_color` 这些全局参数定下来
-2. `add_heading` / `add_paragraph` / `add_table` / `add_summary_card`：按块往里填内容
-3. `finalize_document`：内容确认没问题后定稿
-4. `export_document`：导出 `.docx`，然后由插件直接把文件和预览图发出去
+1. `create_document`：建草稿，把 `theme_name`、`table_template`、`density`、`accent_color` 定好
+2. `add_blocks`：往里塞内容，heading / paragraph / list / table / summary_card / page_break / group / columns 都行，一次调用可以传多个块
+3. `finalize_document`：内容没问题就定稿
+4. `export_document`：导出 `.docx`，插件直接把文件和预览图发出去
 
-实现流程图：
+流程图：
 
-![复杂 Word 工作流](docs/images/complex-word-workflow.svg)
+```
+┌───────────────────────────┐
+│     create_document       │
+│                           │
+│  theme_name               │
+│  table_template           │
+│  density                  │
+│  accent_color             │
+└─────────────┬─────────────┘
+              │
+              ▼
+┌───────────────────────────┐
+│       add_blocks          │◄──┐
+│                           │   │
+│  heading    paragraph     │   │
+│  list       table         │   │ 可多次调用
+│  summary_card             │   │
+│  page_break               │   │
+│  group      columns       │   │
+└─────────────┬─────────────┘   │
+              │ 内容完成        │
+              │─────────────────┘
+              ▼
+┌───────────────────────────┐
+│   finalize_document       │
+│       锁定草稿            │
+└─────────────┬─────────────┘
+              │
+              ▼
+┌───────────────────────────┐
+│    export_document        │
+│  导出 .docx + 自动发送    │
+└───────────────────────────┘
+```
 
-现在已经落地的点：
+能用的：
 
-- 🎨 主题预设：`business_report`、`project_review`、`executive_brief`
-- 📊 表格样式预设：`report_grid`、`metrics_compact`、`minimal`
-- 📏 文档密度控制：`comfortable`、`compact`
-- 🖍️ 强调色覆盖：`accent_color=RRGGBB`
-- 🧩 卡片变体：`summary`、`conclusion`
+- 八种块类型：heading、paragraph、list、table、summary_card、page_break、group、columns
+- 三套主题：`business_report`、`project_review`、`executive_brief`
+- 三套表格样式：`report_grid`、`metrics_compact`、`minimal`
+- 两种密度：`comfortable`、`compact`
+- 强调色覆盖：`accent_color=RRGGBB`
+- 卡片变体：`summary`、`conclusion`
 
-目前的使用建议：
+用的时候注意：
 
-- ✅ 复杂 Word 默认走精细控制工具链，不再公开暴露章节级快捷工具
-- ✅ 如果多轮工具调用中途炸了，别在旧草稿上硬补，直接重新生成一份会更稳
-- ✅ 如果确实想参考旧结果，更合理的做法是重新上传旧文档，先提取内容，再生成新版
+- 中途炸了别硬补旧草稿，直接重新来一份更稳
+- 想参考旧版内容，重新上传旧文档，先提取再生成
 
-当前这版复杂 Word，已经能做什么：
+还差的：
 
-- ✅ 标题、正文、表格、摘要卡片、结论卡片这类结构化报告块
-- ✅ 主题、表格模板、密度、强调色这类全局样式控制
-- ✅ 状态化多步生成和导出回传
-
-当前这版复杂 Word，还没做到什么：
-
-- 🚧 目录、页眉页脚、分节、分栏、分页控制这类版式能力
-- 🚧 稳定公开的图片块能力，以及更成熟的图文混排
-- 🚧 合并单元格、复杂跨列布局、出版级精排
-- 🚧 任意局部字体、颜色、边框、对齐方式的自由编辑接口
-- 🚧 完整高级 Word 编辑器级别的自由排版能力
+- 目录自动生成、页眉页脚、分节符
+- 图片块和图文混排
+- 合并单元格、复杂跨列布局
+- 任意局部字体、颜色、边框的自由编辑
 
 ---
 
@@ -227,7 +249,7 @@
 
 ### 📝 Word 下一步
 
-- [ ] 先补“导入已有 Word，再转 Markdown / 结构化文本”的能力。这样中途失败时，不用死磕旧草稿，可以直接重生成新版
+- [ ] 先补“导入已有 Word，再转 Markdown / 结构化文本”的能力。这样中途失败时，不用死磕旧草稿，可以直接重新生成新版
 - [ ] 继续把报告型场景做扎实，比如图片、说明文字、二级 / 三级标题、多表混排
 - [ ] 目录、分页控制、页眉页脚这些版式能力会评估，但不会抢在核心报告能力前面做
 
@@ -268,6 +290,8 @@
 - Word：`.docx`
 - Excel：`.xlsx`
 - PowerPoint：`.pptx`
+
+说明：当前只支持基础内容生成，不覆盖复杂排版、图表、动画等高级能力。
 
 ### 🔄 PDF 转换
 
