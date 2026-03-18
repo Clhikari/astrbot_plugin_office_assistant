@@ -495,6 +495,12 @@ A：有，而且是已知问题，先说清楚：
 
 ---
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Clhikari/astrbot_plugin_office_assistant&type=Date&theme=dark)](https://star-history.com/#Clhikari/astrbot_plugin_office_assistant&Date)
+
+---
+
 ## 升级与迁移说明
 
 如果你从旧版本迁移，优先检查两件事：
@@ -509,5 +515,9 @@ A：有，而且是已知问题，先说清楚：
 MIT License
 
 ## 贡献
+
+| 项目架构图 | 贡献指南 |
+| --- | --- |
+| ![Project architecture diagram](./.github/images/architecture-flow.jpg) | ![Contribution flow diagram](./.github/images/contribution-flow.jpg) |
 
 欢迎提交 Issue 和 Pull Request。若是行为变更，请附上复现步骤和预期结果，便于快速定位。
