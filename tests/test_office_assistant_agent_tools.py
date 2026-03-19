@@ -1,6 +1,6 @@
 import json
+import shutil
 import struct
-import tempfile
 import zlib
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
@@ -8,20 +8,18 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
-from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
 )
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
-from astrbot_plugin_office_assistant.document_core.models.blocks import (
-    GroupBlock,
-)
 from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
     DOCX_TABLE_STYLES,
     WordDocumentBuilder,
+)
+from astrbot_plugin_office_assistant.document_core.models.blocks import (
+    GroupBlock,
 )
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
@@ -34,6 +32,8 @@ from astrbot_plugin_office_assistant.mcp_server.server import (
 from astrbot_plugin_office_assistant.mcp_server.session_store import (
     DocumentSessionStore,
 )
+
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 def _cell_fill(cell) -> str | None:
@@ -50,8 +50,14 @@ def _cell_fill(cell) -> str | None:
 
 @pytest.fixture
 def workspace_root() -> Iterator[Path]:
-    with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
-        yield Path(temp_dir)
+    workspace_base = Path(__file__).resolve().parent / ".tmp_agent_tools"
+    workspace_base.mkdir(parents=True, exist_ok=True)
+    temp_dir = workspace_base / f"workspace-root-{uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        yield temp_dir
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def _make_workspace(workspace_root: Path, name: str) -> Path:
@@ -69,7 +75,7 @@ def _write_png(path: Path, *, width: int, height: int) -> None:
             + struct.pack(">I", zlib.crc32(chunk_type + data) & 0xFFFFFFFF)
         )
 
-    scanline = b"\x00" + (b"\xFF\x66\x33" * width)
+    scanline = b"\x00" + (b"\xff\x66\x33" * width)
     raw = scanline * height
     png = (
         b"\x89PNG\r\n\x1a\n"
@@ -352,16 +358,14 @@ async def test_document_toolset_export_callback_runs(workspace_root: Path):
         )
     )
 
-    exported = json.loads(
-        await tool_by_name["export_document"].call(
-            object(),
-            document_id=created["document"]["document_id"],
-        )
+    exported = await tool_by_name["export_document"].call(
+        object(),
+        document_id=created["document"]["document_id"],
     )
 
-    assert exported["success"] is True
-    assert exported["message"] == "callback sent"
-    assert callback_calls == [exported["file_path"]]
+    assert exported is None
+    assert len(callback_calls) == 1
+    assert Path(callback_calls[0]).exists()
 
 
 @pytest.mark.asyncio
@@ -595,7 +599,9 @@ def test_word_document_builder_skips_images_outside_workspace(
 
     loaded_doc = docx.Document(output_path)
     assert len(loaded_doc.inline_shapes) == 0
-    assert "Should be skipped" not in [paragraph.text for paragraph in loaded_doc.paragraphs]
+    assert "Should be skipped" not in [
+        paragraph.text for paragraph in loaded_doc.paragraphs
+    ]
 
 
 @pytest.mark.asyncio

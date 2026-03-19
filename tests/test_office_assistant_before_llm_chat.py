@@ -3,17 +3,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from astrbot_plugin_office_assistant.main import FileOperationPlugin
+from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 
 import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
-from astrbot_plugin_office_assistant.main import (
-    FileOperationPlugin,
-)
-from astrbot_plugin_office_assistant.message_buffer import (
-    BufferedMessage,
-)
 
 
 def _build_config() -> dict:
@@ -99,19 +95,18 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             "export_document",
         }.issubset(tool_names)
         assert "generate_complex_word_document" not in tool_names
-        assert "For Word documents" in req.system_prompt
+        assert "处理 Word 文档时，请使用有状态文档工具链" in req.system_prompt
         assert "executive_brief" in req.system_prompt
         assert "accent_color=RRGGBB" in req.system_prompt
         assert (
             "style={align, emphasis, font_scale, table_grid, cell_align}"
             in req.system_prompt
         )
+        assert "最好按章节或逻辑块调用 `add_blocks`" in req.system_prompt
+        assert "继续调用文档工具，直到 `export_document` 成功" in req.system_prompt
+        assert "不要调用网络搜索" in req.system_prompt
         assert (
-            "Prefer one `add_blocks` call per section or logical chunk"
-            in req.system_prompt
-        )
-        assert (
-            "Continue calling document tools until `export_document` succeeds"
+            "如果在调用工具前需要先给用户一句过渡说明，也请使用中文"
             in req.system_prompt
         )
     finally:
@@ -148,7 +143,7 @@ async def test_before_llm_chat_removes_file_tools_without_permission():
         assert "export_document" not in tool_names
         assert "add_blocks" not in tool_names
         assert "generate_complex_word_document" not in tool_names
-        assert "File/Office/PDF actions are unavailable" in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
         assert "`astrbot_execute_python`" in req.system_prompt
     finally:
         await plugin.terminate()
@@ -182,7 +177,7 @@ async def test_before_llm_chat_warns_when_group_feature_disabled():
         assert "create_document" not in tool_names
         assert "add_blocks" not in tool_names
         assert "generate_complex_word_document" not in tool_names
-        assert "File/Office/PDF actions are unavailable" in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
         assert "`astrbot_execute_python`" in req.system_prompt
     finally:
         await plugin.terminate()
@@ -217,17 +212,16 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
         await plugin.before_llm_chat(event, req)
 
         assert (
-            "If the user request depends on uploaded readable files, call `read_file` before `create_document` or `create_office_file`."
+            "如果用户请求依赖上传的可读文件，先调用 `read_file`，再调用 `create_document`"
             in req.system_prompt
         )
         assert (
-            "If the user request depends on this uploaded file, call `read_file` before `create_document` or `create_office_file`."
+            "如果用户请求依赖这个上传文件，先调用 `read_file`，再调用 `create_document`"
             in req.system_prompt
         )
-        assert (
-            "Do not create a new document before reading the uploaded source at least once."
-            in req.system_prompt
-        )
+        assert "在至少读取一次上传源文件之前，不要先创建新文档。" in req.system_prompt
+        assert "不要调用网络搜索" in req.system_prompt
+        assert "如果要先给用户一句过渡说明，也请使用中文" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -266,14 +260,9 @@ async def test_buffered_upload_without_prompt_requires_read_file_first():
 
         assert isinstance(event.message_obj.message[0], Comp.Plain)
         prompt_text = event.message_obj.message[0].text
-        assert "Use `read_file` now." in prompt_text
-        assert (
-            "Do not create a new document before reading the uploaded source."
-            in prompt_text
-        )
-        assert (
-            "No clear instruction yet, so ask a follow-up after reading." in prompt_text
-        )
+        assert "请现在调用 `read_file`。" in prompt_text
+        assert "读取上传源文件前，不要先创建新文档。" in prompt_text
+        assert "目前用户意图还不够明确，读取后再用中文追问。" in prompt_text
         assert event.message_str == prompt_text.strip()
         event_queue.put.assert_awaited_once_with(event)
     finally:
