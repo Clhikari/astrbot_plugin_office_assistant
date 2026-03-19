@@ -1,0 +1,172 @@
+from pathlib import Path
+
+from ..constants import ALL_OFFICE_SUFFIXES
+from ..utils import format_file_size
+
+
+class CommandService:
+    def __init__(
+        self,
+        *,
+        workspace_service,
+        pdf_converter,
+        plugin_data_path: Path,
+        auto_delete: bool,
+        allow_external_input_files: bool,
+        enable_features_in_group: bool,
+        auto_block_execution_tools: bool,
+        reply_to_user: bool,
+        is_group_feature_enabled,
+        check_permission,
+        group_feature_disabled_error,
+    ) -> None:
+        self._workspace_service = workspace_service
+        self._pdf_converter = pdf_converter
+        self._plugin_data_path = plugin_data_path
+        self._auto_delete = auto_delete
+        self._allow_external_input_files = allow_external_input_files
+        self._enable_features_in_group = enable_features_in_group
+        self._auto_block_execution_tools = auto_block_execution_tools
+        self._reply_to_user = reply_to_user
+        self._is_group_feature_enabled = is_group_feature_enabled
+        self._check_permission = check_permission
+        self._group_feature_disabled_error = group_feature_disabled_error
+
+    def delete_file(self, event, message_text: str) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        parts = message_text.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            return "❌ 用法: /delete_file 文件名"
+
+        filename = parts[1].strip()
+        display_name = self._workspace_service.display_name(filename)
+        valid, file_path, error = self._workspace_service.validate_path(filename)
+        if not valid:
+            return f"❌ {error}"
+
+        if not file_path.exists():
+            return f"错误：找不到文件 '{display_name}'"
+
+        try:
+            file_path.unlink(missing_ok=True)
+            return f"成功：文件 '{display_name}' 已删除。"
+        except IsADirectoryError:
+            return f"'{display_name}'是目录,拒绝删除"
+        except PermissionError:
+            return "❌ 权限不足，无法删除文件"
+        except Exception as exc:
+            return f"删除文件时发生错误{exc}"
+
+    def fileinfo(self, event) -> str:
+        if not self._is_group_feature_enabled(event):
+            return "❌ " + self._group_feature_disabled_error()
+
+        storage_mode = "临时目录(自动删除)" if self._auto_delete else "持久化存储"
+        pdf_caps = self._pdf_converter.capabilities
+        pdf_status = []
+        if pdf_caps.get("office_to_pdf"):
+            pdf_status.append("Office→PDF ✓")
+        else:
+            pdf_status.append("Office→PDF ✗ (需要LibreOffice)")
+        if pdf_caps.get("pdf_to_word"):
+            pdf_status.append("PDF→Word ✓")
+        else:
+            pdf_status.append("PDF→Word ✗ (需要pdf2docx)")
+        if pdf_caps.get("pdf_to_excel"):
+            pdf_status.append("PDF→Excel ✓")
+        else:
+            pdf_status.append("PDF→Excel ✗ (需要tabula-py)")
+
+        return (
+            "📂 AstrBot 文件操作工具\n"
+            f"存储模式: {storage_mode}\n"
+            f"工作目录: {self._plugin_data_path}\n"
+            f"外部路径读取: {'开启' if self._allow_external_input_files else '关闭'}\n"
+            f"群聊启用插件功能: {'开启' if self._enable_features_in_group else '关闭'}\n"
+            f"自动屏蔽 shell/python 工具: {'开启' if self._auto_block_execution_tools else '关闭'}\n"
+            f"回复模式: {'开启' if self._reply_to_user else '关闭'}\n"
+            f"PDF转换: {', '.join(pdf_status)}"
+        )
+
+    def list_files(self, event) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        files = [
+            file_path
+            for file_path in self._plugin_data_path.glob("*")
+            if file_path.is_file() and file_path.suffix.lower() in ALL_OFFICE_SUFFIXES
+        ]
+        if not files:
+            result = "文件库当前没有 Office 文件"
+            if self._auto_delete:
+                result += "（自动删除模式已开启，文件发送后会自动清理）"
+            return result
+
+        files.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        lines = ["📂 机器人工作区 Office 文件列表："]
+        if self._auto_delete:
+            lines.append("⚠️ 自动删除模式已开启")
+        for file_path in files:
+            lines.append(
+                f"- {file_path.name} ({format_file_size(file_path.stat().st_size)})"
+            )
+        return "\n".join(lines)
+
+    def pdf_status(self, event) -> str:
+        if not self._is_group_feature_enabled(event):
+            return "❌ " + self._group_feature_disabled_error()
+
+        status = self._pdf_converter.get_detailed_status()
+        caps = status["capabilities"]
+        missing = self._pdf_converter.get_missing_dependencies()
+        lines = ["📄 PDF 转换功能状态\n"]
+
+        lines.append("【功能可用性】")
+        office_status = "✅ 可用" if caps["office_to_pdf"] else "❌ 不可用"
+        if status["office_to_pdf_backend"]:
+            office_status += f" ({status['office_to_pdf_backend']})"
+        lines.append(f"  Office→PDF: {office_status}")
+
+        word_status = "✅ 可用" if caps["pdf_to_word"] else "❌ 不可用"
+        if status["word_backend"]:
+            word_status += f" ({status['word_backend']})"
+        lines.append(f"  PDF→Word:   {word_status}")
+
+        excel_status = "✅ 可用" if caps["pdf_to_excel"] else "❌ 不可用"
+        if status["excel_backend"]:
+            excel_status += f" ({status['excel_backend']})"
+        lines.append(f"  PDF→Excel:  {excel_status}")
+
+        lines.append("\n【环境检测】")
+        lines.append(f"  平台: {'Windows' if status['is_windows'] else 'Linux/macOS'}")
+        lines.append(
+            f"  Java: {'✅ 可用' if status['java_available'] else '❌ 不可用'}"
+        )
+        if status["libreoffice_path"]:
+            lines.append(f"  LibreOffice: {status['libreoffice_path']}")
+
+        libs = status["libs"]
+        installed = [name for name, is_installed in libs.items() if is_installed]
+        if installed:
+            lines.append(f"\n【已安装库】 {', '.join(installed)}")
+
+        if missing:
+            lines.append("\n【缺失依赖】")
+            for dependency in missing:
+                lines.append(f"  • {dependency}")
+        else:
+            lines.append("\n✅ 所有依赖已安装")
+
+        return "\n".join(lines)
+
+    def _require_access(self, event) -> str | None:
+        if not self._is_group_feature_enabled(event):
+            return "❌ " + self._group_feature_disabled_error()
+        if not self._check_permission(event):
+            return "❌ 权限不足"
+        return None

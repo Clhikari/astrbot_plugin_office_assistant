@@ -317,11 +317,13 @@ class ExportDocumentTool(DocumentToolBase):
             return _dump_result(ToolResult(success=False, message=str(exc)))
 
         callback_message = ""
+        delivery_handled = False
         if self.after_export is not None and context is not None:
             try:
                 callback_message = (
                     await self.after_export(context, str(output_path)) or ""
                 )
+                delivery_handled = True
             except Exception as exc:
                 logger.warning(
                     "[office-assistant] after_export callback failed for %s: %s",
@@ -331,6 +333,11 @@ class ExportDocumentTool(DocumentToolBase):
                 callback_message = (
                     f"Document exported, but post-export delivery failed: {exc}"
                 )
+        if delivery_handled:
+            # The exported file has already been delivered to the user by the callback.
+            # Returning None makes the tool loop stop instead of prompting the model
+            # to continue with send_message_to_user or other follow-up tools.
+            return None
         return _dump_result(
             ExportDocumentResult(
                 success=True,
