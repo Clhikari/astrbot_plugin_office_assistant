@@ -588,6 +588,50 @@ async def test_file_tool_service_creates_office_file_via_generator_and_delivery(
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_returns_error_without_sending():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    event.send = AsyncMock()
+    office_generator = MagicMock()
+    delivery_service = MagicMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report.unsupported",
+            content="hello world",
+            file_type="unknown",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert result == "错误：不支持的文件类型 'unknown'"
+    event.send.assert_not_called()
+    office_generator.generate.assert_not_called()
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
     workspace_dir = Path(__file__).resolve().parent
     executor = ThreadPoolExecutor(max_workers=1)

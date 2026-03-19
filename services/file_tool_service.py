@@ -3,7 +3,6 @@ from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.core.message.message_event_result import MessageChain
 
 from ..constants import (
     CONVERTIBLE_TO_PDF,
@@ -134,7 +133,6 @@ class FileToolService:
             group_feature_disabled_error=self._group_feature_disabled_error,
         )
         if not ok:
-            await event.send(MessageChain().message(f"❌ {err}"))
             return err or "错误：未知错误"
 
         if not content:
@@ -151,19 +149,11 @@ class FileToolService:
             office_type = OFFICE_TYPE_MAP.get(file_type.lower())
 
         if not office_type:
-            await event.send(
-                MessageChain().message(
-                    f"❌ 不支持的类型，可选：{', '.join(OFFICE_TYPE_MAP.keys())}"
-                )
-            )
             return f"错误：不支持的文件类型 '{file_type}'"
 
         module_name = OFFICE_LIBS[office_type][0]
         if not self._office_libs.get(module_name):
             package_name = OFFICE_LIBS[office_type][1]
-            await event.send(
-                MessageChain().message(f"❌ 需要安装 {package_name} 才能生成此类型文件")
-            )
             return f"错误：需要安装 {package_name}"
 
         file_info = {"type": office_type, "filename": filename, "content": content}
@@ -178,17 +168,11 @@ class FileToolService:
                     output_path.unlink()
                     size_str = format_file_size(file_size)
                     max_str = format_file_size(max_size)
-                    await event.send(
-                        MessageChain().message(
-                            f"❌ 生成的文件过大 ({size_str})，超过限制 {max_str}"
-                        )
-                    )
                     return f"错误：文件过大 ({size_str})，超过限制 {max_str}"
 
                 await self._delivery_service.send_file_with_preview(event, output_path)
                 return None
         except Exception as exc:
-            await event.send(MessageChain().message(f"文件操作异常: {exc}"))
             return f"错误：文件操作异常: {exc}"
 
         return "错误：文件生成失败"

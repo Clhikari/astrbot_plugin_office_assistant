@@ -392,7 +392,7 @@ class FileOperationPlugin(Star):
 
     @filter.command("list_files", alias={"文件列表", "file_ls"})
     async def list_files(self, event: AstrMessageEvent):
-        """列出机器人文件库中的所有文件。"""
+        """列出机器人工作区中的 Office 文件。"""
         await event.send(
             MessageChain().message(self._command_service.list_files(event))
         )
