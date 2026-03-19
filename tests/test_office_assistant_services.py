@@ -2,7 +2,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -333,6 +333,70 @@ async def test_delivery_service_handles_exported_document_tool_via_context_event
 
     assert result == f"Document exported and sent to the user: {file_path.name}"
     assert event.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_delivery_service_logs_preview_generation_failure():
+    event = _build_event()
+    event.send = AsyncMock()
+    preview_generator = MagicMock()
+    preview_generator.generate_preview.side_effect = RuntimeError("preview boom")
+    service = DeliveryService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=preview_generator,
+        enable_preview=True,
+        auto_delete=False,
+        reply_to_user=False,
+    )
+    file_path = Path(__file__).resolve()
+    try:
+        with patch(
+            "astrbot_plugin_office_assistant.services.delivery_service.logger.warning"
+        ) as warning_mock:
+            await service.send_file_with_preview(event, file_path, "✅ 已发送")
+    finally:
+        service._executor.shutdown(wait=False)
+
+    warning_mock.assert_called_once()
+    assert "生成预览图失败" in warning_mock.call_args.args[0]
+    assert event.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_delivery_service_logs_file_cleanup_failure():
+    event = _build_event()
+    event.send = AsyncMock()
+    workspace_dir = _make_workspace("delivery-cleanup")
+    preview_path = workspace_dir / "preview.png"
+    preview_path.write_text("preview", encoding="utf-8")
+    file_path = workspace_dir / "result.docx"
+    file_path.write_text("result", encoding="utf-8")
+
+    preview_generator = MagicMock()
+    preview_generator.generate_preview.return_value = preview_path
+
+    service = DeliveryService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=preview_generator,
+        enable_preview=True,
+        auto_delete=True,
+        reply_to_user=False,
+    )
+
+    with patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+        with patch(
+            "astrbot_plugin_office_assistant.services.delivery_service.logger.warning"
+        ) as warning_mock:
+            try:
+                await service.send_file_with_preview(event, file_path, "✅ 已发送")
+            finally:
+                service._executor.shutdown(wait=False)
+                shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert warning_mock.call_count == 2
+    logged_messages = [call.args[0] for call in warning_mock.call_args_list]
+    assert any("自动删除预览文件失败" in message for message in logged_messages)
+    assert any("自动删除文件失败" in message for message in logged_messages)
 
 
 @pytest.mark.asyncio

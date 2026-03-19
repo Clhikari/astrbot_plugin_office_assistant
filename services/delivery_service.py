@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import astrbot.api.message_components as Comp
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
@@ -41,7 +42,8 @@ class DeliveryService:
                     file_path,
                     None,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"[预览生成] 生成预览图失败: {exc}")
                 preview_path = None
 
         text_chain = MessageChain()
@@ -57,8 +59,8 @@ class DeliveryService:
             if self._auto_delete:
                 try:
                     preview_path.unlink()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(f"[文件管理] 自动删除预览文件失败: {exc}")
 
         await event.send(
             MessageChain([Comp.File(file=str(file_path.resolve()), name=file_path.name)])
@@ -67,8 +69,8 @@ class DeliveryService:
         if self._auto_delete and file_path.exists():
             try:
                 file_path.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"[文件管理] 自动删除文件失败: {exc}")
 
     async def send_exported_document(
         self,

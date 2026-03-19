@@ -123,7 +123,7 @@ class CreateDocumentTool(DocumentToolBase):
 
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs
-    ) -> ToolExecResult | None:
+    ) -> ToolExecResult:
         session_id = kwargs.get("session_id")
         if not session_id and context is not None:
             event = getattr(getattr(context, "context", None), "event", None)
