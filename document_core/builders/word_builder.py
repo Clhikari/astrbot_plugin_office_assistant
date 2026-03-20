@@ -102,7 +102,7 @@ class WordDocumentBuilder:
         if isinstance(block, HeadingBlock):
             self._add_heading(doc, block, theme)
         elif isinstance(block, ParagraphBlock):
-            self._add_paragraph(doc, block, theme, document_model)
+            self._add_paragraph(doc, block, theme, document_model, workspace_dir)
         elif isinstance(block, ListBlock):
             self._add_list(doc, block, theme)
         elif isinstance(block, TableBlock):
@@ -235,6 +235,7 @@ class WordDocumentBuilder:
         block: ParagraphBlock,
         theme: dict,
         document_model: DocumentModel,
+        workspace_dir: Path,
     ) -> None:
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
         from docx.shared import Pt
@@ -255,7 +256,7 @@ class WordDocumentBuilder:
                 ),
                 theme,
                 document_model,
-                workspace_dir=Path(),
+                workspace_dir=workspace_dir,
             )
             return
 

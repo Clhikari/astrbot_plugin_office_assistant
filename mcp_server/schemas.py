@@ -40,6 +40,21 @@ def _normalize_docx_filename(value: str, default: str = "document.docx") -> str:
     return candidate
 
 
+def _normalize_table_style(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+
+
+def _normalize_column_widths(value: list[float]) -> list[float]:
+    return [width for width in value if width > 0]
+
+
+def _normalize_numeric_columns(value: list[int]) -> list[int]:
+    return sorted({index for index in value if index >= 0})
+
+
 class CreateDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -178,20 +193,17 @@ class AddTableRequest(BaseModel):
     @field_validator("table_style")
     @classmethod
     def validate_table_style(cls, value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            return ""
-        return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+        return _normalize_table_style(value)
 
     @field_validator("column_widths")
     @classmethod
     def validate_column_widths(cls, value: list[float]) -> list[float]:
-        return [width for width in value if width > 0]
+        return _normalize_column_widths(value)
 
     @field_validator("numeric_columns")
     @classmethod
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
-        return sorted({index for index in value if index >= 0})
+        return _normalize_numeric_columns(value)
 
 
 class SectionTableInput(BaseModel):
@@ -211,20 +223,17 @@ class SectionTableInput(BaseModel):
     @field_validator("table_style")
     @classmethod
     def validate_table_style(cls, value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            return ""
-        return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+        return _normalize_table_style(value)
 
     @field_validator("column_widths")
     @classmethod
     def validate_column_widths(cls, value: list[float]) -> list[float]:
-        return [width for width in value if width > 0]
+        return _normalize_column_widths(value)
 
     @field_validator("numeric_columns")
     @classmethod
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
-        return sorted({index for index in value if index >= 0})
+        return _normalize_numeric_columns(value)
 
 
 class AddSummaryCardRequest(BaseModel):

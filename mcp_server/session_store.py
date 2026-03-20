@@ -55,6 +55,7 @@ BLOCK_TYPE_LIST = "list"
 BLOCK_TYPE_TABLE = "table"
 BLOCK_TYPE_SUMMARY_CARD = "summary_card"
 BLOCK_TYPE_PAGE_BREAK = "page_break"
+MAX_HEADING_LENGTH_FOR_TABLE_TITLE = 24
 
 
 def _default_workspace_dir() -> Path:
@@ -170,7 +171,7 @@ class DocumentSessionStore:
                 isinstance(current, BlockHeadingInput)
                 and isinstance(next_block, SectionTableInput)
                 and not (next_block.caption or next_block.title)
-                and len(current.text.strip()) <= 24
+                and len(current.text.strip()) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
             ):
                 normalized.append(
                     next_block.model_copy(

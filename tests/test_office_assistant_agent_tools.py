@@ -26,8 +26,10 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
 )
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
+    AddTableRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
+    SectionTableInput,
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
@@ -711,6 +713,59 @@ def test_word_document_builder_uses_image_width_px_with_page_cap(
     assert "Image caption" in [paragraph.text for paragraph in loaded_doc.paragraphs]
 
 
+def test_word_document_builder_preserves_workspace_for_summary_card_group(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-summary-card-workspace"
+    )
+    image_path = workspace_dir / "nested.png"
+    output_path = workspace_dir / "summary-card-workspace.docx"
+    _write_png(image_path, width=320, height=180)
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import (
+        GroupBlock,
+        ImageBlock,
+        ParagraphBlock,
+    )
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    paragraph = ParagraphBlock(text="Summary block body")
+    object.__setattr__(paragraph, "variant", "summary_box")
+    object.__setattr__(paragraph, "title", "Summary")
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.document_core.builders.word_builder.build_summary_card_group",
+        lambda **_kwargs: GroupBlock(
+            blocks=[
+                ImageBlock(
+                    path=image_path.name,
+                    caption="Nested image caption",
+                )
+            ]
+        ),
+    )
+
+    document = DocumentModel(
+        document_id="summary-card-workspace-test",
+        metadata=DocumentMetadata(title="Summary Card Workspace"),
+        blocks=[paragraph],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.inline_shapes) == 1
+    assert "Nested image caption" in [
+        paragraph.text for paragraph in loaded_doc.paragraphs
+    ]
+
+
 def test_word_document_builder_skips_images_outside_workspace(
     workspace_root: Path,
 ):
@@ -817,3 +872,26 @@ def test_document_session_store_expands_summary_card_blocks():
     assert isinstance(updated.blocks[0], GroupBlock)
     assert updated.blocks[0].blocks[0].text == "Conclusion"
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_table_schema_normalizers_are_shared():
+    request = AddTableRequest(
+        document_id="doc-1",
+        table_style="invalid-style",
+        column_widths=[4.2, 0, -1.0, 3.0],
+        numeric_columns=[2, -1, 1, 2],
+    )
+    section = SectionTableInput(
+        headers=["区域"],
+        rows=[["华东"]],
+        table_style="invalid-style",
+        column_widths=[4.2, 0, -1.0, 3.0],
+        numeric_columns=[2, -1, 1, 2],
+    )
+
+    assert request.table_style == ""
+    assert request.column_widths == [4.2, 3.0]
+    assert request.numeric_columns == [1, 2]
+    assert section.table_style == ""
+    assert section.column_widths == [4.2, 3.0]
+    assert section.numeric_columns == [1, 2]
