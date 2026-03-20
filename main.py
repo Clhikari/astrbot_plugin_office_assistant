@@ -8,6 +8,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.star.star import star_map
 
 from .constants import DEFAULT_CHUNK_SIZE, MSG_DOCUMENT_EXPORTED, OfficeType
 from .message_buffer import BufferedMessage
@@ -36,9 +37,11 @@ class FileOperationPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        plugin_name = self._resolve_plugin_name()
         runtime = build_plugin_runtime(
             context=self.context,
             config=self.config,
+            plugin_name=plugin_name,
             handle_exported_document_tool=self._handle_exported_document_tool,
             extract_upload_source=lambda component: self._extract_upload_source(
                 component
@@ -53,6 +56,20 @@ class FileOperationPlugin(Star):
         logger.info(
             f"[文件管理] 插件加载完成。模式: {mode}, 数据目录: {self.plugin_data_path}"
         )
+
+    def _resolve_plugin_name(self) -> str:
+        plugin_name = getattr(self, "name", None)
+        if isinstance(plugin_name, str) and plugin_name.strip():
+            return plugin_name
+
+        metadata = star_map.get(self.__class__.__module__)
+        if metadata and metadata.name:
+            return metadata.name
+
+        module_parts = self.__class__.__module__.split(".")
+        if len(module_parts) >= 2:
+            return module_parts[-2]
+        return self.__class__.__module__
 
     def _apply_runtime(self, runtime: PluginRuntimeBundle) -> None:
         settings = runtime.settings

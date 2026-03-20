@@ -70,12 +70,15 @@ def build_plugin_runtime(
     *,
     context,
     config,
+    plugin_name: str,
     handle_exported_document_tool,
     extract_upload_source,
     store_uploaded_file,
 ) -> PluginRuntimeBundle:
     settings = _load_settings(config)
-    temp_dir, plugin_data_path = _prepare_workspace(settings.auto_delete)
+    temp_dir, plugin_data_path = _prepare_workspace(
+        settings.auto_delete, plugin_name=plugin_name
+    )
     executor = ThreadPoolExecutor(max_workers=4)
     office_gen = OfficeGenerator(plugin_data_path, executor=executor)
     pdf_converter = PDFConverter(plugin_data_path, executor=executor)
@@ -149,7 +152,7 @@ def build_plugin_runtime(
     error_hook_service = ErrorHookService(
         context=context,
         config=config,
-        plugin_name="astrbot_plugin_office_assistant",
+        plugin_name=plugin_name,
     )
     message_buffer = MessageBuffer(wait_seconds=settings.buffer_wait)
     incoming_message_service = IncomingMessageService(
@@ -227,12 +230,14 @@ def _load_settings(config) -> PluginSettings:
 
 def _prepare_workspace(
     auto_delete: bool,
+    *,
+    plugin_name: str,
 ) -> tuple[tempfile.TemporaryDirectory | None, Path]:
     if auto_delete:
         temp_dir = tempfile.TemporaryDirectory(prefix="astrbot_file_")
         return temp_dir, Path(temp_dir.name)
 
-    plugin_data_path = StarTools.get_data_dir() / "files"
+    plugin_data_path = StarTools.get_data_dir(plugin_name) / "files"
     plugin_data_path.mkdir(parents=True, exist_ok=True)
     return None, plugin_data_path
 

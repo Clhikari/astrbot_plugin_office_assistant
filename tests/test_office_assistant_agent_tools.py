@@ -14,8 +14,11 @@ from astrbot_plugin_office_assistant.agent_tools import (
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
-from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
+from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
     DOCX_TABLE_STYLES,
+    TableRenderer,
+)
+from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
     WordDocumentBuilder,
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
@@ -333,6 +336,152 @@ async def test_add_blocks_tool_supports_nested_primitives(workspace_root: Path):
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-enhanced-table")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="增强表格",
+            output_name="enhanced-table.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "caption": "季度经营指标",
+                "headers": ["区域", "目标", "完成率"],
+                "rows": [["华东", "120", "98%"], ["华南", "88", "103%"]],
+                "column_widths": [4.2, 3.0, 3.0],
+                "numeric_columns": [1, 2],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.tables) == 1
+
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标"
+    assert table.rows[1].cells[0].text == "区域"
+    assert table.rows[2].cells[0].text == "华东"
+    assert table.rows[2].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert table.rows[3].cells[2].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert abs(table.rows[1].cells[0].width - Cm(4.2)) < 20000
+    assert abs(table.rows[1].cells[1].width - Cm(3.0)) < 20000
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_treats_table_title_as_caption_alias(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-title-alias")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="表格标题别名",
+            output_name="table-title-alias.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "title": "季度经营指标总览",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标总览"
+    assert table.rows[1].cells[0].text == "区域"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_absorbs_heading_before_table_into_table_title(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-heading-merge")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="标题吸收",
+            output_name="table-heading-merge.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "季度经营指标总览", "level": 2},
+            {
+                "type": "table",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.tables) == 1
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标总览"
+    assert table.rows[1].cells[0].text == "区域"
+    assert "季度经营指标总览" not in [
+        paragraph.text for paragraph in loaded_doc.paragraphs[1:]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_export_callback_runs(workspace_root: Path):
     pytest.importorskip("docx")
 
@@ -513,16 +662,11 @@ def test_document_session_store_evicts_expired_documents_by_ttl():
 
 
 def test_word_document_builder_resolves_logical_table_styles():
-    assert WordDocumentBuilder._resolve_docx_table_style("report_grid") == "Table Grid"
-    assert (
-        WordDocumentBuilder._resolve_docx_table_style("metrics_compact")
-        == "Light List Accent 1"
-    )
-    assert WordDocumentBuilder._resolve_docx_table_style("minimal") == "Table Grid"
-    assert WordDocumentBuilder._resolve_docx_table_style("") == "Table Grid"
-    assert (
-        WordDocumentBuilder._resolve_docx_table_style("custom_style") == "custom_style"
-    )
+    assert TableRenderer.resolve_docx_table_style("report_grid") == "Table Grid"
+    assert TableRenderer.resolve_docx_table_style("metrics_compact") == "Light List Accent 1"
+    assert TableRenderer.resolve_docx_table_style("minimal") == "Table Grid"
+    assert TableRenderer.resolve_docx_table_style("") == "Table Grid"
+    assert TableRenderer.resolve_docx_table_style("custom_style") == "custom_style"
 
 
 def test_word_document_builder_uses_image_width_px_with_page_cap(

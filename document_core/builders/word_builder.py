@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from ..macros import build_summary_card_group, expand_summary_card_block
 from ..models import blocks as block_models
 from ..models.document import DocumentModel
+from .docx_utils import _DEFAULT_FONT_NAME, format_run, resolve_alignment, rgb
+from .table_renderer import TableRenderer
 
 if TYPE_CHECKING:
     from docx.document import Document as WordDocument
@@ -19,8 +21,6 @@ PageBreakBlock = block_models.PageBreakBlock
 ParagraphBlock = block_models.ParagraphBlock
 TableBlock = block_models.TableBlock
 SummaryCardBlock = getattr(block_models, "SummaryCardBlock", None)
-
-_DEFAULT_FONT_NAME = "Microsoft YaHei"
 
 THEMES = {
     "business_report": {
@@ -55,14 +55,11 @@ THEMES = {
     },
 }
 
-DOCX_TABLE_STYLES = {
-    "report_grid": "Table Grid",
-    "metrics_compact": "Light List Accent 1",
-    "minimal": "Table Grid",
-}
-
 
 class WordDocumentBuilder:
+    def __init__(self, table_renderer: TableRenderer | None = None) -> None:
+        self._table_renderer = table_renderer or TableRenderer()
+
     def build(self, document_model: DocumentModel, output_path: Path) -> Path:
         try:
             from docx import Document
@@ -109,7 +106,14 @@ class WordDocumentBuilder:
         elif isinstance(block, ListBlock):
             self._add_list(doc, block, theme)
         elif isinstance(block, TableBlock):
-            self._add_table(doc, block, theme, document_model)
+            self._table_renderer.render(
+                doc,
+                block,
+                theme,
+                default_table_style=getattr(
+                    document_model.metadata, "table_template", ""
+                ),
+            )
         elif isinstance(block, ImageBlock):
             self._add_image(doc, block, workspace_dir)
         elif isinstance(block, GroupBlock):
@@ -176,12 +180,12 @@ class WordDocumentBuilder:
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.space_after = Pt(theme["title_spacing_after"])
         run = paragraph.add_run(text)
-        self._format_run(
+        format_run(
             run,
             font_name=theme["font_name"],
             font_size=Pt(theme["title_size"]),
             bold=True,
-            color=self._rgb(theme["accent"]),
+            color=rgb(theme["accent"]),
         )
 
     def _add_heading(self, doc: WordDocument, block: HeadingBlock, theme: dict) -> None:
@@ -189,7 +193,7 @@ class WordDocumentBuilder:
         from docx.shared import Pt
 
         paragraph = doc.add_paragraph()
-        paragraph.alignment = self._resolve_alignment(
+        paragraph.alignment = resolve_alignment(
             getattr(block.style, "align", None),
             default=WD_ALIGN_PARAGRAPH.LEFT,
         )
@@ -206,7 +210,7 @@ class WordDocumentBuilder:
             )
         )
         run = paragraph.add_run(block.text)
-        self._format_run(
+        format_run(
             run,
             font_name=theme["font_name"],
             font_size=Pt(
@@ -221,7 +225,7 @@ class WordDocumentBuilder:
             color=self._resolve_text_color(
                 theme=theme,
                 emphasis=getattr(block.style, "emphasis", None),
-                default_color=self._rgb(theme["accent"]),
+                default_color=rgb(theme["accent"]),
             ),
         )
 
@@ -251,11 +255,12 @@ class WordDocumentBuilder:
                 ),
                 theme,
                 document_model,
+                workspace_dir=Path(),
             )
             return
 
         paragraph = doc.add_paragraph()
-        paragraph.alignment = self._resolve_alignment(
+        paragraph.alignment = resolve_alignment(
             getattr(block.style, "align", None),
             default=WD_ALIGN_PARAGRAPH.LEFT,
         )
@@ -272,7 +277,7 @@ class WordDocumentBuilder:
         paragraph.paragraph_format.line_spacing = theme["body_line_spacing"]
         paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
         run = paragraph.add_run(block.text)
-        self._format_run(
+        format_run(
             run,
             font_name=theme["font_name"],
             font_size=Pt(
@@ -293,7 +298,7 @@ class WordDocumentBuilder:
 
         for index, item in enumerate(block.items, start=1):
             paragraph = doc.add_paragraph()
-            paragraph.alignment = self._resolve_alignment(
+            paragraph.alignment = resolve_alignment(
                 getattr(block.style, "align", None),
                 default=WD_ALIGN_PARAGRAPH.LEFT,
             )
@@ -315,7 +320,7 @@ class WordDocumentBuilder:
             )
             marker = f"{index}. " if block.ordered else "• "
             run = paragraph.add_run(f"{marker}{item}")
-            self._format_run(
+            format_run(
                 run,
                 font_name=theme["font_name"],
                 font_size=Pt(
@@ -329,137 +334,6 @@ class WordDocumentBuilder:
                     emphasis=getattr(block.style, "emphasis", None),
                 ),
             )
-
-    def _add_table(
-        self,
-        doc: WordDocument,
-        block: TableBlock,
-        theme: dict,
-        document_model: DocumentModel,
-    ) -> None:
-        from docx.enum.table import WD_TABLE_ALIGNMENT
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Pt
-
-        column_count = 0
-        if block.headers:
-            column_count = len(block.headers)
-        elif block.rows:
-            column_count = max(len(row) for row in block.rows)
-
-        if column_count <= 0:
-            return
-
-        row_count = len(block.rows) + (1 if block.headers else 0)
-        table = doc.add_table(rows=row_count, cols=column_count)
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        style_name = (
-            getattr(block.style, "table_grid", None)
-            or getattr(block, "table_style", "")
-            or getattr(document_model.metadata, "table_template", "")
-            or theme["table_style"]
-        )
-        resolved_style = self._resolve_docx_table_style(style_name)
-        if resolved_style:
-            try:
-                table.style = resolved_style
-            except (KeyError, ValueError):
-                if style_name == "metrics_compact":
-                    try:
-                        table.style = DOCX_TABLE_STYLES["report_grid"]
-                    except (KeyError, ValueError):
-                        pass
-
-        body_alignment = getattr(block.style, "cell_align", None)
-
-        row_index = 0
-        if block.headers:
-            for col_index, value in enumerate(block.headers):
-                self._set_cell_text(
-                    table.rows[0].cells[col_index],
-                    value,
-                    bold=True,
-                    alignment=WD_ALIGN_PARAGRAPH.CENTER,
-                    font_size=Pt(self._table_font_size(style_name, theme, header=True)),
-                    font_name=theme["font_name"],
-                    color=self._table_header_color(style_name, theme),
-                    background=self._header_fill(style_name, theme),
-                )
-            row_index = 1
-
-        for current_row, values in enumerate(block.rows, start=row_index):
-            for col_index in range(column_count):
-                default_alignment = (
-                    WD_ALIGN_PARAGRAPH.CENTER
-                    if style_name == "metrics_compact" and col_index > 0
-                    else WD_ALIGN_PARAGRAPH.LEFT
-                )
-                self._set_cell_text(
-                    table.rows[current_row].cells[col_index],
-                    values[col_index] if col_index < len(values) else "",
-                    bold=False,
-                    alignment=self._resolve_alignment(
-                        body_alignment,
-                        default=default_alignment,
-                    ),
-                    font_size=Pt(
-                        self._table_font_size(style_name, theme, header=False)
-                    ),
-                    font_name=theme["font_name"],
-                    background=self._table_row_fill(style_name, current_row),
-                )
-
-    @staticmethod
-    def _set_cell_text(
-        cell,
-        value: str,
-        *,
-        bold: bool,
-        alignment,
-        font_size,
-        font_name: str = _DEFAULT_FONT_NAME,
-        color=None,
-        background: str | None = None,
-    ) -> None:
-        text = value or ""
-        paragraph = cell.paragraphs[0]
-        paragraph.alignment = alignment
-        WordDocumentBuilder._clear_paragraph(paragraph)
-        run = paragraph.add_run(text)
-        WordDocumentBuilder._format_run(
-            run,
-            font_name=font_name,
-            font_size=font_size,
-            bold=bold,
-            color=color,
-        )
-        paragraph.paragraph_format.space_after = 0
-        if background:
-            WordDocumentBuilder._set_cell_background(cell, background)
-
-    @staticmethod
-    def _resolve_docx_table_style(style_name: str) -> str | None:
-        candidate = (style_name or "").strip()
-        if not candidate:
-            return DOCX_TABLE_STYLES["report_grid"]
-        return DOCX_TABLE_STYLES.get(candidate, candidate)
-
-    @staticmethod
-    def _clear_paragraph(paragraph) -> None:
-        for run in list(paragraph.runs):
-            run._element.getparent().remove(run._element)
-
-    @staticmethod
-    def _format_run(run, *, font_name: str, font_size, bold: bool, color=None) -> None:
-        from docx.oxml.ns import qn
-
-        run.font.name = font_name
-        r_pr = run._element.get_or_add_rPr()
-        r_pr.rFonts.set(qn("w:eastAsia"), font_name)
-        run.font.size = font_size
-        run.font.bold = bold
-        if color is not None:
-            run.font.color.rgb = color
 
     def _add_group(
         self,
@@ -492,51 +366,6 @@ class WordDocumentBuilder:
     @staticmethod
     def _add_page_break(doc: WordDocument) -> None:
         doc.add_page_break()
-
-    @staticmethod
-    def _rgb(value: str):
-        from docx.shared import RGBColor
-
-        return RGBColor.from_string(value)
-
-    @staticmethod
-    def _header_fill(style_name: str, theme: dict) -> str | None:
-        if style_name == "minimal":
-            return theme["accent_soft"]
-        return theme["accent"]
-
-    @staticmethod
-    def _table_header_color(style_name: str, theme: dict):
-        if style_name == "minimal":
-            return WordDocumentBuilder._rgb(theme["accent"])
-        return WordDocumentBuilder._rgb("FFFFFF")
-
-    @staticmethod
-    def _table_row_fill(style_name: str, row_index: int) -> str | None:
-        if style_name == "report_grid" and row_index % 2 == 1:
-            return "F7FBFF"
-        return None
-
-    @staticmethod
-    def _table_font_size(style_name: str, theme: dict, *, header: bool) -> float:
-        base_size = theme["table_font_size"]
-        if style_name == "metrics_compact":
-            return max(base_size - 0.5, 9)
-        if style_name == "minimal" and header:
-            return max(base_size, theme["body_size"])
-        return base_size
-
-    @staticmethod
-    def _set_cell_background(cell, fill: str) -> None:
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
-
-        tc_pr = cell._tc.get_or_add_tcPr()
-        shd = tc_pr.find(qn("w:shd"))
-        if shd is None:
-            shd = OxmlElement("w:shd")
-            tc_pr.append(shd)
-        shd.set(qn("w:fill"), fill)
 
     @staticmethod
     def _blend_hex(source: str, target: str, ratio: float) -> str:
@@ -608,17 +437,5 @@ class WordDocumentBuilder:
         default_color=None,
     ):
         if emphasis == "subtle":
-            return self._rgb(theme["accent"])
+            return rgb(theme["accent"])
         return default_color
-
-    @staticmethod
-    def _resolve_alignment(value: str | None, *, default):
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-        mapping = {
-            "left": WD_ALIGN_PARAGRAPH.LEFT,
-            "center": WD_ALIGN_PARAGRAPH.CENTER,
-            "right": WD_ALIGN_PARAGRAPH.RIGHT,
-            "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
-        }
-        return mapping.get(value or "", default)

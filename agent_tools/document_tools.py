@@ -131,7 +131,9 @@ class CreateDocumentTool(DocumentToolBase):
         request = CreateDocumentRequest(
             session_id=str(session_id or ""),
             title=str(kwargs.get("title") or ""),
-            output_name=str(kwargs.get("output_name") or "document.docx"),
+            output_name=str(
+                kwargs.get("output_name") or kwargs.get("title") or "document.docx"
+            ),
             theme_name=str(kwargs.get("theme_name") or "business_report"),
             table_template=str(kwargs.get("table_template") or "report_grid"),
             density=str(kwargs.get("density") or "comfortable"),
@@ -147,13 +149,15 @@ class CreateDocumentTool(DocumentToolBase):
         )
 
 
-
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class AddBlocksTool(DocumentToolBase):
     name: str = "add_blocks"
     description: str = (
         "Append one or more blocks in order. Use this for mixed content such as "
-        "heading, paragraph, list, table, summary_card, page_break, group, or columns."
+        "heading, paragraph, list, table, image, summary_card, page_break, group, or columns. "
+        "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
+        "block's caption/title field so it renders as the first merged row inside the table, "
+        "not as a separate heading block."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -165,7 +169,7 @@ class AddBlocksTool(DocumentToolBase):
                 },
                 "blocks": {
                     "type": "array",
-                    "description": "Ordered block list. Supported block types: heading, paragraph, list, table, summary_card, page_break, group, columns.",
+                    "description": "Ordered block list. Supported block types: heading, paragraph, list, table, image, summary_card, page_break, group, columns.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -189,7 +193,26 @@ class AddBlocksTool(DocumentToolBase):
                                 },
                             },
                             "table_style": {"type": "string"},
-                            "title": {"type": "string"},
+                            "caption": {
+                                "type": "string",
+                                "description": "Table title rendered as the first merged row inside the table.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Alias of caption for table blocks. Use this instead of a separate heading when the user asks for a table title.",
+                            },
+                            "column_widths": {
+                                "type": "array",
+                                "description": "Optional table column widths in centimeters.",
+                                "items": {"type": "number"},
+                            },
+                            "numeric_columns": {
+                                "type": "array",
+                                "description": "Optional zero-based column indexes that should be right-aligned for numeric values.",
+                                "items": {"type": "number"},
+                            },
+                            "path": {"type": "string"},
+                            "width_px": {"type": "number"},
                             "variant": {"type": "string"},
                             "blocks": {
                                 "type": "array",
@@ -228,10 +251,6 @@ class AddBlocksTool(DocumentToolBase):
                 document=build_document_summary(document),
             )
         )
-
-
-
-
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))

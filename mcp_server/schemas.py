@@ -168,6 +168,10 @@ class AddTableRequest(BaseModel):
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
     table_style: str = ""
+    caption: str = ""
+    title: str = ""
+    column_widths: list[float] = Field(default_factory=list)
+    numeric_columns: list[int] = Field(default_factory=list)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -178,6 +182,16 @@ class AddTableRequest(BaseModel):
         if not candidate:
             return ""
         return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+
+    @field_validator("column_widths")
+    @classmethod
+    def validate_column_widths(cls, value: list[float]) -> list[float]:
+        return [width for width in value if width > 0]
+
+    @field_validator("numeric_columns")
+    @classmethod
+    def validate_numeric_columns(cls, value: list[int]) -> list[int]:
+        return sorted({index for index in value if index >= 0})
 
 
 class SectionTableInput(BaseModel):
@@ -187,6 +201,10 @@ class SectionTableInput(BaseModel):
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
     table_style: str = ""
+    caption: str = ""
+    title: str = ""
+    column_widths: list[float] = Field(default_factory=list)
+    numeric_columns: list[int] = Field(default_factory=list)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -197,6 +215,16 @@ class SectionTableInput(BaseModel):
         if not candidate:
             return ""
         return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+
+    @field_validator("column_widths")
+    @classmethod
+    def validate_column_widths(cls, value: list[float]) -> list[float]:
+        return [width for width in value if width > 0]
+
+    @field_validator("numeric_columns")
+    @classmethod
+    def validate_numeric_columns(cls, value: list[int]) -> list[int]:
+        return sorted({index for index in value if index >= 0})
 
 
 class AddSummaryCardRequest(BaseModel):

@@ -100,6 +100,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
     runtime = build_plugin_runtime(
         context=context,
         config=config,
+        plugin_name="astrbot_plugin_office_assistant",
         handle_exported_document_tool=AsyncMock(),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
@@ -156,12 +157,13 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
     }
     monkeypatch.setattr(
         "astrbot_plugin_office_assistant.services.runtime_builder.StarTools.get_data_dir",
-        lambda: data_root,
+        lambda plugin_name=None: data_root,
     )
 
     runtime = build_plugin_runtime(
         context=context,
         config=config,
+        plugin_name="astrbot_plugin_office_assistant",
         handle_exported_document_tool=AsyncMock(),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
