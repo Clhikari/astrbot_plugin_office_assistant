@@ -48,11 +48,15 @@ def _normalize_table_style(value: str) -> str:
 
 
 def _normalize_column_widths(value: list[float]) -> list[float]:
-    return [width for width in value if width > 0]
+    return [width if width > 0 else 0 for width in value]
 
 
 def _normalize_numeric_columns(value: list[int]) -> list[int]:
     return sorted({index for index in value if index >= 0})
+
+
+def _normalize_table_title_text(value: str) -> str:
+    return value.strip()
 
 
 class CreateDocumentRequest(BaseModel):
@@ -195,6 +199,11 @@ class AddTableRequest(BaseModel):
     def validate_table_style(cls, value: str) -> str:
         return _normalize_table_style(value)
 
+    @field_validator("caption", "title")
+    @classmethod
+    def validate_table_title_text(cls, value: str) -> str:
+        return _normalize_table_title_text(value)
+
     @field_validator("column_widths")
     @classmethod
     def validate_column_widths(cls, value: list[float]) -> list[float]:
@@ -224,6 +233,11 @@ class SectionTableInput(BaseModel):
     @classmethod
     def validate_table_style(cls, value: str) -> str:
         return _normalize_table_style(value)
+
+    @field_validator("caption", "title")
+    @classmethod
+    def validate_table_title_text(cls, value: str) -> str:
+        return _normalize_table_title_text(value)
 
     @field_validator("column_widths")
     @classmethod

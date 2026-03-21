@@ -130,6 +130,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         block_properties["columns"]["items"]["properties"]["blocks"]["items"]["type"]
         == "object"
     )
+    assert block_properties["numeric_columns"]["items"]["type"] == "integer"
 
 
 @pytest.mark.asyncio
@@ -389,6 +390,8 @@ async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
     assert table.rows[3].cells[2].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert abs(table.rows[1].cells[0].width - Cm(4.2)) < 20000
     assert abs(table.rows[1].cells[1].width - Cm(3.0)) < 20000
+    assert _cell_fill(table.rows[2].cells[0]) == "F7FBFF"
+    assert _cell_fill(table.rows[3].cells[0]) is None
 
 
 @pytest.mark.asyncio
@@ -890,8 +893,53 @@ def test_table_schema_normalizers_are_shared():
     )
 
     assert request.table_style == ""
-    assert request.column_widths == [4.2, 3.0]
+    assert request.column_widths == [4.2, 0, 0, 3.0]
     assert request.numeric_columns == [1, 2]
     assert section.table_style == ""
-    assert section.column_widths == [4.2, 3.0]
+    assert section.column_widths == [4.2, 0, 0, 3.0]
     assert section.numeric_columns == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_ignores_blank_table_caption_when_absorbing_heading(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-blank-caption")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="空白表标题",
+            output_name="blank-table-caption.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "季度经营指标总览", "level": 2},
+            {
+                "type": "table",
+                "caption": "   ",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标总览"

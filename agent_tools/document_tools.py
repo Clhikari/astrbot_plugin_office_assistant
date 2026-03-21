@@ -209,7 +209,7 @@ class AddBlocksTool(DocumentToolBase):
                             "numeric_columns": {
                                 "type": "array",
                                 "description": "Optional zero-based column indexes that should be right-aligned for numeric values.",
-                                "items": {"type": "number"},
+                                "items": {"type": "integer"},
                             },
                             "path": {"type": "string"},
                             "width_px": {"type": "number"},

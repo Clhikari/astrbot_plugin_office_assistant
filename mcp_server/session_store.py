@@ -166,18 +166,29 @@ class DocumentSessionStore:
         while index < len(blocks):
             current = blocks[index]
             next_block = blocks[index + 1] if index + 1 < len(blocks) else None
+            current_text = current.text.strip() if isinstance(current, BlockHeadingInput) else ""
+            next_caption = (
+                (next_block.caption or "").strip()
+                if isinstance(next_block, SectionTableInput)
+                else ""
+            )
+            next_title = (
+                (next_block.title or "").strip()
+                if isinstance(next_block, SectionTableInput)
+                else ""
+            )
 
             if (
                 isinstance(current, BlockHeadingInput)
                 and isinstance(next_block, SectionTableInput)
-                and not (next_block.caption or next_block.title)
-                and len(current.text.strip()) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
+                and not (next_caption or next_title)
+                and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
             ):
                 normalized.append(
                     next_block.model_copy(
                         update={
-                            "caption": current.text.strip(),
-                            "title": current.text.strip(),
+                            "caption": current_text,
+                            "title": current_text,
                         }
                     )
                 )

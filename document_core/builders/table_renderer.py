@@ -65,6 +65,8 @@ class TableRenderer:
         if getattr(block, "column_widths", None):
             table.autofit = False
             for col_index, width_cm in enumerate(block.column_widths[:column_count]):
+                if width_cm <= 0:
+                    continue
                 target_width = Cm(width_cm)
                 for row in table.rows:
                     row.cells[col_index].width = target_width
@@ -101,7 +103,8 @@ class TableRenderer:
                 )
             row_index += 1
 
-        for current_row, values in enumerate(block.rows, start=row_index):
+        for data_row_index, values in enumerate(block.rows):
+            current_row = row_index + data_row_index
             for col_index in range(column_count):
                 default_alignment = (
                     WD_ALIGN_PARAGRAPH.CENTER
@@ -120,7 +123,7 @@ class TableRenderer:
                     ),
                     font_size=Pt(self._table_font_size(style_name, theme, header=False)),
                     font_name=theme["font_name"],
-                    background=self._table_row_fill(style_name, current_row),
+                    background=self._table_row_fill(style_name, data_row_index + 1),
                 )
 
     @staticmethod
