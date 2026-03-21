@@ -487,6 +487,58 @@ async def test_add_blocks_tool_absorbs_heading_before_table_into_table_title(
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_does_not_absorb_long_heading_before_table_into_table_title(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-table-long-heading-no-merge"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+    long_heading = "季度经营指标总览" * 20
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="长标题保留",
+            output_name="table-long-heading-no-merge.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": long_heading, "level": 2},
+            {
+                "type": "table",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    paragraph_texts = [paragraph.text for paragraph in loaded_doc.paragraphs]
+    assert long_heading in paragraph_texts[1:]
+
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "区域"
+    assert long_heading not in table.rows[0].cells[0].text
+    assert len(table.rows[0].cells) == len(table.rows[1].cells)
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_export_callback_runs(workspace_root: Path):
     pytest.importorskip("docx")
 
