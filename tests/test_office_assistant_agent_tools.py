@@ -14,8 +14,11 @@ from astrbot_plugin_office_assistant.agent_tools import (
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
-from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
+from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
     DOCX_TABLE_STYLES,
+    TableRenderer,
+)
+from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
     WordDocumentBuilder,
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
@@ -23,8 +26,10 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
 )
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
+    AddTableRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
+    SectionTableInput,
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
@@ -125,6 +130,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         block_properties["columns"]["items"]["properties"]["blocks"]["items"]["type"]
         == "object"
     )
+    assert block_properties["numeric_columns"]["items"]["type"] == "integer"
 
 
 @pytest.mark.asyncio
@@ -333,6 +339,206 @@ async def test_add_blocks_tool_supports_nested_primitives(workspace_root: Path):
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-enhanced-table")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="增强表格",
+            output_name="enhanced-table.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "caption": "季度经营指标",
+                "headers": ["区域", "目标", "完成率"],
+                "rows": [["华东", "120", "98%"], ["华南", "88", "103%"]],
+                "column_widths": [4.2, 3.0, 3.0],
+                "numeric_columns": [1, 2],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.tables) == 1
+
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标"
+    assert table.rows[1].cells[0].text == "区域"
+    assert table.rows[2].cells[0].text == "华东"
+    assert table.rows[2].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert table.rows[3].cells[2].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert abs(table.rows[1].cells[0].width - Cm(4.2)) < 20000
+    assert abs(table.rows[1].cells[1].width - Cm(3.0)) < 20000
+    assert _cell_fill(table.rows[2].cells[0]) == "F7FBFF"
+    assert _cell_fill(table.rows[3].cells[0]) is None
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_treats_table_title_as_caption_alias(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-title-alias")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="表格标题别名",
+            output_name="table-title-alias.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "title": "季度经营指标总览",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标总览"
+    assert table.rows[1].cells[0].text == "区域"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_absorbs_heading_before_table_into_table_title(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-heading-merge")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="标题吸收",
+            output_name="table-heading-merge.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "季度经营指标总览", "level": 2},
+            {
+                "type": "table",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.tables) == 1
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标总览"
+    assert table.rows[1].cells[0].text == "区域"
+    assert "季度经营指标总览" not in [
+        paragraph.text for paragraph in loaded_doc.paragraphs[1:]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_does_not_absorb_long_heading_before_table_into_table_title(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-table-long-heading-no-merge"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+    long_heading = "季度经营指标总览" * 20
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="长标题保留",
+            output_name="table-long-heading-no-merge.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": long_heading, "level": 2},
+            {
+                "type": "table",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    paragraph_texts = [paragraph.text for paragraph in loaded_doc.paragraphs]
+    assert long_heading in paragraph_texts[1:]
+
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "区域"
+    assert long_heading not in table.rows[0].cells[0].text
+    assert len(table.rows[0].cells) == len(table.rows[1].cells)
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_export_callback_runs(workspace_root: Path):
     pytest.importorskip("docx")
 
@@ -513,16 +719,11 @@ def test_document_session_store_evicts_expired_documents_by_ttl():
 
 
 def test_word_document_builder_resolves_logical_table_styles():
-    assert WordDocumentBuilder._resolve_docx_table_style("report_grid") == "Table Grid"
-    assert (
-        WordDocumentBuilder._resolve_docx_table_style("metrics_compact")
-        == "Light List Accent 1"
-    )
-    assert WordDocumentBuilder._resolve_docx_table_style("minimal") == "Table Grid"
-    assert WordDocumentBuilder._resolve_docx_table_style("") == "Table Grid"
-    assert (
-        WordDocumentBuilder._resolve_docx_table_style("custom_style") == "custom_style"
-    )
+    assert TableRenderer.resolve_docx_table_style("report_grid") == "Table Grid"
+    assert TableRenderer.resolve_docx_table_style("metrics_compact") == "Light List Accent 1"
+    assert TableRenderer.resolve_docx_table_style("minimal") == "Table Grid"
+    assert TableRenderer.resolve_docx_table_style("") == "Table Grid"
+    assert TableRenderer.resolve_docx_table_style("custom_style") == "custom_style"
 
 
 def test_word_document_builder_uses_image_width_px_with_page_cap(
@@ -565,6 +766,59 @@ def test_word_document_builder_uses_image_width_px_with_page_cap(
     )
     assert loaded_doc.inline_shapes[0].width == min(Inches(1600 / 96.0), max_width)
     assert "Image caption" in [paragraph.text for paragraph in loaded_doc.paragraphs]
+
+
+def test_word_document_builder_preserves_workspace_for_summary_card_group(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-summary-card-workspace"
+    )
+    image_path = workspace_dir / "nested.png"
+    output_path = workspace_dir / "summary-card-workspace.docx"
+    _write_png(image_path, width=320, height=180)
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import (
+        GroupBlock,
+        ImageBlock,
+        ParagraphBlock,
+    )
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    paragraph = ParagraphBlock(text="Summary block body")
+    object.__setattr__(paragraph, "variant", "summary_box")
+    object.__setattr__(paragraph, "title", "Summary")
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.document_core.builders.word_builder.build_summary_card_group",
+        lambda **_kwargs: GroupBlock(
+            blocks=[
+                ImageBlock(
+                    path=image_path.name,
+                    caption="Nested image caption",
+                )
+            ]
+        ),
+    )
+
+    document = DocumentModel(
+        document_id="summary-card-workspace-test",
+        metadata=DocumentMetadata(title="Summary Card Workspace"),
+        blocks=[paragraph],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.inline_shapes) == 1
+    assert "Nested image caption" in [
+        paragraph.text for paragraph in loaded_doc.paragraphs
+    ]
 
 
 def test_word_document_builder_skips_images_outside_workspace(
@@ -673,3 +927,71 @@ def test_document_session_store_expands_summary_card_blocks():
     assert isinstance(updated.blocks[0], GroupBlock)
     assert updated.blocks[0].blocks[0].text == "Conclusion"
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_table_schema_normalizers_are_shared():
+    request = AddTableRequest(
+        document_id="doc-1",
+        table_style="invalid-style",
+        column_widths=[4.2, 0, -1.0, 3.0],
+        numeric_columns=[2, -1, 1, 2],
+    )
+    section = SectionTableInput(
+        headers=["区域"],
+        rows=[["华东"]],
+        table_style="invalid-style",
+        column_widths=[4.2, 0, -1.0, 3.0],
+        numeric_columns=[2, -1, 1, 2],
+    )
+
+    assert request.table_style == ""
+    assert request.column_widths == [4.2, 0, 0, 3.0]
+    assert request.numeric_columns == [1, 2]
+    assert section.table_style == ""
+    assert section.column_widths == [4.2, 0, 0, 3.0]
+    assert section.numeric_columns == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_ignores_blank_table_caption_when_absorbing_heading(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-blank-caption")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="空白表标题",
+            output_name="blank-table-caption.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "季度经营指标总览", "level": 2},
+            {
+                "type": "table",
+                "caption": "   ",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+    assert table.rows[0].cells[0].text == "季度经营指标总览"

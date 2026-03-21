@@ -55,6 +55,7 @@ BLOCK_TYPE_LIST = "list"
 BLOCK_TYPE_TABLE = "table"
 BLOCK_TYPE_SUMMARY_CARD = "summary_card"
 BLOCK_TYPE_PAGE_BREAK = "page_break"
+MAX_HEADING_LENGTH_FOR_TABLE_TITLE = 24
 
 
 def _default_workspace_dir() -> Path:
@@ -153,9 +154,51 @@ class DocumentSessionStore:
             return document
 
     def _append_blocks_locked(self, document: DocumentModel, blocks: list) -> None:
-        for block in blocks:
+        normalized_blocks = self._normalize_table_title_blocks(blocks)
+        for block in normalized_blocks:
             runtime_block = self._build_runtime_block(block, document)
             document.add_block(runtime_block)
+
+    @staticmethod
+    def _normalize_table_title_blocks(blocks: list):
+        normalized: list = []
+        index = 0
+        while index < len(blocks):
+            current = blocks[index]
+            next_block = blocks[index + 1] if index + 1 < len(blocks) else None
+            current_text = current.text.strip() if isinstance(current, BlockHeadingInput) else ""
+            next_caption = (
+                (next_block.caption or "").strip()
+                if isinstance(next_block, SectionTableInput)
+                else ""
+            )
+            next_title = (
+                (next_block.title or "").strip()
+                if isinstance(next_block, SectionTableInput)
+                else ""
+            )
+
+            if (
+                isinstance(current, BlockHeadingInput)
+                and isinstance(next_block, SectionTableInput)
+                and not (next_caption or next_title)
+                and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
+            ):
+                normalized.append(
+                    next_block.model_copy(
+                        update={
+                            "caption": current_text,
+                            "title": current_text,
+                        }
+                    )
+                )
+                index += 2
+                continue
+
+            normalized.append(current)
+            index += 1
+
+        return normalized
 
     def _build_runtime_block(self, block, document: DocumentModel):
         if isinstance(block, BlockHeadingInput):
@@ -183,6 +226,9 @@ class DocumentSessionStore:
                 headers=block.headers,
                 rows=block.rows,
                 table_style=block.table_style or document.metadata.table_template,
+                caption=block.caption or block.title,
+                column_widths=block.column_widths,
+                numeric_columns=block.numeric_columns,
                 style=block.style,
                 layout=block.layout,
             )
@@ -298,6 +344,9 @@ class DocumentSessionStore:
                         "headers": request.headers,
                         "rows": request.rows,
                         "table_style": request.table_style,
+                        "caption": request.caption or request.title,
+                        "column_widths": request.column_widths,
+                        "numeric_columns": request.numeric_columns,
                         "style": request.style.model_dump(exclude_none=True),
                         "layout": request.layout.model_dump(exclude_none=True),
                     }

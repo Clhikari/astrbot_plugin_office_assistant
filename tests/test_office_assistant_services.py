@@ -100,6 +100,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
     runtime = build_plugin_runtime(
         context=context,
         config=config,
+        plugin_name="astrbot_plugin_office_assistant",
         handle_exported_document_tool=AsyncMock(),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
@@ -127,6 +128,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
     monkeypatch: pytest.MonkeyPatch,
 ):
     data_root = _make_workspace("runtime-builder-data-root")
+    called: dict[str, str | None] = {}
     context = MagicMock()
     config = {
         "file_settings": {
@@ -154,14 +156,19 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
             "enable_office_files": True,
         },
     }
+    def fake_get_data_dir(plugin_name=None):
+        called["plugin_name"] = plugin_name
+        return data_root
+
     monkeypatch.setattr(
         "astrbot_plugin_office_assistant.services.runtime_builder.StarTools.get_data_dir",
-        lambda: data_root,
+        fake_get_data_dir,
     )
 
     runtime = build_plugin_runtime(
         context=context,
         config=config,
+        plugin_name="astrbot_plugin_office_assistant",
         handle_exported_document_tool=AsyncMock(),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
@@ -184,6 +191,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.recent_text_cleanup_interval_seconds == 17
         assert runtime.command_service._plugin_data_path == data_root / "files"
         assert runtime.workspace_service.plugin_data_path == data_root / "files"
+        assert called["plugin_name"] == "astrbot_plugin_office_assistant"
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()

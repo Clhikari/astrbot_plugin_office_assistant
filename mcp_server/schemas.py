@@ -40,6 +40,25 @@ def _normalize_docx_filename(value: str, default: str = "document.docx") -> str:
     return candidate
 
 
+def _normalize_table_style(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+
+
+def _normalize_column_widths(value: list[float]) -> list[float]:
+    return [width if width > 0 else 0 for width in value]
+
+
+def _normalize_numeric_columns(value: list[int]) -> list[int]:
+    return sorted({index for index in value if index >= 0})
+
+
+def _normalize_table_title_text(value: str) -> str:
+    return value.strip()
+
+
 class CreateDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -168,16 +187,32 @@ class AddTableRequest(BaseModel):
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
     table_style: str = ""
+    caption: str = ""
+    title: str = ""
+    column_widths: list[float] = Field(default_factory=list)
+    numeric_columns: list[int] = Field(default_factory=list)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("table_style")
     @classmethod
     def validate_table_style(cls, value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            return ""
-        return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+        return _normalize_table_style(value)
+
+    @field_validator("caption", "title")
+    @classmethod
+    def validate_table_title_text(cls, value: str) -> str:
+        return _normalize_table_title_text(value)
+
+    @field_validator("column_widths")
+    @classmethod
+    def validate_column_widths(cls, value: list[float]) -> list[float]:
+        return _normalize_column_widths(value)
+
+    @field_validator("numeric_columns")
+    @classmethod
+    def validate_numeric_columns(cls, value: list[int]) -> list[int]:
+        return _normalize_numeric_columns(value)
 
 
 class SectionTableInput(BaseModel):
@@ -187,16 +222,32 @@ class SectionTableInput(BaseModel):
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
     table_style: str = ""
+    caption: str = ""
+    title: str = ""
+    column_widths: list[float] = Field(default_factory=list)
+    numeric_columns: list[int] = Field(default_factory=list)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("table_style")
     @classmethod
     def validate_table_style(cls, value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            return ""
-        return candidate if candidate in SUPPORTED_TABLE_TEMPLATES else ""
+        return _normalize_table_style(value)
+
+    @field_validator("caption", "title")
+    @classmethod
+    def validate_table_title_text(cls, value: str) -> str:
+        return _normalize_table_title_text(value)
+
+    @field_validator("column_widths")
+    @classmethod
+    def validate_column_widths(cls, value: list[float]) -> list[float]:
+        return _normalize_column_widths(value)
+
+    @field_validator("numeric_columns")
+    @classmethod
+    def validate_numeric_columns(cls, value: list[int]) -> list[int]:
+        return _normalize_numeric_columns(value)
 
 
 class AddSummaryCardRequest(BaseModel):
