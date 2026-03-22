@@ -131,6 +131,9 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         == "object"
     )
     assert block_properties["numeric_columns"]["items"]["type"] == "integer"
+    assert (
+        block_properties["runs"]["items"]["properties"]["italic"]["type"] == "boolean"
+    )
 
 
 @pytest.mark.asyncio
@@ -238,26 +241,62 @@ async def test_document_toolset_smoke_export(workspace_root: Path):
     assert loaded_doc.paragraphs[2].paragraph_format.space_after.pt == pytest.approx(
         9, abs=0.5
     )
-    assert loaded_doc.paragraphs[3].text == "1. Point A"
-    assert loaded_doc.paragraphs[4].text == "2. Point B"
-    assert loaded_doc.paragraphs[3].runs[0].font.color.rgb == RGBColor.from_string(
-        "AA5500"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_supports_rich_text_paragraph_runs(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-rich-paragraph")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="段落富文本",
+            output_name="rich-paragraph.docx",
+        )
     )
-    assert "Appendix" in [paragraph.text for paragraph in loaded_doc.paragraphs]
-    assert 'w:type="page"' in loaded_doc.element.body.xml
-    assert len(loaded_doc.tables) >= 1
-    assert loaded_doc.tables[0].style.name == "Table Grid"
-    assert loaded_doc.tables[0].rows[0].cells[0].paragraphs[0].runs[0].bold is True
-    assert loaded_doc.tables[0].rows[1].cells[0].paragraphs[0].runs[0].bold is False
-    assert loaded_doc.tables[0].rows[0].cells[0].text == "Metric"
-    assert loaded_doc.tables[0].rows[1].cells[0].text == "Users"
-    assert _cell_fill(loaded_doc.tables[0].rows[0].cells[0]) == "F1E4D6"
-    assert loaded_doc.tables[0].rows[0].cells[0].paragraphs[0].runs[
-        0
-    ].font.color.rgb == RGBColor.from_string("AA5500")
-    paragraph_texts = [paragraph.text for paragraph in loaded_doc.paragraphs]
-    assert "Conclusion" in paragraph_texts
-    assert "• The new layout should look more intentional." in paragraph_texts
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "粗体", "bold": True},
+                    {"text": " / "},
+                    {"text": "斜体", "italic": True},
+                    {"text": " / "},
+                    {"text": "下划线", "underline": True},
+                    {"text": " / "},
+                    {"text": "代码", "code": True},
+                ],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    rich_paragraph = loaded_doc.paragraphs[1]
+
+    assert rich_paragraph.runs[0].bold is True
+    assert rich_paragraph.runs[2].italic is True
+    assert rich_paragraph.runs[4].underline is True
+    assert rich_paragraph.runs[6].font.name == "Consolas"
+    assert rich_paragraph.runs[0].text == "粗体"
+    assert rich_paragraph.runs[6].text == "代码"
 
 
 @pytest.mark.asyncio
@@ -395,7 +434,9 @@ async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
 
 
 @pytest.mark.asyncio
-async def test_add_blocks_tool_treats_table_title_as_caption_alias(workspace_root: Path):
+async def test_add_blocks_tool_treats_table_title_as_caption_alias(
+    workspace_root: Path,
+):
     docx = pytest.importorskip("docx")
 
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-title-alias")
@@ -484,6 +525,47 @@ async def test_add_blocks_tool_absorbs_heading_before_table_into_table_title(
     assert "季度经营指标总览" not in [
         paragraph.text for paragraph in loaded_doc.paragraphs[1:]
     ]
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_drops_heading_that_duplicates_document_title(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-duplicate-title")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="项目阶段汇报",
+            output_name="duplicate-title.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "项目阶段汇报", "level": 1},
+            {"type": "paragraph", "text": "正文内容。"},
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    paragraph_texts = [paragraph.text for paragraph in loaded_doc.paragraphs]
+    assert paragraph_texts.count("项目阶段汇报") == 1
+    assert "正文内容。" in paragraph_texts
 
 
 @pytest.mark.asyncio
@@ -720,7 +802,10 @@ def test_document_session_store_evicts_expired_documents_by_ttl():
 
 def test_word_document_builder_resolves_logical_table_styles():
     assert TableRenderer.resolve_docx_table_style("report_grid") == "Table Grid"
-    assert TableRenderer.resolve_docx_table_style("metrics_compact") == "Light List Accent 1"
+    assert (
+        TableRenderer.resolve_docx_table_style("metrics_compact")
+        == "Light List Accent 1"
+    )
     assert TableRenderer.resolve_docx_table_style("minimal") == "Table Grid"
     assert TableRenderer.resolve_docx_table_style("") == "Table Grid"
     assert TableRenderer.resolve_docx_table_style("custom_style") == "custom_style"

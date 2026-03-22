@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..document_core.models.blocks import BlockLayout, BlockStyle
+from ..document_core.models.blocks import BlockLayout, BlockStyle, ParagraphRun
 from ..document_core.models.document import DocumentModel
 
 SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
@@ -126,22 +126,44 @@ class BlockHeadingInput(BaseModel):
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
 
+class ParagraphRunInput(ParagraphRun):
+    model_config = ConfigDict(extra="forbid")
+
+
 class AddParagraphRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     document_id: str
-    text: str = Field(min_length=1)
+    text: str = ""
+    variant: Literal["body", "summary_box", "key_takeaway"] = "body"
+    title: str = ""
+    runs: list[ParagraphRunInput] = Field(default_factory=list)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> AddParagraphRequest:
+        if self.text.strip() or self.runs:
+            return self
+        raise ValueError("paragraph requires text or runs")
 
 
 class SectionParagraphInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["paragraph"] = "paragraph"
-    text: str = Field(min_length=1)
+    text: str = ""
+    variant: Literal["body", "summary_box", "key_takeaway"] = "body"
+    title: str = ""
+    runs: list[ParagraphRunInput] = Field(default_factory=list)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> SectionParagraphInput:
+        if self.text.strip() or self.runs:
+            return self
+        raise ValueError("paragraph requires text or runs")
 
 
 class AddListRequest(BaseModel):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from docx.oxml.ns import qn
+
 _DEFAULT_FONT_NAME = "Microsoft YaHei"
 
 
@@ -14,14 +16,23 @@ def clear_paragraph(paragraph) -> None:
         run._element.getparent().remove(run._element)
 
 
-def format_run(run, *, font_name: str, font_size, bold: bool, color=None) -> None:
-    from docx.oxml.ns import qn
-
+def format_run(
+    run,
+    *,
+    font_name: str,
+    font_size,
+    bold: bool,
+    color=None,
+    italic: bool = False,
+    underline: bool = False,
+) -> None:
     run.font.name = font_name
     r_pr = run._element.get_or_add_rPr()
     r_pr.rFonts.set(qn("w:eastAsia"), font_name)
     run.font.size = font_size
     run.font.bold = bold
+    run.font.italic = italic
+    run.font.underline = underline
     if color is not None:
         run.font.color.rgb = color
 
