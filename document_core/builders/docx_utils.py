@@ -3,6 +3,7 @@ from __future__ import annotations
 from docx.oxml.ns import qn
 
 _DEFAULT_FONT_NAME = "Microsoft YaHei"
+_DEFAULT_CODE_FONT_NAME = "Consolas"
 
 
 def rgb(value: str):

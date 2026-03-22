@@ -7,6 +7,7 @@ from ..macros import build_summary_card_group, expand_summary_card_block
 from ..models import blocks as block_models
 from ..models.document import DocumentModel
 from .docx_utils import (
+    _DEFAULT_CODE_FONT_NAME,
     _DEFAULT_FONT_NAME,
     format_run,
     resolve_alignment,
@@ -283,7 +284,7 @@ class WordDocumentBuilder:
         )
         paragraph.paragraph_format.line_spacing = theme["body_line_spacing"]
         paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-        self._append_paragraph_runs(paragraph, block, theme, variant)
+        self._append_paragraph_runs(paragraph, block, theme)
 
     def _add_list(self, doc: WordDocument, block: ListBlock, theme: dict) -> None:
         from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -426,11 +427,9 @@ class WordDocumentBuilder:
     def _paragraph_text(block: ParagraphBlock) -> str:
         if block.text.strip():
             return block.text
-        return "".join(run.text for run in getattr(block, "runs", []))
+        return "".join(run.text for run in block.runs)
 
-    def _append_paragraph_runs(
-        self, paragraph, block: ParagraphBlock, theme: dict, variant: str
-    ) -> None:
+    def _append_paragraph_runs(self, paragraph, block: ParagraphBlock, theme: dict) -> None:
         from docx.shared import Pt
 
         font_size = Pt(
@@ -444,9 +443,11 @@ class WordDocumentBuilder:
             default_color=None,
         )
 
-        if getattr(block, "runs", None):
+        if block.runs:
             for run_block in block.runs:
-                font_name = "Consolas" if run_block.code else theme["font_name"]
+                font_name = (
+                    _DEFAULT_CODE_FONT_NAME if run_block.code else theme["font_name"]
+                )
                 run = paragraph.add_run(run_block.text)
                 format_run(
                     run,
@@ -459,16 +460,17 @@ class WordDocumentBuilder:
                     underline=run_block.underline,
                     color=default_color,
                 )
-            return
-
-        run = paragraph.add_run(self._paragraph_text(block))
-        format_run(
-            run,
-            font_name=theme["font_name"],
-            font_size=font_size,
-            bold=self._resolved_bold(False, getattr(block.style, "emphasis", None)),
-            color=default_color,
-        )
+        else:
+            run = paragraph.add_run(self._paragraph_text(block))
+            format_run(
+                run,
+                font_name=theme["font_name"],
+                font_size=font_size,
+                bold=self._resolved_bold(
+                    False, getattr(block.style, "emphasis", None)
+                ),
+                color=default_color,
+            )
 
     def _resolve_text_color(
         self,
