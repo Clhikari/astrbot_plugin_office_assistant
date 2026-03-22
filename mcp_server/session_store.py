@@ -154,19 +154,24 @@ class DocumentSessionStore:
             return document
 
     def _append_blocks_locked(self, document: DocumentModel, blocks: list) -> None:
-        normalized_blocks = self._normalize_table_title_blocks(blocks)
+        normalized_blocks = self._normalize_table_title_blocks(
+            blocks, document.metadata.title
+        )
         for block in normalized_blocks:
             runtime_block = self._build_runtime_block(block, document)
             document.add_block(runtime_block)
 
     @staticmethod
-    def _normalize_table_title_blocks(blocks: list):
+    def _normalize_table_title_blocks(blocks: list, document_title: str = ""):
         normalized: list = []
         index = 0
+        normalized_document_title = document_title.strip()
         while index < len(blocks):
             current = blocks[index]
             next_block = blocks[index + 1] if index + 1 < len(blocks) else None
-            current_text = current.text.strip() if isinstance(current, BlockHeadingInput) else ""
+            current_text = (
+                current.text.strip() if isinstance(current, BlockHeadingInput) else ""
+            )
             next_caption = (
                 (next_block.caption or "").strip()
                 if isinstance(next_block, SectionTableInput)
@@ -177,6 +182,15 @@ class DocumentSessionStore:
                 if isinstance(next_block, SectionTableInput)
                 else ""
             )
+
+            if (
+                isinstance(current, BlockHeadingInput)
+                and not normalized
+                and normalized_document_title
+                and current_text == normalized_document_title
+            ):
+                index += 1
+                continue
 
             if (
                 isinstance(current, BlockHeadingInput)
@@ -211,6 +225,9 @@ class DocumentSessionStore:
         if isinstance(block, SectionParagraphInput):
             return ParagraphBlock(
                 text=block.text,
+                variant=block.variant,
+                title=block.title,
+                runs=block.runs,
                 style=block.style,
                 layout=block.layout,
             )
@@ -311,6 +328,11 @@ class DocumentSessionStore:
                     {
                         "type": BLOCK_TYPE_PARAGRAPH,
                         "text": request.text,
+                        "variant": request.variant,
+                        "title": request.title,
+                        "runs": [
+                            run.model_dump(exclude_none=True) for run in request.runs
+                        ],
                         "style": request.style.model_dump(exclude_none=True),
                         "layout": request.layout.model_dump(exclude_none=True),
                     }

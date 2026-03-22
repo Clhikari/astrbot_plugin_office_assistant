@@ -6,7 +6,13 @@ from typing import TYPE_CHECKING
 from ..macros import build_summary_card_group, expand_summary_card_block
 from ..models import blocks as block_models
 from ..models.document import DocumentModel
-from .docx_utils import _DEFAULT_FONT_NAME, format_run, resolve_alignment, rgb
+from .docx_utils import (
+    _DEFAULT_CODE_FONT_NAME,
+    _DEFAULT_FONT_NAME,
+    format_run,
+    resolve_alignment,
+    rgb,
+)
 from .table_renderer import TableRenderer
 
 if TYPE_CHECKING:
@@ -241,6 +247,7 @@ class WordDocumentBuilder:
         from docx.shared import Pt
 
         variant = getattr(block, "variant", "body")
+        paragraph_text = self._paragraph_text(block)
         if variant in {"summary_box", "key_takeaway"}:
             card_title = getattr(block, "title", "") or (
                 "Summary" if variant == "summary_box" else "Key Takeaway"
@@ -249,7 +256,7 @@ class WordDocumentBuilder:
                 doc,
                 build_summary_card_group(
                     title=card_title,
-                    items=[block.text],
+                    items=[paragraph_text],
                     variant="summary",
                     style=block.style,
                     layout=block.layout,
@@ -277,21 +284,7 @@ class WordDocumentBuilder:
         )
         paragraph.paragraph_format.line_spacing = theme["body_line_spacing"]
         paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-        run = paragraph.add_run(block.text)
-        format_run(
-            run,
-            font_name=theme["font_name"],
-            font_size=Pt(
-                self._scaled_size(
-                    theme["body_size"], getattr(block.style, "font_scale", None)
-                )
-            ),
-            bold=self._resolved_bold(False, getattr(block.style, "emphasis", None)),
-            color=self._resolve_text_color(
-                theme=theme,
-                emphasis=getattr(block.style, "emphasis", None),
-            ),
-        )
+        self._append_paragraph_runs(paragraph, block, theme)
 
     def _add_list(self, doc: WordDocument, block: ListBlock, theme: dict) -> None:
         from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -429,6 +422,55 @@ class WordDocumentBuilder:
         if emphasis == "strong":
             return True
         return default_bold
+
+    @staticmethod
+    def _paragraph_text(block: ParagraphBlock) -> str:
+        if block.runs:
+            return "".join(run.text for run in block.runs)
+        return block.text
+
+    def _append_paragraph_runs(self, paragraph, block: ParagraphBlock, theme: dict) -> None:
+        from docx.shared import Pt
+
+        font_size = Pt(
+            self._scaled_size(
+                theme["body_size"], getattr(block.style, "font_scale", None)
+            )
+        )
+        default_color = self._resolve_text_color(
+            theme=theme,
+            emphasis=getattr(block.style, "emphasis", None),
+            default_color=None,
+        )
+
+        if block.runs:
+            for run_block in block.runs:
+                font_name = (
+                    _DEFAULT_CODE_FONT_NAME if run_block.code else theme["font_name"]
+                )
+                run = paragraph.add_run(run_block.text)
+                format_run(
+                    run,
+                    font_name=font_name,
+                    font_size=font_size,
+                    bold=self._resolved_bold(
+                        run_block.bold, getattr(block.style, "emphasis", None)
+                    ),
+                    italic=run_block.italic,
+                    underline=run_block.underline,
+                    color=default_color,
+                )
+        else:
+            run = paragraph.add_run(self._paragraph_text(block))
+            format_run(
+                run,
+                font_name=theme["font_name"],
+                font_size=font_size,
+                bold=self._resolved_bold(
+                    False, getattr(block.style, "emphasis", None)
+                ),
+                color=default_color,
+            )
 
     def _resolve_text_color(
         self,

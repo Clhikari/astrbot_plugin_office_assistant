@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class BlockLayout(BaseModel):
@@ -38,9 +38,28 @@ class HeadingBlock(BlockBase):
     level: int = Field(default=1, ge=1, le=6)
 
 
+class ParagraphRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1)
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    code: bool = False
+
+
 class ParagraphBlock(BlockBase):
     type: Literal["paragraph"] = "paragraph"
-    text: str = Field(min_length=1)
+    text: str = ""
+    variant: Literal["body", "summary_box", "key_takeaway"] = "body"
+    title: str = ""
+    runs: list[ParagraphRun] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> ParagraphBlock:
+        if self.text.strip() or self.runs:
+            return self
+        raise ValueError("paragraph requires text or runs")
 
 
 class ListBlock(BlockBase):
