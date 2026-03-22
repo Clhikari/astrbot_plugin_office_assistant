@@ -23,12 +23,15 @@ from astrbot_plugin_office_assistant.document_core.builders.word_builder import 
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     GroupBlock,
+    ParagraphBlock,
+    ParagraphRun,
 )
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
     AddTableRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
+    SectionParagraphInput,
     SectionTableInput,
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
@@ -37,6 +40,7 @@ from astrbot_plugin_office_assistant.mcp_server.server import (
 from astrbot_plugin_office_assistant.mcp_server.session_store import (
     DocumentSessionStore,
 )
+from pydantic import ValidationError
 
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -134,6 +138,36 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert (
         block_properties["runs"]["items"]["properties"]["italic"]["type"] == "boolean"
     )
+    run_properties = block_properties["runs"]["items"]["properties"]
+    assert run_properties["bold"]["type"] == "boolean"
+    assert run_properties["underline"]["type"] == "boolean"
+    assert run_properties["code"]["type"] == "boolean"
+    assert block_properties["text"]["type"] == "string"
+    assert block_properties["runs"]["type"] == "array"
+    assert block_properties["runs"]["items"]["type"] == "object"
+
+
+def test_paragraph_schema_requires_text_or_runs():
+    with pytest.raises(ValidationError, match="paragraph requires text or runs"):
+        SectionParagraphInput.model_validate(
+            {
+                "type": "paragraph",
+                "text": "",
+                "runs": [],
+            }
+        )
+
+
+def test_word_document_builder_prefers_runs_when_both_text_and_runs_exist():
+    block = ParagraphBlock(
+        text="plain text",
+        runs=[
+            ParagraphRun(text="rich"),
+            ParagraphRun(text=" content"),
+        ],
+    )
+
+    assert WordDocumentBuilder._paragraph_text(block) == "rich content"
 
 
 @pytest.mark.asyncio

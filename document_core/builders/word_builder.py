@@ -425,9 +425,9 @@ class WordDocumentBuilder:
 
     @staticmethod
     def _paragraph_text(block: ParagraphBlock) -> str:
-        if block.text.strip():
-            return block.text
-        return "".join(run.text for run in block.runs)
+        if block.runs:
+            return "".join(run.text for run in block.runs)
+        return block.text
 
     def _append_paragraph_runs(self, paragraph, block: ParagraphBlock, theme: dict) -> None:
         from docx.shared import Pt
