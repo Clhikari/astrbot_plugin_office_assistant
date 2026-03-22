@@ -185,6 +185,15 @@ class DocumentSessionStore:
 
             if (
                 isinstance(current, BlockHeadingInput)
+                and not normalized
+                and normalized_document_title
+                and current_text == normalized_document_title
+            ):
+                index += 1
+                continue
+
+            if (
+                isinstance(current, BlockHeadingInput)
                 and isinstance(next_block, SectionTableInput)
                 and not (next_caption or next_title)
                 and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
@@ -198,15 +207,6 @@ class DocumentSessionStore:
                     )
                 )
                 index += 2
-                continue
-
-            if (
-                isinstance(current, BlockHeadingInput)
-                and not normalized
-                and normalized_document_title
-                and current_text == normalized_document_title
-            ):
-                index += 1
                 continue
 
             normalized.append(current)

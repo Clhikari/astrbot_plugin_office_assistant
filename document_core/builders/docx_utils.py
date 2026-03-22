@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from docx.oxml.ns import qn
-
 _DEFAULT_FONT_NAME = "Microsoft YaHei"
 _DEFAULT_CODE_FONT_NAME = "Consolas"
 
@@ -27,6 +25,8 @@ def format_run(
     italic: bool = False,
     underline: bool = False,
 ) -> None:
+    from docx.oxml.ns import qn
+
     run.font.name = font_name
     r_pr = run._element.get_or_add_rPr()
     r_pr.rFonts.set(qn("w:eastAsia"), font_name)
