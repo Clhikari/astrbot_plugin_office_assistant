@@ -120,13 +120,24 @@ class LLMRequestPolicy:
                     )
                     continue
 
+                if not should_expose:
+                    logger.info(
+                        "[文件管理] 文件 %s 已保存为 %s，但当前轮未暴露文件工具，跳过上传文件提示注入",
+                        original_name,
+                        stored_path.name,
+                    )
+                    continue
+
                 prompt = NOTICE_UPLOADED_FILE_TEMPLATE.format(
                     type_desc=type_desc,
                     original_name=original_name,
                     file_suffix=file_suffix,
+                    stored_name=stored_path.name,
                 )
 
                 req.system_prompt = (req.system_prompt or "") + prompt
-                logger.info(f"[文件管理] 收到文件 {original_name}，已保存。")
+                logger.info(
+                    f"[文件管理] 收到文件 {original_name}，已保存为 {stored_path.name}。"
+                )
             except Exception as exc:
                 logger.error(f"[文件管理] 处理上传文件失败: {exc}")

@@ -95,18 +95,18 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             "export_document",
         }.issubset(tool_names)
         assert "generate_complex_word_document" not in tool_names
-        assert "处理 Word 文档时，请使用有状态文档工具链" in req.system_prompt
+        assert "文件工具使用指南" in req.system_prompt
         assert "executive_brief" in req.system_prompt
         assert "accent_color=RRGGBB" in req.system_prompt
         assert (
             "style={align, emphasis, font_scale, table_grid, cell_align}"
             in req.system_prompt
         )
-        assert "最好按章节或逻辑块调用 `add_blocks`" in req.system_prompt
-        assert "继续调用文档工具，直到 `export_document` 成功" in req.system_prompt
-        assert "不要调用网络搜索" in req.system_prompt
+        assert "按章节或逻辑块分批调用 `add_blocks`" in req.system_prompt
+        assert "MUST 持续调用直到 `export_document` 成功" in req.system_prompt
+        assert "NEVER 调用网络搜索" in req.system_prompt
         assert (
-            "如果在调用工具前需要先给用户一句过渡说明，也请使用中文"
+            "所有面向用户的回复和过渡说明 MUST 使用中文"
             in req.system_prompt
         )
     finally:
@@ -201,7 +201,7 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
             return source_path, "source.docx"
 
         plugin._extract_upload_source = _fake_extract_upload_source
-        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source.docx")
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source_1.docx")
 
         req = ProviderRequest(
             prompt="根据上传文档整理成正式汇报",
@@ -212,16 +212,18 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
         await plugin.before_llm_chat(event, req)
 
         assert (
-            "如果用户请求依赖上传的可读文件，先调用 `read_file`，再调用 `create_document`"
+            "MUST 先调用 `read_file` 读取内容，再创建文档"
             in req.system_prompt
         )
         assert (
-            "如果用户请求依赖这个上传文件，先调用 `read_file`，再调用 `create_document`"
+            "MUST 先调用 `read_file` 读取此文件"
             in req.system_prompt
         )
-        assert "在至少读取一次上传源文件之前，不要先创建新文档。" in req.system_prompt
-        assert "不要调用网络搜索" in req.system_prompt
-        assert "如果要先给用户一句过渡说明，也请使用中文" in req.system_prompt
+        assert "工作区文件名：source_1.docx" in req.system_prompt
+        assert "使用工作区文件名 `source_1.docx`" in req.system_prompt
+        assert "NEVER 创建新文档" in req.system_prompt
+        assert "NEVER 调用网络搜索" in req.system_prompt
+        assert "MUST 使用中文" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -260,10 +262,47 @@ async def test_buffered_upload_without_prompt_requires_read_file_first():
 
         assert isinstance(event.message_obj.message[0], Comp.Plain)
         prompt_text = event.message_obj.message[0].text
-        assert "请现在调用 `read_file`。" in prompt_text
-        assert "读取上传源文件前，不要先创建新文档。" in prompt_text
-        assert "目前用户意图还不够明确，读取后再用中文追问。" in prompt_text
+        assert "用户上传了可读取文件" in prompt_text
+        assert "如果后续系统提示提供了工作区文件名，按该文件名处理" in prompt_text
+        assert "用户意图尚不明确时，再用中文询问" in prompt_text
+        assert "`read_file`" not in prompt_text
+        assert "NEVER 创建新文档" not in prompt_text
         assert event.message_str == prompt_text.strip()
         event_queue.put.assert_awaited_once_with(event)
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_does_not_inject_upload_notice_when_file_tools_hidden():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        source_path = Path(__file__).resolve()
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-2",
+        )
+        event.message_obj.message = [
+            Comp.File(name="source.docx", file=str(source_path)),
+        ]
+
+        async def _fake_extract_upload_source(_component):
+            return source_path, "source.docx"
+
+        plugin._extract_upload_source = _fake_extract_upload_source
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source_1.docx")
+
+        req = ProviderRequest(
+            prompt="根据上传文档整理成正式汇报",
+            system_prompt="base",
+            func_tool=ToolSet([_tool("existing_tool")]),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "工作区文件名：source_1.docx" not in req.system_prompt
+        assert "MUST 先调用 `read_file` 读取此文件" not in req.system_prompt
     finally:
         await plugin.terminate()

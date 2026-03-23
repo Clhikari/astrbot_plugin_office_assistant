@@ -26,12 +26,10 @@ def _dump_result(result: ToolResult) -> str:
 
 
 _CONTINUE_UNTIL_EXPORT = (
-    "Continue calling document tools until all requested sections are added and "
-    "export_document succeeds. Do not send a final natural-language reply before export_document."
+    "请继续调用文档工具，直到 export_document 成功。中途不要发自然语言回复。"
 )
 _FINALIZE_PROMPT = (
-    "Document finalized. Call export_document now. "
-    "Do not send a final natural-language reply before export_document."
+    "文档已定稿。请立即调用 export_document 导出文件，不要发自然语言回复。"
 )
 
 
@@ -143,7 +141,7 @@ class CreateDocumentTool(DocumentToolBase):
         return _dump_result(
             ToolResult(
                 success=True,
-                message=f"Document session created. {_CONTINUE_UNTIL_EXPORT}",
+                message=f"文档会话已创建。下一步请调用 add_blocks 添加内容。{_CONTINUE_UNTIL_EXPORT}",
                 document=build_document_summary(document),
             )
         )
@@ -175,6 +173,21 @@ class AddBlocksTool(DocumentToolBase):
                         "properties": {
                             "type": {"type": "string"},
                             "text": {"type": "string"},
+                            "runs": {
+                                "type": "array",
+                                "description": "Optional inline rich-text runs for paragraph blocks.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "text": {"type": "string"},
+                                        "bold": {"type": "boolean"},
+                                        "italic": {"type": "boolean"},
+                                        "underline": {"type": "boolean"},
+                                        "code": {"type": "boolean"},
+                                    },
+                                    "required": ["text"],
+                                },
+                            },
                             "level": {"type": "number"},
                             "items": {
                                 "type": "array",
@@ -199,7 +212,7 @@ class AddBlocksTool(DocumentToolBase):
                             },
                             "title": {
                                 "type": "string",
-                                "description": "Alias of caption for table blocks. Use this instead of a separate heading when the user asks for a table title.",
+                                "description": "Optional paragraph card title, or table title alias for table blocks.",
                             },
                             "column_widths": {
                                 "type": "array",
@@ -247,7 +260,7 @@ class AddBlocksTool(DocumentToolBase):
         return _dump_result(
             ToolResult(
                 success=True,
-                message=f"Blocks added. {_CONTINUE_UNTIL_EXPORT}",
+                message=f"内容块已添加。如果还有更多内容，继续调用 add_blocks；否则调用 finalize_document。{_CONTINUE_UNTIL_EXPORT}",
                 document=build_document_summary(document),
             )
         )

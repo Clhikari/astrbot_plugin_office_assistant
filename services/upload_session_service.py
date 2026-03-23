@@ -159,25 +159,43 @@ class UploadSessionService:
 
         if has_readable_file and user_instruction:
             prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件：\n"
-                + "\n".join(file_info_list)
-                + f"\n\n用户要求：{user_instruction}"
-                + "\n\n请先调用 `read_file`，再继续处理。"
-                + " 读取上传源文件前，不要先创建新文档。"
-                + " 如果要先给用户一句过渡说明，也请使用中文。"
+                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+                "\n"
+                "[文件信息]\n"
+                + "\n".join(f"- {info}" for info in file_info_list)
+                + "\n"
+                "\n"
+                f"[用户指令]\n"
+                f"{user_instruction}\n"
+                "\n"
+                "[处理建议]\n"
+                "1. 优先围绕这些上传文件完成用户请求。\n"
+                "2. 如果后续系统提示提供了工作区文件名，按该文件名处理。\n"
+                "3. 所有面向用户的回复 MUST 使用中文。"
             )
         elif has_readable_file:
             prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件：\n"
-                + "\n".join(file_info_list)
-                + "\n\n请现在调用 `read_file`。读取上传源文件前，不要先创建新文档。"
-                + " 目前用户意图还不够明确，读取后再用中文追问。"
+                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+                "\n"
+                "[文件信息]\n"
+                + "\n".join(f"- {info}" for info in file_info_list)
+                + "\n"
+                "\n"
+                "[处理建议]\n"
+                "1. 用户上传了可读取文件，后续应优先围绕这些文件处理。\n"
+                "2. 如果后续系统提示提供了工作区文件名，按该文件名处理。\n"
+                "3. 用户意图尚不明确时，再用中文询问用户想要如何处理。"
             )
         else:
             prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件：\n"
-                + "\n".join(file_info_list)
-                + "\n\n请根据用户要求处理这些文件，并使用中文与用户沟通。"
+                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+                "\n"
+                "[文件信息]\n"
+                + "\n".join(f"- {info}" for info in file_info_list)
+                + "\n"
+                "\n"
+                "[操作要求]\n"
+                "请根据用户要求处理这些文件，使用中文与用户沟通。"
             )
 
         new_chain = [Comp.Plain(prompt_text)]
