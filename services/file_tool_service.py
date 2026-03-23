@@ -116,7 +116,7 @@ class FileToolService:
         event: AstrMessageEvent,
         filename: str = "",
         content: str = "",
-        file_type: str = "word",
+        file_type: str = "",
     ) -> str | None:
         warnings.warn(
             "create_office_file is deprecated for Word documents. "
@@ -146,7 +146,10 @@ class FileToolService:
         if suffix in SUFFIX_TO_OFFICE_TYPE:
             office_type = SUFFIX_TO_OFFICE_TYPE[suffix]
         else:
-            office_type = OFFICE_TYPE_MAP.get(file_type.lower())
+            normalized_file_type = file_type.lower().strip()
+            if not normalized_file_type:
+                return "错误：未指定文件类型。请提供带后缀的文件名，或显式传入 file_type（excel/powerpoint）。"
+            office_type = OFFICE_TYPE_MAP.get(normalized_file_type)
 
         if not office_type:
             return f"错误：不支持的文件类型 '{file_type}'"

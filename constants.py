@@ -142,7 +142,7 @@ NOTICE_UPLOADED_FILE_TEMPLATE = (
     "- 状态：已保存到工作区\n"
     "\n"
     "[操作要求]\n"
-    "1. MUST 先调用 `read_file` 读取此文件，读取时优先使用工作区文件名 `{stored_name}`。在读取前 NEVER 创建新文档。\n"
+    "1. MUST 先调用 `read_file` 读取此文件，并必须使用工作区文件名 `{stored_name}`（不要使用原始文件名 `{original_name}`）。在读取前 NEVER 创建新文档。\n"
     "2. 如果用户意图明确，读取后按需处理；如果意图不清楚，读取后用中文追问用户。\n"
     "3. 所有面向用户的回复 MUST 使用中文。"
 )

@@ -321,7 +321,7 @@ class FileOperationPlugin(Star):
         event: AstrMessageEvent,
         filename: str = "",
         content: str = "",
-        file_type: str = "word",
+        file_type: str = "",
     ):
         """[DEPRECATED] 创建简单的 Office 文件（Excel/PPT）并发送给用户。
 
@@ -336,7 +336,7 @@ class FileOperationPlugin(Star):
         Args:
             filename(string): 输出文件名（.docx/.xlsx/.pptx）。
             content(string): 按上述格式提供的文件内容。
-            file_type(string): 兜底类型（word/excel/powerpoint）。
+            file_type(string): 当文件名没有后缀时必须显式指定，支持 `excel` / `powerpoint`。
         """
         return await self._file_tool_service.create_office_file(
             event,

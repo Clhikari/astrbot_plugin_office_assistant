@@ -267,9 +267,11 @@ async def test_upload_session_service_builds_read_first_prompt_for_buffered_uplo
 
     assert isinstance(event.message_obj.message[0], Comp.Plain)
     prompt_text = event.message_obj.message[0].text
-    assert "请现在调用 `read_file`。" in prompt_text
-    assert "读取上传源文件前，不要先创建新文档。" in (prompt_text)
-    assert "目前用户意图还不够明确，读取后再用中文追问。" in prompt_text
+    assert "用户上传了可读取文件，后续应优先围绕这些文件处理。" in prompt_text
+    assert "如果后续系统提示提供了工作区文件名，按该文件名处理。" in prompt_text
+    assert "用户意图尚不明确时，再用中文询问用户想要如何处理。" in prompt_text
+    assert "`read_file`" not in prompt_text
+    assert "NEVER 创建新文档" not in prompt_text
     assert event.message_str == prompt_text.strip()
     event_queue.put.assert_awaited_once_with(event)
 
@@ -635,6 +637,51 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
 
     assert result == "错误：不支持的文件类型 'unknown'"
     event.send.assert_not_called()
+    office_generator.generate.assert_not_called()
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_requires_explicit_type_without_suffix():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    office_generator = MagicMock()
+    delivery_service = MagicMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"openpyxl": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report",
+            content="hello world",
+            file_type="",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert (
+        result
+        == "错误：未指定文件类型。请提供带后缀的文件名，或显式传入 file_type（excel/powerpoint）。"
+    )
     office_generator.generate.assert_not_called()
     delivery_service.send_file_with_preview.assert_not_called()
 

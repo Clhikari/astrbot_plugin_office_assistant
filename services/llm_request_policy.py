@@ -84,7 +84,7 @@ class LLMRequestPolicy:
                 req.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
 
-        if should_expose:
+        if should_expose and req.func_tool:
             req.system_prompt = (req.system_prompt or "") + NOTICE_DOCUMENT_TOOLS_GUIDE
 
         if not can_process_upload:
@@ -120,9 +120,9 @@ class LLMRequestPolicy:
                     )
                     continue
 
-                if not should_expose:
+                if not should_expose or not req.func_tool:
                     logger.info(
-                        "[文件管理] 文件 %s 已保存为 %s，但当前轮未暴露文件工具，跳过上传文件提示注入",
+                        "[文件管理] 文件 %s 已保存为 %s，但当前轮未暴露文件工具或未附加函数工具，跳过上传文件提示注入",
                         original_name,
                         stored_path.name,
                     )

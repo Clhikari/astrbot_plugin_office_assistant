@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from astrbot_plugin_office_assistant.main import FileOperationPlugin
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
+from astrbot_plugin_office_assistant.services.upload_session_service import (
+    UploadSessionService,
+)
 
 import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
@@ -220,7 +223,7 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
             in req.system_prompt
         )
         assert "工作区文件名：source_1.docx" in req.system_prompt
-        assert "使用工作区文件名 `source_1.docx`" in req.system_prompt
+        assert "必须使用工作区文件名 `source_1.docx`" in req.system_prompt
         assert "NEVER 创建新文档" in req.system_prompt
         assert "NEVER 调用网络搜索" in req.system_prompt
         assert "MUST 使用中文" in req.system_prompt
@@ -274,14 +277,51 @@ async def test_buffered_upload_without_prompt_requires_read_file_first():
 
 
 @pytest.mark.asyncio
+async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_constraints():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+    )
+    event = _build_event()
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(
+        event=event,
+        files=[upload],
+        texts=["请根据上传文档整理成正式汇报"],
+    )
+
+    await service.on_buffer_complete(buf)
+
+    assert isinstance(event.message_obj.message[0], Comp.Plain)
+    prompt_text = event.message_obj.message[0].text
+    assert "[文件信息]" in prompt_text
+    assert "[用户指令]" in prompt_text
+    assert "请根据上传文档整理成正式汇报" in prompt_text
+    assert "[处理建议]" in prompt_text
+    assert "优先围绕这些上传文件完成用户请求" in prompt_text
+    assert "如果后续系统提示提供了工作区文件名，按该文件名处理" in prompt_text
+    assert "`read_file`" not in prompt_text
+    assert "NEVER 创建新文档" not in prompt_text
+    assert event.message_str == prompt_text.strip()
+    event_queue.put.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_does_not_inject_upload_notice_when_file_tools_hidden():
     context = MagicMock()
-    plugin = FileOperationPlugin(context=context, config=_build_config())
+    config = _build_config()
+    config["trigger_settings"]["enable_features_in_group"] = True
+    plugin = FileOperationPlugin(context=context, config=config)
     try:
         source_path = Path(__file__).resolve()
         event = _build_event(
-            message_type=MessageType.FRIEND_MESSAGE,
-            sender_id="user-2",
+            message_type=MessageType.GROUP_MESSAGE,
+            sender_id="user-1",
         )
         event.message_obj.message = [
             Comp.File(name="source.docx", file=str(source_path)),
