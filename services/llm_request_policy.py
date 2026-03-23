@@ -182,7 +182,7 @@ class LLMRequestPolicy:
                     logger.info(
                         "[文件管理] 文件 %s 已保存为 %s，但当前轮未暴露文件工具或未附加函数工具，跳过上传文件提示注入",
                         original_name,
-                        stored_path.name,
+                        stored_name or original_name,
                     )
                     continue
 

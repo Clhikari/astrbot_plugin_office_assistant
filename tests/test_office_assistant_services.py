@@ -285,6 +285,37 @@ async def test_upload_session_service_builds_read_first_prompt_for_buffered_uplo
 
 
 @pytest.mark.asyncio
+async def test_upload_session_service_omits_external_path_when_disabled():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+    await service.on_buffer_complete(buf)
+
+    assert isinstance(event.message_obj.message[0], Comp.Plain)
+    prompt_text = event.message_obj.message[0].text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径:" not in prompt_text
+    assert "如果需要使用工作区外路径" not in prompt_text
+    assert "若使用相对路径，请使用上面的工作区文件名。" in prompt_text
+    assert event.message_str == prompt_text.strip()
+    event_queue.put.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
 async def test_delivery_service_sends_message_and_file_for_existing_path():
     event = _build_event()
     event.send = AsyncMock()

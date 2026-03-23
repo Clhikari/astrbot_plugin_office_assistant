@@ -227,36 +227,43 @@ class UploadSessionService:
         if not user_instruction:
             user_instruction = self.pop_recent_text(event)
 
+        relative_path_guidance = "3. 若使用相对路径，请使用上面的工作区文件名。\\n"
+        if self._allow_external_input_files:
+            relative_path_guidance = (
+                "3. 若使用相对路径，请使用上面的工作区文件名；"
+                "如果已提供外部绝对路径，则可直接使用该绝对路径。\\n"
+            )
+
         if has_readable_file and user_instruction:
             prompt_text = (
                 f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
-                "\n"
-                "[文件信息]\n"
+                + "\n"
+                + "[文件信息]\n"
                 + "\n".join(f"- {info}" for info in file_info_list)
                 + "\n"
-                "\n"
-                f"[用户指令]\n"
-                f"{user_instruction}\n"
-                "\n"
-                "[处理建议]\n"
-                "1. 优先围绕这些上传文件完成用户请求。\n"
-                "2. 先调用 `read_file` 读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
-                "3. 若使用相对路径，请使用上面的工作区文件名；如果已提供外部绝对路径，则可直接使用该绝对路径。\n"
-                "4. 所有面向用户的回复 MUST 使用中文。"
+                + "\n"
+                + "[用户指令]\n"
+                + f"{user_instruction}\n"
+                + "\n"
+                + "[处理建议]\n"
+                + "1. 优先围绕这些上传文件完成用户请求。\n"
+                + "2. 先调用 `read_file` 读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
+                + relative_path_guidance
+                + "4. 所有面向用户的回复 MUST 使用中文。"
             )
         elif has_readable_file:
             prompt_text = (
                 f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
-                "\n"
-                "[文件信息]\n"
+                + "\n"
+                + "[文件信息]\n"
                 + "\n".join(f"- {info}" for info in file_info_list)
                 + "\n"
-                "\n"
-                "[处理建议]\n"
-                "1. 用户上传了可读取文件，后续应优先围绕这些文件处理。\n"
-                "2. 如果要读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
-                "3. 若使用相对路径，请使用上面的工作区文件名；如果已提供外部绝对路径，则可直接使用该绝对路径。\n"
-                "4. 用户意图尚不明确时，再用中文询问用户想要如何处理。"
+                + "\n"
+                + "[处理建议]\n"
+                + "1. 用户上传了可读取文件，后续应优先围绕这些文件处理。\n"
+                + "2. 如果要读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
+                + relative_path_guidance
+                + "4. 用户意图尚不明确时，再用中文询问用户想要如何处理。"
             )
         else:
             prompt_text = (
