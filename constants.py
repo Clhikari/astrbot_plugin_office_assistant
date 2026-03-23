@@ -130,8 +130,9 @@ NOTICE_DOCUMENT_TOOLS_GUIDE = (
     "[约束规则]\n"
     "1. 如果用户请求依赖上传文件，MUST 先调用 `read_file` 读取内容，再创建文档。\n"
     "2. 如果 `read_file` 返回文件不存在或路径非法，NEVER 调用网络搜索；直接请用户重新上传。\n"
-    "3. 一旦开始使用文档工具链，MUST 持续调用直到 `export_document` 成功，中途不要停下来发自然语言回复。\n"
-    "4. 所有面向用户的回复和过渡说明 MUST 使用中文。"
+    "3. 如果用户显式指定了某个工具名和参数，MUST 先按该工具调用；即使预期会报错，也不要擅自改调其他工具。\n"
+    "4. 一旦开始使用文档工具链，MUST 持续调用直到 `export_document` 成功，中途不要停下来发自然语言回复。\n"
+    "5. 所有面向用户的回复和过渡说明 MUST 使用中文。"
 )
 
 NOTICE_UPLOADED_FILE_TEMPLATE = (
@@ -139,12 +140,13 @@ NOTICE_UPLOADED_FILE_TEMPLATE = (
     "- 文件类型：{type_desc}\n"
     "- 原始文件名：{original_name}（后缀：{file_suffix}）\n"
     "- 工作区文件名：{stored_name}\n"
+    "{external_path_line}"
     "- 状态：已保存到工作区\n"
     "\n"
     "[操作要求]\n"
-    "1. MUST 先调用 `read_file` 读取此文件，并必须使用工作区文件名 `{stored_name}`（不要使用原始文件名 `{original_name}`）。在读取前 NEVER 创建新文档。\n"
+    "1. MUST 先调用 `read_file` 读取此文件，不要自行猜测文件名，也不要列目录或调用 shell。若使用相对路径，必须使用工作区文件名 `{stored_name}`（不要使用原始文件名 `{original_name}`）。{external_path_rule}在读取前 NEVER 创建新文档。\n"
     "2. 如果用户意图明确，读取后按需处理；如果意图不清楚，读取后用中文追问用户。\n"
-    "3. 所有面向用户的回复 MUST 使用中文。"
+    "3. 所有面向用户的回复 MUST 使用中文。\n"
 )
 
 MSG_DOCUMENT_EXPORTED = "✅ 文档已导出"

@@ -108,6 +108,7 @@ async def test_before_llm_chat_injects_document_tools_per_request():
         assert "按章节或逻辑块分批调用 `add_blocks`" in req.system_prompt
         assert "MUST 持续调用直到 `export_document` 成功" in req.system_prompt
         assert "NEVER 调用网络搜索" in req.system_prompt
+        assert "如果用户显式指定了某个工具名和参数，MUST 先按该工具调用" in req.system_prompt
         assert (
             "所有面向用户的回复和过渡说明 MUST 使用中文"
             in req.system_prompt
@@ -233,6 +234,45 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
 
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        req = ProviderRequest(
+            prompt="调用 create_office_file，filename=report，content=hello，file_type=word",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("create_office_file"),
+                    _tool("create_document"),
+                    _tool("add_blocks"),
+                    _tool("finalize_document"),
+                    _tool("export_document"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_office_file" in tool_names
+        assert "create_document" not in tool_names
+        assert "add_blocks" not in tool_names
+        assert "finalize_document" not in tool_names
+        assert "export_document" not in tool_names
+        assert "read_file" not in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_remember_recent_text_skips_system_notice_messages():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
@@ -258,18 +298,26 @@ async def test_buffered_upload_without_prompt_requires_read_file_first():
     context.get_event_queue.return_value = event_queue
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
+        source_path = Path(__file__).resolve()
         event = _build_event()
         upload = Comp.File(name="report.docx", file="report.docx")
         buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+        async def _fake_extract_upload_source(_component):
+            return source_path, "report.docx"
+
+        plugin._extract_upload_source = _fake_extract_upload_source
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("report_1.docx")
 
         await plugin._on_buffer_complete(buf)
 
         assert isinstance(event.message_obj.message[0], Comp.Plain)
         prompt_text = event.message_obj.message[0].text
         assert "用户上传了可读取文件" in prompt_text
-        assert "如果后续系统提示提供了工作区文件名，按该文件名处理" in prompt_text
-        assert "用户意图尚不明确时，再用中文询问" in prompt_text
-        assert "`read_file`" not in prompt_text
+        assert "工作区文件名: report_1.docx" in prompt_text
+        assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
+        assert "若使用相对路径，请使用上面的工作区文件名" in prompt_text
+        assert "如果要读取文件" in prompt_text
         assert "NEVER 创建新文档" not in prompt_text
         assert event.message_str == prompt_text.strip()
         event_queue.put.assert_awaited_once_with(event)
@@ -287,6 +335,9 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
         recent_text_ttl_seconds=30,
         recent_text_max_entries=32,
         recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(Path(__file__).resolve(), "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=True,
     )
     event = _build_event()
     upload = Comp.File(name="report.docx", file="report.docx")
@@ -305,8 +356,10 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
     assert "请根据上传文档整理成正式汇报" in prompt_text
     assert "[处理建议]" in prompt_text
     assert "优先围绕这些上传文件完成用户请求" in prompt_text
-    assert "如果后续系统提示提供了工作区文件名，按该文件名处理" in prompt_text
-    assert "`read_file`" not in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径:" in prompt_text
+    assert "先调用 `read_file` 读取文件" in prompt_text
+    assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
     assert "NEVER 创建新文档" not in prompt_text
     assert event.message_str == prompt_text.strip()
     event_queue.put.assert_awaited_once_with(event)

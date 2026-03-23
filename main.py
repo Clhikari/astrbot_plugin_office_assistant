@@ -328,6 +328,8 @@ class FileOperationPlugin(Star):
         ⚠️ 对于 Word 文档，MUST 改用文档工具链：
         create_document → add_blocks → finalize_document → export_document
         此工具仅建议用于简单的一次性 Excel/PPT 输出。
+        如果用户显式点名 `create_office_file` 并给出参数，MUST 先调用此工具；
+        即使预期会报错，也不要擅自改成 `create_document` 或其他工具。
 
         内容格式：
         - Excel：用 `|` 分隔单元格，换行分隔行，如 `Name|Age\\nAlice|25`

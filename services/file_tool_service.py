@@ -145,15 +145,21 @@ class FileToolService:
         allowed_fallback_types = "/".join(
             office_name for office_name in OFFICE_TYPE_MAP if office_name != "word"
         )
+        normalized_file_type = str(file_type or "").strip().lower()
         suffix = Path(filename).suffix.lower()
         if suffix in SUFFIX_TO_OFFICE_TYPE:
             office_type = SUFFIX_TO_OFFICE_TYPE[suffix]
         else:
-            normalized_file_type = str(file_type or "").strip().lower()
             if not normalized_file_type:
                 return (
                     "错误：未指定文件类型。请提供带后缀的文件名，"
                     f"或显式传入 file_type（{allowed_fallback_types}）。"
+                )
+            if normalized_file_type == "word":
+                return (
+                    "错误：Word 文档请直接提供 .docx/.doc 文件名，"
+                    "或改用 create_document → add_blocks → finalize_document → "
+                    "export_document。"
                 )
             office_type = OFFICE_TYPE_MAP.get(normalized_file_type)
 
