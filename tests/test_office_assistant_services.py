@@ -635,7 +635,7 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
     finally:
         executor.shutdown(wait=False)
 
-    assert result == "错误：不支持的文件类型 'unknown'"
+    assert result == "错误：不支持的文件类型 'unknown'。允许值：excel/powerpoint"
     event.send.assert_not_called()
     office_generator.generate.assert_not_called()
     delivery_service.send_file_with_preview.assert_not_called()

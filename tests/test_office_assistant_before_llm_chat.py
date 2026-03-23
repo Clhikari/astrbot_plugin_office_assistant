@@ -222,6 +222,7 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
             "MUST 先调用 `read_file` 读取此文件"
             in req.system_prompt
         )
+        assert "原始文件名：source.docx" in req.system_prompt
         assert "工作区文件名：source_1.docx" in req.system_prompt
         assert "必须使用工作区文件名 `source_1.docx`" in req.system_prompt
         assert "NEVER 创建新文档" in req.system_prompt
@@ -342,6 +343,41 @@ async def test_before_llm_chat_does_not_inject_upload_notice_when_file_tools_hid
         await plugin.before_llm_chat(event, req)
 
         assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "工作区文件名：source_1.docx" not in req.system_prompt
+        assert "MUST 先调用 `read_file` 读取此文件" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_skips_upload_notices_when_func_tool_missing():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        source_path = Path(__file__).resolve()
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        event.message_obj.message = [
+            Comp.File(name="source.docx", file=str(source_path)),
+        ]
+
+        async def _fake_extract_upload_source(_component):
+            return source_path, "source.docx"
+
+        plugin._extract_upload_source = _fake_extract_upload_source
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source_1.docx")
+
+        req = ProviderRequest(
+            prompt="根据上传文档整理成正式汇报",
+            system_prompt="base",
+            func_tool=None,
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        assert "文件工具使用指南" not in req.system_prompt
         assert "工作区文件名：source_1.docx" not in req.system_prompt
         assert "MUST 先调用 `read_file` 读取此文件" not in req.system_prompt
     finally:
