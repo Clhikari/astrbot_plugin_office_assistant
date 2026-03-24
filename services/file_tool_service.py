@@ -116,7 +116,7 @@ class FileToolService:
         event: AstrMessageEvent,
         filename: str = "",
         content: str = "",
-        file_type: str = "word",
+        file_type: str = "",
     ) -> str | None:
         warnings.warn(
             "create_office_file is deprecated for Word documents. "
@@ -142,14 +142,32 @@ class FileToolService:
         if not filename:
             return "错误：请提供 filename（文件名）"
 
+        allowed_fallback_types = "/".join(
+            office_name for office_name in OFFICE_TYPE_MAP if office_name != "word"
+        )
+        normalized_file_type = str(file_type or "").strip().lower()
         suffix = Path(filename).suffix.lower()
         if suffix in SUFFIX_TO_OFFICE_TYPE:
             office_type = SUFFIX_TO_OFFICE_TYPE[suffix]
         else:
-            office_type = OFFICE_TYPE_MAP.get(file_type.lower())
+            if not normalized_file_type:
+                return (
+                    "错误：未指定文件类型。请提供带后缀的文件名，"
+                    f"或显式传入 file_type（{allowed_fallback_types}）。"
+                )
+            if normalized_file_type == "word":
+                return (
+                    "错误：Word 文档请直接提供 .docx/.doc 文件名，"
+                    "或改用 create_document → add_blocks → finalize_document → "
+                    "export_document。"
+                )
+            office_type = OFFICE_TYPE_MAP.get(normalized_file_type)
 
         if not office_type:
-            return f"错误：不支持的文件类型 '{file_type}'"
+            return (
+                f"错误：不支持的文件类型 '{normalized_file_type}'。"
+                f"允许值：{allowed_fallback_types}"
+            )
 
         module_name = OFFICE_LIBS[office_type][0]
         if not self._office_libs.get(module_name):

@@ -103,6 +103,9 @@ def build_plugin_runtime(
         recent_text_ttl_seconds=settings.recent_text_ttl_seconds,
         recent_text_max_entries=settings.recent_text_max_entries,
         recent_text_cleanup_interval_seconds=settings.recent_text_cleanup_interval_seconds,
+        extract_upload_source=extract_upload_source,
+        store_uploaded_file=store_uploaded_file,
+        allow_external_input_files=settings.allow_external_input_files,
     )
     document_toolset = build_document_toolset(
         workspace_dir=plugin_data_path,
@@ -115,8 +118,10 @@ def build_plugin_runtime(
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         is_bot_mentioned=access_policy_service.is_bot_mentioned,
+        get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
+        allow_external_input_files=settings.allow_external_input_files,
     )
     delivery_service = DeliveryService(
         executor=executor,

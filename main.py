@@ -299,15 +299,16 @@ class FileOperationPlugin(Star):
         event: AstrMessageEvent,
         filename: str = "",
     ) -> str | None:
-        """读取文本、Office 或 PDF 文件，并把内容返回给 LLM。
+        """读取文本、Office 或 PDF 文件内容。
 
         支持格式：
         - 文本：.txt、.md、.log、.py、.js、.ts、.json、.yaml、.xml、.csv、.html、.css、.sql 等
         - Office：.docx、.xlsx、.pptx、.doc、.xls、.ppt
-        - PDF：.pdf（依赖 pdfplumber 或 pdf2docx）
+        - PDF：.pdf
 
-        不支持：
-        - 图片、视频、音频等二进制文件
+        注意：
+        - 不支持图片、视频、音频等二进制文件
+        - 如果文件不存在或路径非法，直接告知用户并请其重新上传，NEVER 调用网络搜索
 
         Args:
             filename(string): 要读取的文件名。
@@ -320,26 +321,24 @@ class FileOperationPlugin(Star):
         event: AstrMessageEvent,
         filename: str = "",
         content: str = "",
-        file_type: str = "word",
+        file_type: str = "",
     ):
-        """创建 Office 文件（Excel/Word/PowerPoint）并发送给用户。
+        """[DEPRECATED] 创建简单的 Office 文件（Excel/PPT）并发送给用户。
 
-        .. deprecated::
-            对于 Word 文档，请改用有状态文档工具链：
-            ``create_document`` -> ``add_blocks`` -> ``finalize_document`` -> ``export_document``。
-            这个工具后续会移除，只建议用于简单的一次性 Excel/PPT 输出。
-
-        这里只支持基础内容，不支持高级样式、图表和复杂布局。
+        ⚠️ 对于 Word 文档，MUST 改用文档工具链：
+        create_document → add_blocks → finalize_document → export_document
+        此工具仅建议用于简单的一次性 Excel/PPT 输出。
+        如果用户显式点名 `create_office_file` 并给出参数，MUST 先调用此工具；
+        即使预期会报错，也不要擅自改成 `create_document` 或其他工具。
 
         内容格式：
-        - Excel：使用 `|` 分隔单元格，使用换行分隔行，例如 `Name|Age\\nAlice|25`
-        - Word：纯文本，空行代表段落分隔
-        - PowerPoint：用 `[Slide 1]` 标记页，或让空行自动拆分幻灯片
+        - Excel：用 `|` 分隔单元格，换行分隔行，如 `Name|Age\\nAlice|25`
+        - PowerPoint：用 `[Slide 1]` 标记幻灯片页
 
         Args:
-            filename(string): 输出文件名，优先使用 .docx/.xlsx/.pptx。
+            filename(string): 输出文件名（.docx/.xlsx/.pptx）。
             content(string): 按上述格式提供的文件内容。
-            file_type(string): 当文件名没有后缀时使用的兜底类型（word/excel/powerpoint）。
+            file_type(string): 当文件名没有后缀时必须显式指定，支持 `excel` / `powerpoint`。
         """
         return await self._file_tool_service.create_office_file(
             event,
@@ -355,13 +354,11 @@ class FileOperationPlugin(Star):
         filename: str = "",
         file_path: str = "",  # 别名，兼容 LLM 可能使用的参数名
     ) -> str | None:
-        """把 Office 文件（Word/Excel/PowerPoint）转换为 PDF。
-
-        支持后缀：.docx/.doc、.xlsx/.xls、.pptx/.ppt。
-        直接调用这个工具即可，不需要先调用 `read_file`。
+        """把 Office 文件转换为 PDF。支持 .docx/.doc、.xlsx/.xls、.pptx/.ppt。
+        直接调用即可，不需要先调用 read_file。
 
         Args:
-            filename(string): 要转换的 Office 文件名，例如 report.docx、data.xlsx、report.xls。
+            filename(string): 要转换的 Office 文件名，例如 report.docx。
         """
         return await self._file_tool_service.convert_to_pdf(
             event,
@@ -377,17 +374,11 @@ class FileOperationPlugin(Star):
         target_format: str = "word",
         file_id: str = "",  # 别名，兼容 LLM 可能使用的参数名
     ) -> str | None:
-        """把 PDF 文件转换为 Office 格式（Word 或 Excel）。
-
-        直接调用这个工具即可，不需要先调用 `read_file`。
-
-        说明：
-        - PDF -> Word 更适合文本型 PDF，复杂版式可能会有偏移
-        - PDF -> Excel 主要提取表格数据，非表格内容可能丢失
+        """把 PDF 文件转换为 Word 或 Excel 格式。直接调用即可，不需要先调用 read_file。
 
         Args:
             filename(string): 要转换的 PDF 文件名，例如 document.pdf。
-            target_format(string): 目标格式，`word` 或 `excel`，默认是 `word`。
+            target_format(string): 目标格式，`word` 或 `excel`，默认 `word`。
         """
         return await self._file_tool_service.convert_from_pdf(
             event,

@@ -235,6 +235,9 @@ def test_upload_session_service_skips_system_notice_messages():
         recent_text_ttl_seconds=30,
         recent_text_max_entries=32,
         recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
     )
     event = _build_event()
     session_key = service.get_attachment_session_key(event)
@@ -253,11 +256,15 @@ async def test_upload_session_service_builds_read_first_prompt_for_buffered_uplo
     context = MagicMock()
     event_queue = AsyncMock()
     context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
     service = UploadSessionService(
         context=context,
         recent_text_ttl_seconds=30,
         recent_text_max_entries=32,
         recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=True,
     )
     event = _build_event()
     upload = Comp.File(name="report.docx", file="report.docx")
@@ -267,11 +274,73 @@ async def test_upload_session_service_builds_read_first_prompt_for_buffered_uplo
 
     assert isinstance(event.message_obj.message[0], Comp.Plain)
     prompt_text = event.message_obj.message[0].text
-    assert "请现在调用 `read_file`。" in prompt_text
-    assert "读取上传源文件前，不要先创建新文档。" in (prompt_text)
-    assert "目前用户意图还不够明确，读取后再用中文追问。" in prompt_text
+    assert "用户上传了可读取文件，后续应优先围绕这些文件处理。" in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径:" in prompt_text
+    assert "不要自行猜测文件名，也不要列目录或调用 shell。" in prompt_text
+    assert "若使用相对路径，请使用上面的工作区文件名" in prompt_text
+    assert "NEVER 创建新文档" not in prompt_text
     assert event.message_str == prompt_text.strip()
     event_queue.put.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_omits_external_path_when_disabled():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+    await service.on_buffer_complete(buf)
+
+    assert isinstance(event.message_obj.message[0], Comp.Plain)
+    prompt_text = event.message_obj.message[0].text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径:" not in prompt_text
+    assert "如果需要使用工作区外路径" not in prompt_text
+    assert "若使用相对路径，请使用上面的工作区文件名。" in prompt_text
+    assert event.message_str == prompt_text.strip()
+    event_queue.put.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_uses_extracted_filename_for_type_detection():
+    context = MagicMock()
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+    upload = Comp.File(name="upload-token", file="upload-token")
+
+    infos = await service._ensure_upload_infos(event, [upload])
+
+    assert len(infos) == 1
+    info = infos[0]
+    assert info["original_name"] == "report.docx"
+    assert info["file_suffix"] == ".docx"
+    assert info["type_desc"] == "Office文档 (Word/Excel/PPT)"
+    assert info["is_supported"] is True
+    assert info["stored_name"] == "report_1.docx"
+    assert info["source_path"] == str(source_path.resolve())
 
 
 @pytest.mark.asyncio
@@ -633,8 +702,99 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
     finally:
         executor.shutdown(wait=False)
 
-    assert result == "错误：不支持的文件类型 'unknown'"
+    assert result == "错误：不支持的文件类型 'unknown'。允许值：excel/powerpoint"
     event.send.assert_not_called()
+    office_generator.generate.assert_not_called()
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_requires_explicit_type_without_suffix():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    office_generator = MagicMock()
+    delivery_service = MagicMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"openpyxl": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report",
+            content="hello world",
+            file_type="",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert (
+        result
+        == "错误：未指定文件类型。请提供带后缀的文件名，或显式传入 file_type（excel/powerpoint）。"
+    )
+    office_generator.generate.assert_not_called()
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_rejects_word_fallback_without_suffix():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    office_generator = MagicMock()
+    delivery_service = MagicMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report",
+            content="hello world",
+            file_type="word",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert (
+        result
+        == "错误：Word 文档请直接提供 .docx/.doc 文件名，或改用 create_document → "
+        "add_blocks → finalize_document → export_document。"
+    )
     office_generator.generate.assert_not_called()
     delivery_service.send_file_with_preview.assert_not_called()
 

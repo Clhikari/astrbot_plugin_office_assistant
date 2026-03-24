@@ -9,6 +9,8 @@ from astrbot.api.star import Context
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
 from ..message_buffer import BufferedMessage
 
+EVENT_UPLOAD_CACHE_ATTR = "_office_assistant_uploaded_files"
+
 
 class UploadSessionService:
     def __init__(
@@ -18,6 +20,9 @@ class UploadSessionService:
         recent_text_ttl_seconds: int,
         recent_text_max_entries: int,
         recent_text_cleanup_interval_seconds: int,
+        extract_upload_source,
+        store_uploaded_file,
+        allow_external_input_files: bool,
     ) -> None:
         self._context = context
         self._recent_text_ttl_seconds = recent_text_ttl_seconds
@@ -25,6 +30,9 @@ class UploadSessionService:
         self._recent_text_cleanup_interval_seconds = (
             recent_text_cleanup_interval_seconds
         )
+        self._extract_upload_source = extract_upload_source
+        self._store_uploaded_file = store_uploaded_file
+        self._allow_external_input_files = allow_external_input_files
         self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
         self._recent_text_last_cleanup_ts = 0.0
 
@@ -125,6 +133,74 @@ class UploadSessionService:
         self._recent_text_by_session.pop(session_key, None)
         return text
 
+    def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[dict]:
+        cached = getattr(event, EVENT_UPLOAD_CACHE_ATTR, None)
+        if isinstance(cached, list):
+            return cached
+        return []
+
+    def _resolve_upload_type(self, filename: str) -> tuple[str, bool]:
+        suffix = Path(filename).suffix.lower() if filename else ""
+        if suffix in ALL_OFFICE_SUFFIXES:
+            return "Office文档 (Word/Excel/PPT)", True
+        if suffix in TEXT_SUFFIXES:
+            return "文本/代码文件", True
+        if suffix == PDF_SUFFIX:
+            return "PDF文档", True
+        return "", False
+
+    async def _ensure_upload_infos(
+        self,
+        event: AstrMessageEvent,
+        files: list,
+    ) -> list[dict]:
+        cached = self.get_cached_upload_infos(event)
+        if cached:
+            return cached
+
+        upload_infos: list[dict] = []
+        for file_component in files:
+            name = ""
+            if isinstance(file_component, Comp.File):
+                name = file_component.name or ""
+            name = name or "未命名文件"
+            type_desc, is_supported = self._resolve_upload_type(name)
+            info = {
+                "original_name": name,
+                "file_suffix": Path(name).suffix.lower() if name else "",
+                "type_desc": type_desc,
+                "is_supported": is_supported,
+                "stored_name": "",
+                "source_path": "",
+            }
+
+            if isinstance(file_component, Comp.File):
+                try:
+                    src_path, original_name = await self._extract_upload_source(
+                        file_component
+                    )
+                    if original_name:
+                        info["original_name"] = original_name
+                        info["file_suffix"] = Path(original_name).suffix.lower()
+                        (
+                            info["type_desc"],
+                            info["is_supported"],
+                        ) = self._resolve_upload_type(original_name)
+                    if src_path and src_path.exists():
+                        info["source_path"] = str(src_path.resolve())
+                        if info["is_supported"]:
+                            stored_path = self._store_uploaded_file(
+                                src_path, info["original_name"]
+                            )
+                            info["stored_name"] = stored_path.name
+                except Exception as exc:
+                    logger.error(f"[消息缓冲] 解析上传文件失败: {exc}")
+
+            upload_infos.append(info)
+
+        setattr(event, EVENT_UPLOAD_CACHE_ATTR, upload_infos)
+        return upload_infos
+
     async def on_buffer_complete(self, buf: BufferedMessage) -> None:
         event = buf.event
         files = buf.files
@@ -137,47 +213,73 @@ class UploadSessionService:
             logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
             return
 
+        upload_infos = await self._ensure_upload_infos(event, files)
         file_info_list = []
         has_readable_file = False
-        for file_component in files:
-            name = ""
-            if isinstance(file_component, Comp.File):
-                name = file_component.name or ""
-            name = name or "未命名文件"
-            suffix = Path(name).suffix.lower() if name else ""
-            file_info_list.append(f"文件名: {name} (类型: {suffix})")
-            if (
-                suffix in ALL_OFFICE_SUFFIXES
-                or suffix in TEXT_SUFFIXES
-                or suffix == PDF_SUFFIX
-            ):
+        for info in upload_infos:
+            file_lines = [
+                f"原始文件名: {info['original_name']} (类型: {info['file_suffix']})"
+            ]
+            if info["stored_name"]:
+                file_lines.append(f"  工作区文件名: {info['stored_name']}")
+            if self._allow_external_input_files and info["source_path"]:
+                file_lines.append(f"  外部绝对路径: {info['source_path']}")
+            file_info_list.append("\n".join(file_lines))
+            if info["is_supported"]:
                 has_readable_file = True
 
         user_instruction = " ".join(texts) if texts else ""
         if not user_instruction:
             user_instruction = self.pop_recent_text(event)
 
+        relative_path_guidance = "3. 若使用相对路径，请使用上面的工作区文件名。\n"
+        if self._allow_external_input_files:
+            relative_path_guidance = (
+                "3. 若使用相对路径，请使用上面的工作区文件名；"
+                "如果已提供外部绝对路径，则可直接使用该绝对路径。\n"
+            )
+
         if has_readable_file and user_instruction:
             prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件：\n"
-                + "\n".join(file_info_list)
-                + f"\n\n用户要求：{user_instruction}"
-                + "\n\n请先调用 `read_file`，再继续处理。"
-                + " 读取上传源文件前，不要先创建新文档。"
-                + " 如果要先给用户一句过渡说明，也请使用中文。"
+                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+                + "\n"
+                + "[文件信息]\n"
+                + "\n".join(f"- {info}" for info in file_info_list)
+                + "\n"
+                + "\n"
+                + "[用户指令]\n"
+                + f"{user_instruction}\n"
+                + "\n"
+                + "[处理建议]\n"
+                + "1. 优先围绕这些上传文件完成用户请求。\n"
+                + "2. 先调用 `read_file` 读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
+                + relative_path_guidance
+                + "4. 所有面向用户的回复 MUST 使用中文。"
             )
         elif has_readable_file:
             prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件：\n"
-                + "\n".join(file_info_list)
-                + "\n\n请现在调用 `read_file`。读取上传源文件前，不要先创建新文档。"
-                + " 目前用户意图还不够明确，读取后再用中文追问。"
+                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+                + "\n"
+                + "[文件信息]\n"
+                + "\n".join(f"- {info}" for info in file_info_list)
+                + "\n"
+                + "\n"
+                + "[处理建议]\n"
+                + "1. 用户上传了可读取文件，后续应优先围绕这些文件处理。\n"
+                + "2. 如果要读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
+                + relative_path_guidance
+                + "4. 用户意图尚不明确时，再用中文询问用户想要如何处理。"
             )
         else:
             prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件：\n"
-                + "\n".join(file_info_list)
-                + "\n\n请根据用户要求处理这些文件，并使用中文与用户沟通。"
+                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+                "\n"
+                "[文件信息]\n"
+                + "\n".join(f"- {info}" for info in file_info_list)
+                + "\n"
+                "\n"
+                "[操作要求]\n"
+                "请根据用户要求处理这些文件，使用中文与用户沟通。"
             )
 
         new_chain = [Comp.Plain(prompt_text)]
