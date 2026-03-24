@@ -139,6 +139,16 @@ class UploadSessionService:
             return cached
         return []
 
+    def _resolve_upload_type(self, filename: str) -> tuple[str, bool]:
+        suffix = Path(filename).suffix.lower() if filename else ""
+        if suffix in ALL_OFFICE_SUFFIXES:
+            return "Office文档 (Word/Excel/PPT)", True
+        if suffix in TEXT_SUFFIXES:
+            return "文本/代码文件", True
+        if suffix == PDF_SUFFIX:
+            return "PDF文档", True
+        return "", False
+
     async def _ensure_upload_infos(
         self,
         event: AstrMessageEvent,
@@ -154,27 +164,17 @@ class UploadSessionService:
             if isinstance(file_component, Comp.File):
                 name = file_component.name or ""
             name = name or "未命名文件"
-            suffix = Path(name).suffix.lower() if name else ""
+            type_desc, is_supported = self._resolve_upload_type(name)
             info = {
                 "original_name": name,
-                "file_suffix": suffix,
-                "type_desc": "",
-                "is_supported": False,
+                "file_suffix": Path(name).suffix.lower() if name else "",
+                "type_desc": type_desc,
+                "is_supported": is_supported,
                 "stored_name": "",
                 "source_path": "",
             }
 
-            if suffix in ALL_OFFICE_SUFFIXES:
-                info["type_desc"] = "Office文档 (Word/Excel/PPT)"
-                info["is_supported"] = True
-            elif suffix in TEXT_SUFFIXES:
-                info["type_desc"] = "文本/代码文件"
-                info["is_supported"] = True
-            elif suffix == PDF_SUFFIX:
-                info["type_desc"] = "PDF文档"
-                info["is_supported"] = True
-
-            if info["is_supported"] and isinstance(file_component, Comp.File):
+            if isinstance(file_component, Comp.File):
                 try:
                     src_path, original_name = await self._extract_upload_source(
                         file_component
@@ -182,12 +182,17 @@ class UploadSessionService:
                     if original_name:
                         info["original_name"] = original_name
                         info["file_suffix"] = Path(original_name).suffix.lower()
+                        (
+                            info["type_desc"],
+                            info["is_supported"],
+                        ) = self._resolve_upload_type(original_name)
                     if src_path and src_path.exists():
                         info["source_path"] = str(src_path.resolve())
-                        stored_path = self._store_uploaded_file(
-                            src_path, info["original_name"]
-                        )
-                        info["stored_name"] = stored_path.name
+                        if info["is_supported"]:
+                            stored_path = self._store_uploaded_file(
+                                src_path, info["original_name"]
+                            )
+                            info["stored_name"] = stored_path.name
                 except Exception as exc:
                     logger.error(f"[消息缓冲] 解析上传文件失败: {exc}")
 
@@ -227,11 +232,11 @@ class UploadSessionService:
         if not user_instruction:
             user_instruction = self.pop_recent_text(event)
 
-        relative_path_guidance = "3. 若使用相对路径，请使用上面的工作区文件名。\\n"
+        relative_path_guidance = "3. 若使用相对路径，请使用上面的工作区文件名。\n"
         if self._allow_external_input_files:
             relative_path_guidance = (
                 "3. 若使用相对路径，请使用上面的工作区文件名；"
-                "如果已提供外部绝对路径，则可直接使用该绝对路径。\\n"
+                "如果已提供外部绝对路径，则可直接使用该绝对路径。\n"
             )
 
         if has_readable_file and user_instruction:

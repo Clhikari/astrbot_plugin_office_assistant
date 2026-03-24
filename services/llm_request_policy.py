@@ -21,6 +21,11 @@ from ..constants import (
 
 
 class LLMRequestPolicy:
+    _NEGATIVE_TOOL_PREFIX_RE = re.compile(
+        r"(?:不要|别|勿|不用|无需|do\s+not|don't|not)\s*(?:调用|使用|call|use|invoke)?\s*$",
+        flags=re.IGNORECASE,
+    )
+
     def __init__(
         self,
         *,
@@ -52,14 +57,25 @@ class LLMRequestPolicy:
         if not text:
             return None
 
+        explicit_matches: set[str] = set()
         for tool_name in sorted(FILE_TOOLS, key=len, reverse=True):
             patterns = (
-                rf"(?:^|[\s，,。；;：:（(\[])(?:调用|使用|call|use)\s*`?{re.escape(tool_name)}`?(?:$|[\s，,。；;：:）)\]])",
-                rf"`{re.escape(tool_name)}`",
-                rf"(?:^|[\s，,。；;：:（(\[]){re.escape(tool_name)}(?:$|[\s，,。；;：:）)\]])",
+                rf"(?P<tool>(?:调用|使用|call|use|invoke)\s*`?{re.escape(tool_name)}`?)",
+                rf"(?P<tool>`{re.escape(tool_name)}`)",
+                rf"(?P<tool>{re.escape(tool_name)}\s*\()",
+                rf"(?P<tool>{re.escape(tool_name)}\s*[,，]\s*[a-zA-Z_]\w*\s*=)",
             )
-            if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
-                return tool_name
+            for pattern in patterns:
+                for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                    tool_start = match.start("tool")
+                    prefix = text[max(0, tool_start - 20) : tool_start]
+                    if self._NEGATIVE_TOOL_PREFIX_RE.search(prefix):
+                        continue
+                    explicit_matches.add(tool_name)
+                    break
+
+        if len(explicit_matches) == 1:
+            return next(iter(explicit_matches))
         return None
 
     def _restrict_to_explicit_file_tool(

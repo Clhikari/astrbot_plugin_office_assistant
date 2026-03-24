@@ -316,6 +316,34 @@ async def test_upload_session_service_omits_external_path_when_disabled():
 
 
 @pytest.mark.asyncio
+async def test_upload_session_service_uses_extracted_filename_for_type_detection():
+    context = MagicMock()
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+    upload = Comp.File(name="upload-token", file="upload-token")
+
+    infos = await service._ensure_upload_infos(event, [upload])
+
+    assert len(infos) == 1
+    info = infos[0]
+    assert info["original_name"] == "report.docx"
+    assert info["file_suffix"] == ".docx"
+    assert info["type_desc"] == "Office文档 (Word/Excel/PPT)"
+    assert info["is_supported"] is True
+    assert info["stored_name"] == "report_1.docx"
+    assert info["source_path"] == str(source_path.resolve())
+
+
+@pytest.mark.asyncio
 async def test_delivery_service_sends_message_and_file_for_existing_path():
     event = _build_event()
     event.send = AsyncMock()
