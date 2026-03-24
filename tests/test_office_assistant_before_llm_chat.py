@@ -5,6 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from astrbot_plugin_office_assistant.main import FileOperationPlugin
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
+from astrbot_plugin_office_assistant.internal_hooks import (
+    NoticeBuildContext,
+    ToolExposureContext,
+)
+from astrbot_plugin_office_assistant.services.llm_request_policy import (
+    LLMRequestPolicy,
+)
 from astrbot_plugin_office_assistant.services.upload_session_service import (
     UploadSessionService,
 )
@@ -108,11 +115,11 @@ async def test_before_llm_chat_injects_document_tools_per_request():
         assert "按章节或逻辑块分批调用 `add_blocks`" in req.system_prompt
         assert "MUST 持续调用直到 `export_document` 成功" in req.system_prompt
         assert "NEVER 调用网络搜索" in req.system_prompt
-        assert "如果用户显式指定了某个工具名和参数，MUST 先按该工具调用" in req.system_prompt
         assert (
-            "所有面向用户的回复和过渡说明 MUST 使用中文"
+            "如果用户显式指定了某个工具名和参数，MUST 先按该工具调用"
             in req.system_prompt
         )
+        assert "所有面向用户的回复和过渡说明 MUST 使用中文" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -215,14 +222,8 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
 
         await plugin.before_llm_chat(event, req)
 
-        assert (
-            "MUST 先调用 `read_file` 读取内容，再创建文档"
-            in req.system_prompt
-        )
-        assert (
-            "MUST 先调用 `read_file` 读取此文件"
-            in req.system_prompt
-        )
+        assert "MUST 先调用 `read_file` 读取内容，再创建文档" in req.system_prompt
+        assert "MUST 先调用 `read_file` 读取此文件" in req.system_prompt
         assert "原始文件名：source.docx" in req.system_prompt
         assert "工作区文件名：source_1.docx" in req.system_prompt
         assert "必须使用工作区文件名 `source_1.docx`" in req.system_prompt
@@ -349,9 +350,7 @@ async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_cal
             message_type=MessageType.FRIEND_MESSAGE,
             sender_id="user-1",
         )
-        event.message_str = (
-            "[System Notice] 用户上传了文件，请先调用 `read_file` 读取内容，再继续处理。"
-        )
+        event.message_str = "[System Notice] 用户上传了文件，请先调用 `read_file` 读取内容，再继续处理。"
         req = ProviderRequest(
             prompt="",
             system_prompt="base",
@@ -376,6 +375,138 @@ async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_cal
         assert "export_document" in tool_names
     finally:
         await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_uses_buffered_user_instruction_for_explicit_tool_detection():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        event._buffered = True
+        req = ProviderRequest(
+            prompt=(
+                "[System Notice] 用户上传了 1 个文件\n\n"
+                "[文件信息]\n"
+                "- 原始文件名: source.docx (类型: .docx)\n"
+                "  工作区文件名: source_1.docx\n\n"
+                "[用户指令]\n"
+                "请根据我刚上传的文档整理成正式汇报，标题叫《项目进展汇总》，最后导出成 Word 并发给我。\n\n"
+                "[处理建议]\n"
+                "1. 先调用 `read_file` 读取文件。\n"
+            ),
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                    _tool("create_document"),
+                    _tool("add_blocks"),
+                    _tool("finalize_document"),
+                    _tool("export_document"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "read_file" in tool_names
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "finalize_document" in tool_names
+        assert "export_document" in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_can_still_restrict_tool_from_buffered_user_instruction():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        event._buffered = True
+        req = ProviderRequest(
+            prompt=(
+                "[System Notice] 用户上传了 1 个文件\n\n"
+                "[文件信息]\n"
+                "- 原始文件名: table.csv (类型: .csv)\n"
+                "  工作区文件名: table_1.csv\n\n"
+                "[用户指令]\n"
+                "调用 read_file，filename=table_1.csv\n\n"
+                "[处理建议]\n"
+                "1. 先调用 `read_file` 读取文件。\n"
+            ),
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                    _tool("create_document"),
+                    _tool("add_blocks"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "read_file" in tool_names
+        assert "create_document" not in tool_names
+        assert "add_blocks" not in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
+    async def _fake_extract_upload_source(_component):
+        return None, ""
+
+    async def _custom_notice_hook(context: NoticeBuildContext):
+        context.notices.append("\n[custom notice]")
+        return context
+
+    async def _custom_tool_hook(context: ToolExposureContext):
+        if context.request.func_tool:
+            context.request.func_tool.remove_tool("create_document")
+        return context
+
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        auto_block_execution_tools=False,
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=_fake_extract_upload_source,
+        store_uploaded_file=lambda _src, _name: Path("ignored.txt"),
+        allow_external_input_files=False,
+        notice_hooks=[_custom_notice_hook],
+        tool_exposure_hooks=[_custom_tool_hook],
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1")
+    req = ProviderRequest(
+        prompt="hello",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("create_document"), _tool("existing_tool")]),
+    )
+
+    await policy.apply(event, req)
+
+    assert "[custom notice]" in req.system_prompt
+    assert "create_document" not in set(req.func_tool.names())
+    assert "existing_tool" in set(req.func_tool.names())
 
 
 @pytest.mark.asyncio
@@ -441,7 +572,9 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
         recent_text_ttl_seconds=30,
         recent_text_max_entries=32,
         recent_text_cleanup_interval_seconds=10,
-        extract_upload_source=AsyncMock(return_value=(Path(__file__).resolve(), "report.docx")),
+        extract_upload_source=AsyncMock(
+            return_value=(Path(__file__).resolve(), "report.docx")
+        ),
         store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
         allow_external_input_files=True,
     )

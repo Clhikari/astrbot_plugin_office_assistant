@@ -9,6 +9,8 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..document_core.builders.word_builder import WordDocumentBuilder
+from ..export_pipeline import export_document_via_pipeline
+from ..internal_hooks import AfterExportHook, BeforeExportHook
 from ..mcp_server.schemas import (
     AddBlocksRequest,
     CreateDocumentRequest,
@@ -329,6 +331,8 @@ class ExportDocumentTool(DocumentToolBase):
         }
     )
     builder: WordDocumentBuilder = Field(default_factory=WordDocumentBuilder)
+    before_export_hooks: list[BeforeExportHook] = Field(default_factory=list)
+    after_export_hooks: list[AfterExportHook] = Field(default_factory=list)
     after_export: (
         Callable[[ContextWrapper[AstrAgentContext], str], Awaitable[str | None]] | None
     ) = None
@@ -342,9 +346,14 @@ class ExportDocumentTool(DocumentToolBase):
                 output_dir=str(kwargs.get("output_dir") or ""),
                 output_name=str(kwargs.get("output_name") or ""),
             )
-            document, output_path = self.store.prepare_export_path(request)
-            self.builder.build(document, output_path)
-            document = self.store.complete_export(request.document_id)
+            document, output_path = await export_document_via_pipeline(
+                store=self.store,
+                builder=self.builder,
+                request=request,
+                before_export_hooks=self.before_export_hooks,
+                after_export_hooks=self.after_export_hooks,
+                source="agent_tool",
+            )
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
 

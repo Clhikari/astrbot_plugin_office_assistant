@@ -6,6 +6,7 @@ from astrbot.api.event import AstrMessageEvent
 
 from ..constants import (
     CONVERTIBLE_TO_PDF,
+    EXPLICIT_FILE_TOOL_EVENT_KEY,
     OFFICE_LIBS,
     OFFICE_TYPE_MAP,
     PDF_SUFFIX,
@@ -39,6 +40,29 @@ class FileToolService:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._group_feature_disabled_error = group_feature_disabled_error
+
+    def _is_explicit_tool_locked(
+        self,
+        event: AstrMessageEvent,
+        tool_name: str,
+    ) -> bool:
+        get_extra = getattr(event, "get_extra", None)
+        if not callable(get_extra):
+            return False
+        try:
+            explicit_tool_name = get_extra(EXPLICIT_FILE_TOOL_EVENT_KEY)
+        except TypeError:
+            return False
+        return isinstance(explicit_tool_name, str) and explicit_tool_name == tool_name
+
+    def _finalize_create_office_file_error(
+        self,
+        event: AstrMessageEvent,
+        message: str,
+    ) -> str | None:
+        if self._is_explicit_tool_locked(event, "create_office_file"):
+            return event.plain_result(message)
+        return message
 
     async def read_file(
         self,
@@ -133,14 +157,23 @@ class FileToolService:
             group_feature_disabled_error=self._group_feature_disabled_error,
         )
         if not ok:
-            return err or "错误：未知错误"
+            return self._finalize_create_office_file_error(
+                event,
+                err or "错误：未知错误",
+            )
 
         if not content:
-            return "错误：请提供 content（文件内容）"
+            return self._finalize_create_office_file_error(
+                event,
+                "错误：请提供 content（文件内容）",
+            )
 
         filename = Path(filename).name if filename else ""
         if not filename:
-            return "错误：请提供 filename（文件名）"
+            return self._finalize_create_office_file_error(
+                event,
+                "错误：请提供 filename（文件名）",
+            )
 
         allowed_fallback_types = "/".join(
             office_name for office_name in OFFICE_TYPE_MAP if office_name != "word"
@@ -151,12 +184,14 @@ class FileToolService:
             office_type = SUFFIX_TO_OFFICE_TYPE[suffix]
         else:
             if not normalized_file_type:
-                return (
+                return self._finalize_create_office_file_error(
+                    event,
                     "错误：未指定文件类型。请提供带后缀的文件名，"
                     f"或显式传入 file_type（{allowed_fallback_types}）。"
                 )
             if normalized_file_type == "word":
-                return (
+                return self._finalize_create_office_file_error(
+                    event,
                     "错误：Word 文档请直接提供 .docx/.doc 文件名，"
                     "或改用 create_document → add_blocks → finalize_document → "
                     "export_document。"
@@ -164,7 +199,8 @@ class FileToolService:
             office_type = OFFICE_TYPE_MAP.get(normalized_file_type)
 
         if not office_type:
-            return (
+            return self._finalize_create_office_file_error(
+                event,
                 f"错误：不支持的文件类型 '{normalized_file_type}'。"
                 f"允许值：{allowed_fallback_types}"
             )
@@ -172,7 +208,10 @@ class FileToolService:
         module_name = OFFICE_LIBS[office_type][0]
         if not self._office_libs.get(module_name):
             package_name = OFFICE_LIBS[office_type][1]
-            return f"错误：需要安装 {package_name}"
+            return self._finalize_create_office_file_error(
+                event,
+                f"错误：需要安装 {package_name}",
+            )
 
         file_info = {"type": office_type, "filename": filename, "content": content}
         try:
@@ -186,14 +225,20 @@ class FileToolService:
                     output_path.unlink()
                     size_str = format_file_size(file_size)
                     max_str = format_file_size(max_size)
-                    return f"错误：文件过大 ({size_str})，超过限制 {max_str}"
+                    return self._finalize_create_office_file_error(
+                        event,
+                        f"错误：文件过大 ({size_str})，超过限制 {max_str}",
+                    )
 
                 await self._delivery_service.send_file_with_preview(event, output_path)
                 return None
         except Exception as exc:
-            return f"错误：文件操作异常: {exc}"
+            return self._finalize_create_office_file_error(
+                event,
+                f"错误：文件操作异常: {exc}",
+            )
 
-        return "错误：文件生成失败"
+        return self._finalize_create_office_file_error(event, "错误：文件生成失败")
 
     async def convert_to_pdf(
         self,

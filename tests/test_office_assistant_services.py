@@ -18,6 +18,7 @@ from astrbot_plugin_office_assistant.services import (
     WorkspaceService,
     build_plugin_runtime,
 )
+from astrbot_plugin_office_assistant.constants import EXPLICIT_FILE_TOOL_EVENT_KEY
 
 import astrbot.api.message_components as Comp
 from astrbot.core.platform.message_type import MessageType
@@ -156,6 +157,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
             "enable_office_files": True,
         },
     }
+
     def fake_get_data_dir(plugin_name=None):
         called["plugin_name"] = plugin_name
         return data_root
@@ -795,6 +797,59 @@ async def test_file_tool_service_create_office_file_rejects_word_fallback_withou
         == "错误：Word 文档请直接提供 .docx/.doc 文件名，或改用 create_document → "
         "add_blocks → finalize_document → export_document。"
     )
+    office_generator.generate.assert_not_called()
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_returns_direct_result_for_explicit_tool_error():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    event.get_extra.side_effect = (
+        lambda key, default=None: {EXPLICIT_FILE_TOOL_EVENT_KEY: "create_office_file"}.get(
+            key, default
+        )
+    )
+    event.plain_result.side_effect = lambda text: f"DIRECT::{text}"
+    office_generator = MagicMock()
+    delivery_service = MagicMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report",
+            content="hello world",
+            file_type="word",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert (
+        result
+        == "DIRECT::错误：Word 文档请直接提供 .docx/.doc 文件名，或改用 create_document → "
+        "add_blocks → finalize_document → export_document。"
+    )
+    event.plain_result.assert_called_once()
     office_generator.generate.assert_not_called()
     delivery_service.send_file_with_preview.assert_not_called()
 

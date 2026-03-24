@@ -206,7 +206,7 @@ class UploadSessionService:
         files = buf.files
         texts = buf.texts
 
-        logger.info(f"[消息缓冲] 缓冲完成，文件数: {len(files)}, 文本数: {len(texts)}")
+        buffered_text_count = len(texts)
 
         reentry_count = getattr(event, "_buffer_reentry_count", 0)
         if reentry_count >= 3:
@@ -229,8 +229,17 @@ class UploadSessionService:
                 has_readable_file = True
 
         user_instruction = " ".join(texts) if texts else ""
+        restored_recent_text = False
         if not user_instruction:
             user_instruction = self.pop_recent_text(event)
+            restored_recent_text = bool(user_instruction)
+
+        logger.info(
+            "[消息缓冲] 缓冲完成，文件数: %s, 缓冲文本数: %s, 回补文本: %s",
+            len(files),
+            buffered_text_count,
+            "yes" if restored_recent_text else "no",
+        )
 
         relative_path_guidance = "3. 若使用相对路径，请使用上面的工作区文件名。\n"
         if self._allow_external_input_files:

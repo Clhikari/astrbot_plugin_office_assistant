@@ -140,7 +140,7 @@ class MessageBuffer:
             try:
                 logger.info(
                     f"[消息缓冲] 缓冲完成，"
-                    f"文件数: {len(buf.files)}, 文本数: {len(buf.texts)}"
+                    f"文件数: {len(buf.files)}, 缓冲文本数: {len(buf.texts)}"
                 )
                 await self._on_complete_callback(buf)
             except Exception as e:
