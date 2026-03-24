@@ -341,6 +341,44 @@ async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
 
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_call():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        event.message_str = (
+            "[System Notice] 用户上传了文件，请先调用 `read_file` 读取内容，再继续处理。"
+        )
+        req = ProviderRequest(
+            prompt="",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                    _tool("create_document"),
+                    _tool("add_blocks"),
+                    _tool("export_document"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "read_file" in tool_names
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "export_document" in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_remember_recent_text_skips_system_notice_messages():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())

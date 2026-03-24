@@ -91,9 +91,7 @@ class LLMRequestPolicy:
     async def apply(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
-        explicit_tool_name = self._detect_explicit_file_tool(
-            str(req.prompt or event.message_str or "")
-        )
+        explicit_tool_name = self._detect_explicit_file_tool(str(req.prompt or ""))
 
         if not self._is_group_feature_enabled(event):
             if req.func_tool:
