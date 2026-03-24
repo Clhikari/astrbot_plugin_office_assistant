@@ -17,11 +17,12 @@ from .document_tools import (
 
 def build_document_toolset(
     workspace_dir: Path | None = None,
-    before_export_hooks: list[BeforeExportHook] | None = None,
-    after_export_hooks: list[AfterExportHook] | None = None,
     after_export: (
         Callable[[ContextWrapper[AstrAgentContext], str], Awaitable[str | None]] | None
     ) = None,
+    *,
+    before_export_hooks: list[BeforeExportHook] | None = None,
+    after_export_hooks: list[AfterExportHook] | None = None,
 ) -> ToolSet:
     store = DocumentSessionStore(workspace_dir=workspace_dir)
     return ToolSet(

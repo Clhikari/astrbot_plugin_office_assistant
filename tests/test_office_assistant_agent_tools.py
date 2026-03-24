@@ -742,6 +742,44 @@ async def test_document_toolset_export_callback_runs(workspace_root: Path):
 
 
 @pytest.mark.asyncio
+async def test_document_toolset_preserves_positional_after_export_callback(
+    workspace_root: Path,
+):
+    pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-positional-callback"
+    )
+    callback_calls: list[str] = []
+
+    async def after_export(_context, output_path: str) -> str:
+        callback_calls.append(output_path)
+        return "callback sent"
+
+    toolset = build_document_toolset(workspace_dir, after_export)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            session_id="pytest-session",
+            title="Positional Callback",
+            output_name="positional-callback.docx",
+        )
+    )
+
+    exported = await tool_by_name["export_document"].call(
+        object(),
+        document_id=created["document"]["document_id"],
+    )
+
+    assert exported is None
+    assert len(callback_calls) == 1
+    assert Path(callback_calls[0]).exists()
+    assert Path(callback_calls[0]).name == "positional-callback.docx"
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_runs_after_export_hooks_before_delivery_callback(
     workspace_root: Path,
 ):
