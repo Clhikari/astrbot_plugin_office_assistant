@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from .document_core.builders.word_builder import WordDocumentBuilder
+from .document_core.models.document import DocumentModel
 from .internal_hooks import (
     AfterExportContext,
     AfterExportHook,
@@ -24,7 +24,7 @@ async def export_document_via_pipeline(
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
     source: str,
-) -> tuple[object, Path]:
+) -> tuple[DocumentModel, Path]:
     document, output_path = store.prepare_export_path(request)
     export_context = ExportPreparationContext(
         document=document,
@@ -40,7 +40,7 @@ async def export_document_via_pipeline(
     document = store.complete_export(request.document_id)
     after_context = AfterExportContext(
         document=document,
-        output_path=Path(export_context.output_path),
+        output_path=export_context.output_path,
         source=source,
     )
     if after_export_hooks:
@@ -48,6 +48,6 @@ async def export_document_via_pipeline(
             after_export_hooks,
             after_context,
         )
-    document.output_path = str(Path(after_context.output_path))
+    document.output_path = str(after_context.output_path)
     document.touch()
-    return document, Path(after_context.output_path)
+    return document, after_context.output_path

@@ -115,7 +115,7 @@ class LLMRequestPolicy:
             match = self._BUFFERED_USER_INSTRUCTION_RE.search(prompt_text)
             if match:
                 return match.group("instruction").strip()
-            return ""
+            return prompt_text
 
         return prompt_text
 
