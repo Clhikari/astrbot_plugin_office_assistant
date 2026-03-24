@@ -29,6 +29,7 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
     AddTableRequest,
+    BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
     SectionParagraphInput,
@@ -741,6 +742,92 @@ async def test_document_toolset_export_callback_runs(workspace_root: Path):
 
 
 @pytest.mark.asyncio
+async def test_document_toolset_preserves_positional_after_export_callback(
+    workspace_root: Path,
+):
+    pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-positional-callback"
+    )
+    callback_calls: list[str] = []
+
+    async def after_export(_context, output_path: str) -> str:
+        callback_calls.append(output_path)
+        return "callback sent"
+
+    toolset = build_document_toolset(workspace_dir, after_export)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            session_id="pytest-session",
+            title="Positional Callback",
+            output_name="positional-callback.docx",
+        )
+    )
+
+    exported = await tool_by_name["export_document"].call(
+        object(),
+        document_id=created["document"]["document_id"],
+    )
+
+    assert exported is None
+    assert len(callback_calls) == 1
+    assert Path(callback_calls[0]).exists()
+    assert Path(callback_calls[0]).name == "positional-callback.docx"
+
+
+@pytest.mark.asyncio
+async def test_document_toolset_runs_after_export_hooks_before_delivery_callback(
+    workspace_root: Path,
+):
+    pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-after-export")
+    hook_calls: list[tuple[str, str]] = []
+    callback_calls: list[str] = []
+
+    async def after_export_hook(context):
+        hook_calls.append(
+            (context.document.status.value, Path(context.output_path).name)
+        )
+        return context
+
+    async def after_export(_context, output_path: str) -> str:
+        assert hook_calls == [("exported", "after-export-hook.docx")]
+        callback_calls.append(output_path)
+        return "callback sent"
+
+    toolset = build_document_toolset(
+        workspace_dir=workspace_dir,
+        after_export_hooks=[after_export_hook],
+        after_export=after_export,
+    )
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            session_id="pytest-session",
+            title="After Export Hook",
+            output_name="after-export-hook.docx",
+        )
+    )
+
+    exported = await tool_by_name["export_document"].call(
+        object(),
+        document_id=created["document"]["document_id"],
+    )
+
+    assert exported is None
+    assert hook_calls == [("exported", "after-export-hook.docx")]
+    assert len(callback_calls) == 1
+    assert Path(callback_calls[0]).exists()
+
+
+@pytest.mark.asyncio
 async def test_export_document_tool_keeps_success_when_callback_fails(
     workspace_root: Path,
 ):
@@ -779,6 +866,41 @@ async def test_export_document_tool_keeps_success_when_callback_fails(
 
 
 @pytest.mark.asyncio
+async def test_document_toolset_runs_before_export_hooks(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-before-export")
+
+    async def before_export(context):
+        context.document.blocks.append(ParagraphBlock(text="Export hook note"))
+        return context
+
+    toolset = build_document_toolset(
+        workspace_dir=workspace_dir,
+        before_export_hooks=[before_export],
+    )
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Before Export Hook",
+            output_name="before-export-hook.docx",
+        )
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert "Export hook note" in [paragraph.text for paragraph in loaded_doc.paragraphs]
+
+
+@pytest.mark.asyncio
 async def test_mcp_registers_only_core_document_tools():
     server = create_server()
     tools = await server.list_tools()
@@ -797,6 +919,65 @@ async def test_mcp_registers_only_core_document_tools():
     add_blocks_items = add_blocks_tool.inputSchema["properties"]["blocks"]["items"]
     assert add_blocks_items["type"] == "object"
     assert add_blocks_items["additionalProperties"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_export_document_runs_before_export_hooks(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-mcp-before-export")
+
+    async def before_export(context):
+        context.document.blocks.append(ParagraphBlock(text="MCP export hook note"))
+        return context
+
+    server = create_server(
+        workspace_dir=workspace_dir,
+        before_export_hooks=[before_export],
+    )
+    _, created_payload = await server.call_tool(
+        "create_document",
+        {"title": "MCP Hook", "output_name": "mcp-hook.docx"},
+    )
+    _, exported_payload = await server.call_tool(
+        "export_document",
+        {"document_id": created_payload["document"]["document_id"]},
+    )
+
+    loaded_doc = docx.Document(exported_payload["file_path"])
+    assert "MCP export hook note" in [
+        paragraph.text for paragraph in loaded_doc.paragraphs
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_export_document_runs_after_export_hooks(workspace_root: Path):
+    pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-mcp-after-export")
+    hook_calls: list[tuple[str, str]] = []
+
+    async def after_export(context):
+        hook_calls.append(
+            (context.document.status.value, Path(context.output_path).name)
+        )
+        return context
+
+    server = create_server(
+        workspace_dir=workspace_dir,
+        after_export_hooks=[after_export],
+    )
+    _, created_payload = await server.call_tool(
+        "create_document",
+        {"title": "MCP After Hook", "output_name": "mcp-after-hook.docx"},
+    )
+    _, exported_payload = await server.call_tool(
+        "export_document",
+        {"document_id": created_payload["document"]["document_id"]},
+    )
+
+    assert exported_payload["success"] is True
+    assert hook_calls == [("exported", "mcp-after-hook.docx")]
 
 
 def test_document_session_store_keeps_exports_inside_workspace(workspace_root: Path):
@@ -1096,6 +1277,28 @@ def test_document_session_store_expands_summary_card_blocks():
     assert isinstance(updated.blocks[0], GroupBlock)
     assert updated.blocks[0].blocks[0].text == "Conclusion"
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_document_session_store_runs_internal_normalize_hooks():
+    def _inject_heading(_context):
+        return [
+            BlockHeadingInput(text="Hook Title", level=2),
+            SectionParagraphInput(text="正文"),
+        ]
+
+    store = DocumentSessionStore(normalize_block_hooks=[_inject_heading])
+    document = store.create_document(CreateDocumentRequest(title="Hook Test"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[{"type": "paragraph", "text": "原始正文"}],
+        )
+    )
+
+    assert len(updated.blocks) == 2
+    assert updated.blocks[0].text == "Hook Title"
+    assert updated.blocks[1].text == "正文"
 
 
 def test_table_schema_normalizers_are_shared():

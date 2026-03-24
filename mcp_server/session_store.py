@@ -45,6 +45,11 @@ from .schemas import (
     SectionTableInput,
     _normalize_docx_filename,
 )
+from ..internal_hooks import (
+    BlockNormalizationContext,
+    BlockNormalizeHook,
+    run_block_normalize_hooks,
+)
 
 PLUGIN_NAME = "astrbot_plugin_office_assistant"
 
@@ -77,6 +82,7 @@ class DocumentSessionStore:
         *,
         max_documents: int | None = 256,
         ttl: timedelta | None = None,
+        normalize_block_hooks: list[BlockNormalizeHook] | None = None,
     ) -> None:
         self._lock = RLock()
         self._documents: dict[str, DocumentModel] = {}
@@ -84,6 +90,10 @@ class DocumentSessionStore:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self._max_documents = max_documents
         self._ttl = ttl
+        self._normalize_block_hooks = normalize_block_hooks or [
+            self._drop_duplicate_document_title_headings,
+            self._promote_heading_before_table_to_caption,
+        ]
 
     def _evict_expired_locked(self) -> None:
         if self._ttl is None:
@@ -154,18 +164,45 @@ class DocumentSessionStore:
             return document
 
     def _append_blocks_locked(self, document: DocumentModel, blocks: list) -> None:
-        normalized_blocks = self._normalize_table_title_blocks(
-            blocks, document.metadata.title
+        normalized_blocks = run_block_normalize_hooks(
+            self._normalize_block_hooks,
+            BlockNormalizationContext(
+                document=document,
+                incoming_blocks=list(blocks),
+                source="agent_tool_or_mcp",
+            ),
         )
         for block in normalized_blocks:
             runtime_block = self._build_runtime_block(block, document)
             document.add_block(runtime_block)
 
     @staticmethod
-    def _normalize_table_title_blocks(blocks: list, document_title: str = ""):
+    def _drop_duplicate_document_title_headings(
+        context: BlockNormalizationContext,
+    ) -> list:
+        normalized: list = []
+        normalized_document_title = context.document.metadata.title.strip()
+        for current in context.incoming_blocks:
+            current_text = (
+                current.text.strip() if isinstance(current, BlockHeadingInput) else ""
+            )
+            if (
+                isinstance(current, BlockHeadingInput)
+                and not normalized
+                and normalized_document_title
+                and current_text == normalized_document_title
+            ):
+                continue
+            normalized.append(current)
+        return normalized
+
+    @staticmethod
+    def _promote_heading_before_table_to_caption(
+        context: BlockNormalizationContext,
+    ) -> list:
         normalized: list = []
         index = 0
-        normalized_document_title = document_title.strip()
+        blocks = context.incoming_blocks
         while index < len(blocks):
             current = blocks[index]
             next_block = blocks[index + 1] if index + 1 < len(blocks) else None
@@ -182,15 +219,6 @@ class DocumentSessionStore:
                 if isinstance(next_block, SectionTableInput)
                 else ""
             )
-
-            if (
-                isinstance(current, BlockHeadingInput)
-                and not normalized
-                and normalized_document_title
-                and current_text == normalized_document_title
-            ):
-                index += 1
-                continue
 
             if (
                 isinstance(current, BlockHeadingInput)

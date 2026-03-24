@@ -93,6 +93,8 @@ FILE_TOOLS = [
     "convert_from_pdf",
 ]
 
+EXPLICIT_FILE_TOOL_EVENT_KEY = "office_assistant_explicit_file_tool_name"
+
 EXECUTION_TOOLS = [
     "astrbot_execute_shell",
     "astrbot_execute_python",
@@ -130,7 +132,7 @@ NOTICE_DOCUMENT_TOOLS_GUIDE = (
     "[约束规则]\n"
     "1. 如果用户请求依赖上传文件，MUST 先调用 `read_file` 读取内容，再创建文档。\n"
     "2. 如果 `read_file` 返回文件不存在或路径非法，NEVER 调用网络搜索；直接请用户重新上传。\n"
-    "3. 如果用户显式指定了某个工具名和参数，MUST 先按该工具调用；即使预期会报错，也不要擅自改调其他工具。\n"
+    "3. 如果用户显式指定了某个工具名和参数，MUST 先按该工具调用；即使预期会报错，也不要擅自改调其他工具，也不要自行修改参数后重试。\n"
     "4. 一旦开始使用文档工具链，MUST 持续调用直到 `export_document` 成功，中途不要停下来发自然语言回复。\n"
     "5. 所有面向用户的回复和过渡说明 MUST 使用中文。"
 )

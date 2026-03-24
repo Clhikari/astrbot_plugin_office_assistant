@@ -6,8 +6,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import fitz  # PyMuPDF
-
 from astrbot.api import logger
 
 from .constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX
@@ -58,6 +56,12 @@ class PreviewGenerator:
 
     def _generate_from_pdf(self, pdf_path: Path, output_path: Path) -> Path | None:
         """从 PDF 生成预览图"""
+        try:
+            import fitz
+        except ImportError:
+            logger.warning("[预览生成] PyMuPDF (fitz) 未安装，无法生成预览图")
+            return None
+
         try:
             doc = fitz.open(str(pdf_path))
             if doc.page_count == 0:

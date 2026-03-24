@@ -1,6 +1,8 @@
 from mcp.server.fastmcp import FastMCP
 
 from ...document_core.builders.word_builder import WordDocumentBuilder
+from ...export_pipeline import export_document_via_pipeline
+from ...internal_hooks import AfterExportHook, BeforeExportHook
 from ..schemas import (
     ExportDocumentRequest,
     ExportDocumentResult,
@@ -9,7 +11,13 @@ from ..schemas import (
 from ..session_store import DocumentSessionStore
 
 
-def register_export_document_tool(server: FastMCP, store: DocumentSessionStore) -> None:
+def register_export_document_tool(
+    server: FastMCP,
+    store: DocumentSessionStore,
+    *,
+    before_export_hooks: list[BeforeExportHook] | None = None,
+    after_export_hooks: list[AfterExportHook] | None = None,
+) -> None:
     builder = WordDocumentBuilder()
 
     @server.tool(
@@ -19,7 +27,7 @@ def register_export_document_tool(server: FastMCP, store: DocumentSessionStore) 
         ),
         structured_output=True,
     )
-    def export_document(
+    async def export_document(
         document_id: str,
         output_dir: str = "",
         output_name: str = "",
@@ -29,9 +37,14 @@ def register_export_document_tool(server: FastMCP, store: DocumentSessionStore) 
             output_dir=output_dir,
             output_name=output_name,
         )
-        document, output_path = store.prepare_export_path(request)
-        builder.build(document, output_path)
-        document = store.complete_export(request.document_id)
+        document, output_path = await export_document_via_pipeline(
+            store=store,
+            builder=builder,
+            request=request,
+            before_export_hooks=before_export_hooks or [],
+            after_export_hooks=after_export_hooks or [],
+            source="mcp",
+        )
         return ExportDocumentResult(
             success=True,
             message="Document exported.",

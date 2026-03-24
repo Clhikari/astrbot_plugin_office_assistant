@@ -4,11 +4,17 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from ..internal_hooks import AfterExportHook, BeforeExportHook
 from .session_store import DocumentSessionStore
 from .tools import register_document_tools
 
 
-def create_server(workspace_dir: Path | None = None) -> FastMCP:
+def create_server(
+    workspace_dir: Path | None = None,
+    *,
+    before_export_hooks: list[BeforeExportHook] | None = None,
+    after_export_hooks: list[AfterExportHook] | None = None,
+) -> FastMCP:
     server = FastMCP(
         name="astrbot-office-assistant",
         instructions=(
@@ -17,7 +23,12 @@ def create_server(workspace_dir: Path | None = None) -> FastMCP:
         ),
     )
     store = DocumentSessionStore(workspace_dir=workspace_dir)
-    register_document_tools(server, store)
+    register_document_tools(
+        server,
+        store,
+        before_export_hooks=before_export_hooks,
+        after_export_hooks=after_export_hooks,
+    )
     return server
 
 
