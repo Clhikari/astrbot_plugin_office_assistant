@@ -232,7 +232,7 @@ def _load_settings(config) -> PluginSettings:
     preview_dpi = preview_settings.get("dpi", 150)
     allow_external_input_files = path_settings.get("allow_external_input_files", False)
     feature_settings = config.get("feature_settings", {})
-    recent_text_ttl_seconds = max(10, int(buffer_wait) + 10)
+    recent_text_ttl_seconds = max(20, int(buffer_wait) + 10)
     recent_text_max_entries = 512
     recent_text_cleanup_interval_seconds = max(5, min(60, recent_text_ttl_seconds))
 

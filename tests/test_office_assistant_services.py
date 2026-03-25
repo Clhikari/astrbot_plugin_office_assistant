@@ -238,8 +238,8 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.enable_preview is True
         assert runtime.settings.preview_dpi == 180
         assert runtime.settings.allow_external_input_files is True
-        assert runtime.settings.recent_text_ttl_seconds == 17
-        assert runtime.settings.recent_text_cleanup_interval_seconds == 17
+        assert runtime.settings.recent_text_ttl_seconds == 60
+        assert runtime.settings.recent_text_cleanup_interval_seconds == 60
         assert runtime.command_service._plugin_data_path == data_root / "files"
         assert runtime.workspace_service.plugin_data_path == data_root / "files"
         assert called["plugin_name"] == "astrbot_plugin_office_assistant"
@@ -332,6 +332,50 @@ async def test_upload_session_service_builds_read_first_prompt_for_buffered_uplo
     assert "若使用相对路径，请使用上面的工作区文件名" in prompt_text
     assert "NEVER 创建新文档" not in prompt_text
     assert event.message_str == prompt_text.strip()
+    event_queue.put.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_restores_recent_text_before_resolving_upload_infos():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+    event.message_str = "看看里面的内容"
+    service.remember_recent_text(event)
+    session_key = service.get_attachment_session_key(event)
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+    async def fake_ensure_upload_infos(_event, _files):
+        assert session_key not in service.recent_text_by_session
+        return [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "type_desc": "Office文档 (Word/Excel/PPT)",
+                "is_supported": True,
+                "stored_name": "report_1.docx",
+                "source_path": "",
+            }
+        ]
+
+    service._ensure_upload_infos = AsyncMock(side_effect=fake_ensure_upload_infos)
+
+    await service.on_buffer_complete(buf)
+
+    prompt_text = event.message_obj.message[0].text
+    assert "[用户指令]" in prompt_text
+    assert "看看里面的内容" in prompt_text
     event_queue.put.assert_awaited_once_with(event)
 
 

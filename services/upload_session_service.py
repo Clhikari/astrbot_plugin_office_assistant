@@ -213,6 +213,12 @@ class UploadSessionService:
             logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
             return
 
+        user_instruction = " ".join(texts) if texts else ""
+        restored_recent_text = False
+        if not user_instruction:
+            user_instruction = self.pop_recent_text(event)
+            restored_recent_text = bool(user_instruction)
+
         upload_infos = await self._ensure_upload_infos(event, files)
         file_info_list = []
         has_readable_file = False
@@ -227,12 +233,6 @@ class UploadSessionService:
             file_info_list.append("\n".join(file_lines))
             if info["is_supported"]:
                 has_readable_file = True
-
-        user_instruction = " ".join(texts) if texts else ""
-        restored_recent_text = False
-        if not user_instruction:
-            user_instruction = self.pop_recent_text(event)
-            restored_recent_text = bool(user_instruction)
 
         logger.info(
             "[消息缓冲] 缓冲完成，文件数: %s, 缓冲文本数: %s, 回补文本: %s",
