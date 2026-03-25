@@ -9,7 +9,11 @@ from uuid import uuid4
 
 import mcp
 import pytest
-from astrbot_plugin_office_assistant.constants import EXPLICIT_FILE_TOOL_EVENT_KEY
+import astrbot_plugin_office_assistant.utils as office_utils
+from astrbot_plugin_office_assistant.constants import (
+    EXPLICIT_FILE_TOOL_EVENT_KEY,
+    OfficeType,
+)
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
     AccessPolicyService,
@@ -22,7 +26,11 @@ from astrbot_plugin_office_assistant.services import (
     WorkspaceService,
     build_plugin_runtime,
 )
-from astrbot_plugin_office_assistant.utils import extract_word_text
+from astrbot_plugin_office_assistant.utils import (
+    ExtractedWordContent,
+    ExtractedWordItem,
+    extract_word_text,
+)
 
 import astrbot.api.message_components as Comp
 from astrbot.core.platform.message_type import MessageType
@@ -703,6 +711,65 @@ def test_extract_word_text_ignores_deleted_and_field_code_runs():
     assert "MERGEFIELD secret" not in extracted
 
 
+def test_extract_word_content_returns_structured_result_for_legacy_doc(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_dir = _make_workspace("extract-legacy-doc")
+    doc_path = workspace_dir / "legacy.doc"
+    doc_path.write_bytes(b"legacy")
+
+    monkeypatch.setattr(office_utils, "_ANTIWORD_AVAILABLE", True)
+    monkeypatch.setattr(office_utils, "_WIN32COM_AVAILABLE", False)
+    monkeypatch.setattr(
+        office_utils,
+        "_extract_doc_text_antiword",
+        lambda _path: "Legacy Word content",
+    )
+
+    try:
+        extracted = office_utils.extract_word_content(doc_path, workspace_dir)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted == ExtractedWordContent(
+        text="Legacy Word content",
+        image_paths=[],
+        items=[],
+    )
+
+
+def test_workspace_service_extract_office_text_reads_legacy_doc(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_dir = _make_workspace("workspace-legacy-doc")
+    executor = ThreadPoolExecutor(max_workers=1)
+    doc_path = workspace_dir / "legacy.doc"
+    doc_path.write_bytes(b"legacy")
+
+    monkeypatch.setattr(office_utils, "_ANTIWORD_AVAILABLE", True)
+    monkeypatch.setattr(office_utils, "_WIN32COM_AVAILABLE", False)
+    monkeypatch.setattr(
+        office_utils,
+        "_extract_doc_text_antiword",
+        lambda _path: "Legacy document text",
+    )
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        extracted = workspace_service.extract_office_text(doc_path, OfficeType.WORD)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted == "Legacy document text"
+
+
 @pytest.mark.asyncio
 async def test_file_tool_service_streams_docx_images_as_tool_results():
     workspace_dir = _make_workspace("stream-docx-images")
@@ -760,6 +827,134 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
     assert results[1].content[0].mimeType == "image/png"
     assert results[1].content[0].data
     assert "图片后的说明" in results[0]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_error_when_docx_library_missing():
+    workspace_dir = _make_workspace("missing-docx-lib")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "missing-lib.docx"
+    docx_path.write_bytes(b"not-a-real-docx")
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert results == ["错误：文件 'missing-lib.docx' 无法读取，可能未安装对应解析库"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_skips_unreadable_docx_image_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_dir = _make_workspace("broken-docx-image")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "broken-image.docx"
+    docx_path.write_bytes(b"placeholder")
+    broken_image_path = workspace_dir / "broken.png"
+    healthy_image_path = workspace_dir / "healthy.png"
+    broken_image_path.write_bytes(b"broken")
+    _write_png(healthy_image_path)
+
+    extracted = ExtractedWordContent(
+        items=[
+            ExtractedWordItem(type="text", text="文档正文"),
+            ExtractedWordItem(
+                type="image",
+                image_path=broken_image_path,
+                image_index=1,
+            ),
+            ExtractedWordItem(type="text", text="收尾说明"),
+            ExtractedWordItem(
+                type="image",
+                image_path=healthy_image_path,
+                image_index=2,
+            ),
+        ],
+        image_paths=[broken_image_path, healthy_image_path],
+    )
+
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == broken_image_path:
+            raise OSError("broken image")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        monkeypatch.setattr(
+            workspace_service,
+            "extract_word_content",
+            lambda _path: extracted,
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 2
+    assert isinstance(results[0], str)
+    assert "文档正文" in results[0]
+    assert "[插图1]" in results[0]
+    assert "[插图2]" in results[0]
+    assert "收尾说明" in results[0]
+    assert isinstance(results[1], mcp.types.CallToolResult)
+    assert len(results[1].content) == 1
+    assert isinstance(results[1].content[0], mcp.types.ImageContent)
 
 
 @pytest.mark.asyncio
