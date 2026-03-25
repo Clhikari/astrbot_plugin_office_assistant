@@ -7,6 +7,7 @@ from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from astrbot.api import logger
 
@@ -102,9 +103,14 @@ def safe_error_message(error: Exception, context: str = "") -> str:
     return error_str
 
 
+WordItemType = Literal["text", "image"]
+WORD_ITEM_TEXT: WordItemType = "text"
+WORD_ITEM_IMAGE: WordItemType = "image"
+
+
 @dataclass(slots=True)
 class ExtractedWordItem:
-    type: str
+    type: WordItemType
     text: str | None = None
     image_path: Path | None = None
     image_index: int | None = None
@@ -115,6 +121,58 @@ class ExtractedWordContent:
     text: str | None = None
     image_paths: list[Path] = field(default_factory=list)
     items: list[ExtractedWordItem] = field(default_factory=list)
+
+
+def format_extracted_word_content(
+    content: ExtractedWordContent | None,
+    *,
+    workspace_root: Path | None = None,
+    include_image_paths: bool = False,
+    item_separator: str = "\n",
+) -> str | None:
+    if content is None:
+        return None
+
+    normalized_root = workspace_root.resolve() if workspace_root is not None else None
+
+    def build_image_line(index: int | None, image_path: Path | None) -> str | None:
+        label = f"[插图{index}]" if index is not None else "[插图]"
+        if not include_image_paths:
+            return label
+        if image_path is None:
+            return None
+        if normalized_root is not None and image_path.is_relative_to(normalized_root):
+            display_path = image_path.relative_to(normalized_root).as_posix()
+        else:
+            display_path = image_path.as_posix()
+        return f"{label} {display_path}"
+
+    if content.items:
+        item_lines: list[str] = []
+        for item in content.items:
+            if item.type == WORD_ITEM_TEXT:
+                text = (item.text or "").strip()
+                if text:
+                    item_lines.append(text)
+                continue
+            if item.type == WORD_ITEM_IMAGE:
+                image_line = build_image_line(item.image_index, item.image_path)
+                if image_line:
+                    item_lines.append(image_line)
+        if item_lines:
+            return item_separator.join(item_lines)
+
+    parts: list[str] = []
+    if content.text:
+        parts.append(content.text)
+
+    if content.image_paths:
+        for index, image_path in enumerate(content.image_paths, start=1):
+            image_line = build_image_line(index, image_path)
+            if image_line:
+                parts.append(image_line)
+
+    return item_separator.join(parts) if parts else None
 
 
 def extract_word_content(
@@ -154,12 +212,12 @@ def extract_word_content(
         image_paths = [
             item.image_path
             for item in items
-            if item.type == "image" and item.image_path is not None
+            if item.type == WORD_ITEM_IMAGE and item.image_path is not None
         ]
         text_items = [
             item.text.strip()
             for item in items
-            if item.type == "text" and item.text and item.text.strip()
+            if item.type == WORD_ITEM_TEXT and item.text and item.text.strip()
         ]
         text = "\n".join(text_items) if text_items else None
         return ExtractedWordContent(text=text, image_paths=image_paths, items=items)
@@ -176,48 +234,12 @@ def extract_word_text(
 ) -> str | None:
     """提取 Word 文档文本（支持 .docx 和 .doc）"""
     extracted = extract_word_content(file_path, workspace_root)
-    if extracted is None:
-        return None
-
-    if extracted.items:
-        item_lines: list[str] = []
-        if workspace_root is not None:
-            workspace_root = workspace_root.resolve()
-        for item in extracted.items:
-            if item.type == "text":
-                text = (item.text or "").strip()
-                if text:
-                    item_lines.append(text)
-                continue
-            if item.type == "image" and item.image_path is not None:
-                if workspace_root is not None and item.image_path.is_relative_to(
-                    workspace_root
-                ):
-                    display_path = item.image_path.relative_to(
-                        workspace_root
-                    ).as_posix()
-                else:
-                    display_path = item.image_path.as_posix()
-                item_lines.append(f"[插图{item.image_index}] {display_path}")
-        if item_lines:
-            return "\n\n".join(item_lines)
-
-    if extracted.text:
-        return extracted.text
-
-    if extracted.image_paths:
-        image_lines = []
-        if workspace_root is not None:
-            workspace_root = workspace_root.resolve()
-        for index, image_path in enumerate(extracted.image_paths, start=1):
-            if workspace_root is not None and image_path.is_relative_to(workspace_root):
-                display_path = image_path.relative_to(workspace_root).as_posix()
-            else:
-                display_path = image_path.as_posix()
-            image_lines.append(f"[插图{index}] {display_path}")
-        return "\n".join(image_lines)
-
-    return None
+    return format_extracted_word_content(
+        extracted,
+        workspace_root=workspace_root,
+        include_image_paths=True,
+        item_separator="\n\n",
+    )
 
 
 def _extract_docx_images(
@@ -284,11 +306,11 @@ def _extract_docx_items(
 
         paragraph_text = "".join(paragraph_buffer).strip()
         if paragraph_text:
-            items.append(ExtractedWordItem(type="text", text=paragraph_text))
+            items.append(ExtractedWordItem(type=WORD_ITEM_TEXT, text=paragraph_text))
 
     image_index = 1
     for item in items:
-        if item.type == "image":
+        if item.type == WORD_ITEM_IMAGE:
             item.image_index = image_index
             image_index += 1
     return items
@@ -316,10 +338,14 @@ def _collect_paragraph_items(
             elif child_name in {"drawing", "object", "pict"}:
                 paragraph_text = "".join(paragraph_buffer).strip()
                 if paragraph_text:
-                    items.append(ExtractedWordItem(type="text", text=paragraph_text))
+                    items.append(
+                        ExtractedWordItem(type=WORD_ITEM_TEXT, text=paragraph_text)
+                    )
                 paragraph_buffer.clear()
                 for image_path in _extract_embedded_image_paths(child, image_rel_paths):
-                    items.append(ExtractedWordItem(type="image", image_path=image_path))
+                    items.append(
+                        ExtractedWordItem(type=WORD_ITEM_IMAGE, image_path=image_path)
+                    )
         return
 
     for child in element.iterchildren():

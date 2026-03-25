@@ -14,6 +14,7 @@ from ..utils import (
     extract_excel_text,
     extract_ppt_text,
     extract_word_content,
+    format_extracted_word_content,
     format_file_size,
 )
 
@@ -167,30 +168,7 @@ class WorkspaceService:
         return extract_word_content(file_path, self.plugin_data_path)
 
     def format_word_content(self, content: ExtractedWordContent | None) -> str | None:
-        if content is None:
-            return None
-
-        parts: list[str] = []
-
-        if content.items:
-            for item in content.items:
-                if item.type == "text":
-                    text = (item.text or "").strip()
-                    if text:
-                        parts.append(text)
-                    continue
-                if item.type == "image" and item.image_path is not None:
-                    parts.append(f"[插图{item.image_index}]")
-            return "\n".join(parts) if parts else None
-
-        if content.text:
-            parts.append(content.text)
-
-        if content.image_paths:
-            for index, image_path in enumerate(content.image_paths, start=1):
-                parts.append(f"[插图{index}]")
-
-        return "\n".join(parts) if parts else None
+        return format_extracted_word_content(content)
 
     def format_file_result(
         self, filename: str, suffix: str, file_size: int, content: str
