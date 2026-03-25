@@ -69,6 +69,10 @@ def _write_png(path: Path) -> None:
     path.write_bytes(png_bytes)
 
 
+def _import_docx():
+    return pytest.importorskip("docx")
+
+
 def _rewrite_docx_document_xml(path: Path, transform) -> None:
     with zipfile.ZipFile(path, "r") as source_zip:
         file_map = {
@@ -639,13 +643,12 @@ async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
     image_path = workspace_dir / "embedded.png"
 
     try:
-        from docx import Document
-        from docx.shared import Inches
+        docx = _import_docx()
 
         _write_png(image_path)
-        document = Document()
+        document = docx.Document()
         document.add_paragraph("文档正文")
-        document.add_picture(str(image_path), width=Inches(1))
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
         document.add_paragraph("图片后的说明")
         document.save(docx_path)
 
@@ -684,9 +687,9 @@ def test_extract_word_text_ignores_deleted_and_field_code_runs():
     docx_path = workspace_dir / "tracked.docx"
 
     try:
-        from docx import Document
+        docx = _import_docx()
 
-        document = Document()
+        document = docx.Document()
         document.add_paragraph("保留文本")
         document.save(docx_path)
 
@@ -808,13 +811,12 @@ def test_workspace_service_extract_word_content_skips_docx_image_materialization
     image_path = workspace_dir / "embedded.png"
 
     try:
-        from docx import Document
-        from docx.shared import Inches
+        docx = _import_docx()
 
         _write_png(image_path)
-        document = Document()
+        document = docx.Document()
         document.add_paragraph("图前说明")
-        document.add_picture(str(image_path), width=Inches(1))
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
         document.add_paragraph("图后说明")
         document.save(docx_path)
 
@@ -849,13 +851,12 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
     image_path = workspace_dir / "embedded.png"
 
     try:
-        from docx import Document
-        from docx.shared import Inches
+        docx = _import_docx()
 
         _write_png(image_path)
-        document = Document()
+        document = docx.Document()
         document.add_paragraph("文档正文")
-        document.add_picture(str(image_path), width=Inches(1))
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
         document.add_paragraph("图片后的说明")
         document.save(docx_path)
 
