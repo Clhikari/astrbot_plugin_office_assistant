@@ -30,6 +30,7 @@ from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
     ExtractedWordItem,
     extract_word_text,
+    format_extracted_word_content,
 )
 
 import astrbot.api.message_components as Comp
@@ -711,6 +712,36 @@ def test_extract_word_text_ignores_deleted_and_field_code_runs():
     assert "MERGEFIELD secret" not in extracted
 
 
+def test_format_extracted_word_content_uses_basename_outside_workspace():
+    workspace_dir = _make_workspace("format-word-content-paths")
+    outside_image = Path(__file__).resolve()
+
+    try:
+        content = ExtractedWordContent(
+            items=[
+                ExtractedWordItem(type="text", text="正文"),
+                ExtractedWordItem(
+                    type="image",
+                    image_path=outside_image,
+                    image_index=1,
+                ),
+            ]
+        )
+
+        formatted = format_extracted_word_content(
+            content,
+            workspace_root=workspace_dir,
+            include_image_paths=True,
+        )
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert formatted is not None
+    assert "[插图1]" in formatted
+    assert outside_image.name in formatted
+    assert outside_image.as_posix() not in formatted
+
+
 def test_extract_word_content_returns_structured_result_for_legacy_doc(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -994,6 +1025,81 @@ async def test_file_tool_service_skips_unreadable_docx_image_bytes(
     assert isinstance(results[1], mcp.types.CallToolResult)
     assert len(results[1].content) == 1
     assert isinstance(results[1].content[0], mcp.types.ImageContent)
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
+    workspace_dir = _make_workspace("stream-docx-image-index")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-report.docx"
+    large_image = workspace_dir / "embedded-large.png"
+    small_image = workspace_dir / "embedded-small.png"
+
+    try:
+        docx_path.write_bytes(b"docx")
+        large_image.write_bytes(b"a" * 40)
+        small_image.write_bytes(b"b" * 10)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        workspace_service.extract_word_content = MagicMock(
+            return_value=SimpleNamespace(
+                text="文档正文",
+                image_paths=[large_image, small_image],
+                image_count=2,
+                items=[
+                    SimpleNamespace(type="text", text="文档正文"),
+                    SimpleNamespace(
+                        type="image",
+                        image_path=small_image,
+                        image_index=2,
+                    ),
+                    SimpleNamespace(
+                        type="image",
+                        image_path=large_image,
+                        image_index=1,
+                    ),
+                    SimpleNamespace(type="text", text="收尾说明"),
+                ],
+            )
+        )
+
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            max_inline_docx_image_bytes=20,
+            max_inline_docx_image_count=2,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert isinstance(results[0], str)
+    assert "[插图2]" in results[0]
+    assert "[插图1]（未注入模型上下文" in results[0]
+    assert "超过 20.00 B 限制" in results[0]
+    assert isinstance(results[1], mcp.types.CallToolResult)
+    assert len(results[1].content) == 1
 
 
 @pytest.mark.asyncio

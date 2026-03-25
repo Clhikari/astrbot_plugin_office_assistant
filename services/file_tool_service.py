@@ -200,7 +200,7 @@ class FileToolService:
             return
 
         skipped_image_reasons = self._plan_inline_word_images(extracted.image_paths)
-        image_order = 0
+        fallback_image_index = 0
         text_chunks: list[str] = []
         selected_image_paths: list[Path] = []
 
@@ -215,13 +215,17 @@ class FileToolService:
                 if item.type != WORD_ITEM_IMAGE or item.image_path is None:
                     continue
 
-                image_order += 1
-                reason = skipped_image_reasons.get(image_order)
+                image_index = getattr(item, "image_index", None)
+                if image_index is None:
+                    fallback_image_index += 1
+                    image_index = fallback_image_index
+
+                reason = skipped_image_reasons.get(image_index)
                 if reason:
-                    text_chunks.append(f"[插图{image_order}]（{reason}）")
+                    text_chunks.append(f"[插图{image_index}]（{reason}）")
                     continue
 
-                text_chunks.append(f"[插图{image_order}]")
+                text_chunks.append(f"[插图{image_index}]")
                 selected_image_paths.append(item.image_path)
 
             final_text = "\n".join(part.strip() for part in text_chunks if part.strip())

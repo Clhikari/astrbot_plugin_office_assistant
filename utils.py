@@ -145,7 +145,7 @@ def format_extracted_word_content(
         if normalized_root is not None and image_path.is_relative_to(normalized_root):
             display_path = image_path.relative_to(normalized_root).as_posix()
         else:
-            display_path = image_path.as_posix()
+            display_path = image_path.name
         return f"{label} {display_path}"
 
     if content.items:
