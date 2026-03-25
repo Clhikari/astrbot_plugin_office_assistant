@@ -121,6 +121,7 @@ class ExtractedWordContent:
     text: str | None = None
     image_paths: list[Path] = field(default_factory=list)
     items: list[ExtractedWordItem] = field(default_factory=list)
+    image_count: int = 0
 
 
 def format_extracted_word_content(
@@ -178,6 +179,8 @@ def format_extracted_word_content(
 def extract_word_content(
     file_path: Path,
     workspace_root: Path | None = None,
+    *,
+    include_images: bool = True,
 ) -> ExtractedWordContent | None:
     """Extract structured Word content for downstream tool formatting."""
     suffix = file_path.suffix.lower()
@@ -205,9 +208,20 @@ def extract_word_content(
         from docx import Document
 
         doc = Document(file_path)
-        image_rel_paths = _extract_docx_images(doc, file_path, workspace_root)
-        items = _extract_docx_items(doc, image_rel_paths)
-        if not items:
+        image_parts = _collect_docx_image_parts(doc)
+        image_count = len(image_parts)
+        image_rel_paths = _extract_docx_images(
+            image_parts,
+            file_path,
+            workspace_root,
+            include_images=include_images,
+        )
+        items = _extract_docx_items(
+            doc,
+            image_rel_paths,
+            include_images=include_images,
+        )
+        if not items and image_count == 0:
             return None
         image_paths = [
             item.image_path
@@ -220,7 +234,12 @@ def extract_word_content(
             if item.type == WORD_ITEM_TEXT and item.text and item.text.strip()
         ]
         text = "\n".join(text_items) if text_items else None
-        return ExtractedWordContent(text=text, image_paths=image_paths, items=items)
+        return ExtractedWordContent(
+            text=text,
+            image_paths=image_paths,
+            items=items,
+            image_count=image_count,
+        )
     except ImportError:
         return None
     except Exception as e:
@@ -242,12 +261,7 @@ def extract_word_text(
     )
 
 
-def _extract_docx_images(
-    doc, file_path: Path, workspace_root: Path | None
-) -> dict[str, Path]:
-    if workspace_root is None:
-        return {}
-
+def _collect_docx_image_parts(doc) -> list[tuple[str, bytes, str]]:
     image_parts = []
     for rel_id, rel in doc.part.rels.items():
         if "image" not in rel.reltype:
@@ -261,7 +275,17 @@ def _extract_docx_images(
             continue
         image_parts.append((rel_id, blob, Path(str(partname)).suffix or ".bin"))
 
-    if not image_parts:
+    return image_parts
+
+
+def _extract_docx_images(
+    image_parts: list[tuple[str, bytes, str]],
+    file_path: Path,
+    workspace_root: Path | None,
+    *,
+    include_images: bool,
+) -> dict[str, Path]:
+    if workspace_root is None or not include_images or not image_parts:
         return {}
 
     workspace_root = workspace_root.resolve()
@@ -284,7 +308,10 @@ def _extract_docx_images(
 
 
 def _extract_docx_items(
-    doc, image_rel_paths: dict[str, Path]
+    doc,
+    image_rel_paths: dict[str, Path],
+    *,
+    include_images: bool,
 ) -> list[ExtractedWordItem]:
     items: list[ExtractedWordItem] = []
 
@@ -302,6 +329,7 @@ def _extract_docx_items(
                     image_rel_paths=image_rel_paths,
                     paragraph_buffer=paragraph_buffer,
                     items=items,
+                    include_images=include_images,
                 )
 
         paragraph_text = "".join(paragraph_buffer).strip()
@@ -322,6 +350,7 @@ def _collect_paragraph_items(
     image_rel_paths: dict[str, Path],
     paragraph_buffer: list[str],
     items: list[ExtractedWordItem],
+    include_images: bool,
 ) -> None:
     local_name = element.tag.rsplit("}", 1)[-1]
 
@@ -342,10 +371,16 @@ def _collect_paragraph_items(
                         ExtractedWordItem(type=WORD_ITEM_TEXT, text=paragraph_text)
                     )
                 paragraph_buffer.clear()
-                for image_path in _extract_embedded_image_paths(child, image_rel_paths):
-                    items.append(
-                        ExtractedWordItem(type=WORD_ITEM_IMAGE, image_path=image_path)
-                    )
+                if include_images:
+                    for image_path in _extract_embedded_image_paths(
+                        child, image_rel_paths
+                    ):
+                        items.append(
+                            ExtractedWordItem(
+                                type=WORD_ITEM_IMAGE,
+                                image_path=image_path,
+                            )
+                        )
         return
 
     for child in element.iterchildren():
@@ -356,6 +391,7 @@ def _collect_paragraph_items(
                 image_rel_paths=image_rel_paths,
                 paragraph_buffer=paragraph_buffer,
                 items=items,
+                include_images=include_images,
             )
 
 

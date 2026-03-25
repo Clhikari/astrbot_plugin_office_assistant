@@ -22,7 +22,12 @@ from ..constants import (
     TEXT_SUFFIXES,
     OfficeType,
 )
-from ..utils import format_file_size, safe_error_message
+from ..utils import (
+    WORD_ITEM_IMAGE,
+    WORD_ITEM_TEXT,
+    format_file_size,
+    safe_error_message,
+)
 
 
 class FileToolService:
@@ -151,6 +156,90 @@ class FileToolService:
 
         return skipped_reasons
 
+    async def _iter_word_file_results(
+        self,
+        resolved_path: Path,
+        display_name: str,
+        suffix: str,
+        file_size: int,
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
+        extracted = self._workspace_service.extract_word_content(
+            resolved_path,
+            include_images=self._enable_docx_image_review,
+        )
+        if extracted is None:
+            yield f"错误：文件 '{display_name}' 无法读取，可能未安装对应解析库"
+            return
+
+        image_count = getattr(extracted, "image_count", 0) or len(
+            getattr(extracted, "image_paths", [])
+        )
+
+        if not self._enable_docx_image_review:
+            text_chunks: list[str] = []
+            for item in getattr(extracted, "items", []):
+                if item.type != WORD_ITEM_TEXT:
+                    continue
+                text = (item.text or "").strip()
+                if text:
+                    text_chunks.append(text)
+            formatted = "\n".join(text_chunks) if text_chunks else None
+            if not formatted and extracted.text:
+                formatted = extracted.text.strip() or None
+            if formatted:
+                yield self._workspace_service.format_file_result(
+                    display_name, suffix, file_size, formatted
+                )
+            elif image_count > 0:
+                yield self._workspace_service.format_file_result(
+                    display_name,
+                    suffix,
+                    file_size,
+                    "该 Word 文档仅包含图片内容，当前未启用图片理解。",
+                )
+            return
+
+        skipped_image_reasons = self._plan_inline_word_images(extracted.image_paths)
+        image_order = 0
+        text_chunks: list[str] = []
+        selected_image_paths: list[Path] = []
+
+        if extracted.items:
+            for item in extracted.items:
+                if item.type == WORD_ITEM_TEXT:
+                    text = (item.text or "").strip()
+                    if text:
+                        text_chunks.append(text)
+                    continue
+
+                if item.type != WORD_ITEM_IMAGE or item.image_path is None:
+                    continue
+
+                image_order += 1
+                reason = skipped_image_reasons.get(image_order)
+                if reason:
+                    text_chunks.append(f"[插图{image_order}]（{reason}）")
+                    continue
+
+                text_chunks.append(f"[插图{image_order}]")
+                selected_image_paths.append(item.image_path)
+
+            final_text = "\n".join(part.strip() for part in text_chunks if part.strip())
+            if final_text:
+                yield self._workspace_service.format_file_result(
+                    display_name, suffix, file_size, final_text
+                )
+            image_result = self._build_image_tool_result(selected_image_paths)
+            if image_result is not None:
+                yield image_result
+            return
+
+        formatted = self._workspace_service.format_word_content(extracted)
+        if formatted:
+            yield self._workspace_service.format_file_result(
+                display_name, suffix, file_size, formatted
+            )
+
     async def iter_read_file_tool_results(
         self,
         event: AstrMessageEvent,
@@ -203,72 +292,14 @@ class FileToolService:
             office_type = SUFFIX_TO_OFFICE_TYPE.get(suffix)
             if office_type:
                 if office_type is OfficeType.WORD:
-                    extracted = self._workspace_service.extract_word_content(
-                        resolved_path
-                    )
-                    if extracted:
-                        skipped_image_reasons: dict[int, str] = {}
-                        if self._enable_docx_image_review:
-                            skipped_image_reasons = self._plan_inline_word_images(
-                                extracted.image_paths
-                            )
-                        image_order = 0
-                        text_chunks: list[str] = []
-                        selected_image_paths: list[Path] = []
-
-                        if extracted.items:
-                            for item in extracted.items:
-                                if item.type == "text":
-                                    text = (item.text or "").strip()
-                                    if text:
-                                        text_chunks.append(text)
-                                    continue
-
-                                if item.type != "image" or item.image_path is None:
-                                    continue
-
-                                image_order += 1
-                                reason = skipped_image_reasons.get(image_order)
-                                if reason:
-                                    text_chunks.append(
-                                        f"[插图{image_order}]（{reason}）"
-                                    )
-                                    continue
-
-                                if self._enable_docx_image_review:
-                                    text_chunks.append(f"[插图{image_order}]")
-                                    selected_image_paths.append(item.image_path)
-
-                            final_text = "\n".join(
-                                part.strip() for part in text_chunks if part.strip()
-                            )
-                            if (
-                                not final_text
-                                and not self._enable_docx_image_review
-                                and extracted.image_paths
-                            ):
-                                final_text = (
-                                    "该 Word 文档仅包含图片内容，当前未启用图片理解。"
-                                )
-                            if final_text:
-                                yield self._workspace_service.format_file_result(
-                                    display_name, suffix, file_size, final_text
-                                )
-                            image_result = self._build_image_tool_result(
-                                selected_image_paths
-                            )
-                            if image_result is not None:
-                                yield image_result
-                            return
-
-                        formatted = self._workspace_service.format_word_content(
-                            extracted
-                        )
-                        if formatted:
-                            yield self._workspace_service.format_file_result(
-                                display_name, suffix, file_size, formatted
-                            )
-                        return
+                    async for result in self._iter_word_file_results(
+                        resolved_path,
+                        display_name,
+                        suffix,
+                        file_size,
+                    ):
+                        yield result
+                    return
                 extracted = self._workspace_service.extract_office_text(
                     resolved_path, office_type
                 )

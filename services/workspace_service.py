@@ -161,11 +161,20 @@ class WorkspaceService:
 
         return extractor(file_path)
 
-    def extract_word_content(self, file_path: Path) -> ExtractedWordContent | None:
+    def extract_word_content(
+        self,
+        file_path: Path,
+        *,
+        include_images: bool = True,
+    ) -> ExtractedWordContent | None:
         if file_path.suffix.lower() != ".doc" and not self._office_libs.get("docx"):
             logger.debug("[文件管理] Word 解析库未加载，无法提取结构化内容。")
             return None
-        return extract_word_content(file_path, self.plugin_data_path)
+        return extract_word_content(
+            file_path,
+            self.plugin_data_path,
+            include_images=include_images,
+        )
 
     def format_word_content(self, content: ExtractedWordContent | None) -> str | None:
         return format_extracted_word_content(content)

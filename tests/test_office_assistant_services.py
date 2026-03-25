@@ -770,6 +770,45 @@ def test_workspace_service_extract_office_text_reads_legacy_doc(
     assert extracted == "Legacy document text"
 
 
+def test_workspace_service_extract_word_content_skips_docx_image_materialization_when_disabled():
+    workspace_dir = _make_workspace("workspace-docx-no-image-materialize")
+    executor = ThreadPoolExecutor(max_workers=1)
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        from docx import Document
+        from docx.shared import Inches
+
+        _write_png(image_path)
+        document = Document()
+        document.add_paragraph("图前说明")
+        document.add_picture(str(image_path), width=Inches(1))
+        document.add_paragraph("图后说明")
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+
+        extracted = workspace_service.extract_word_content(
+            docx_path,
+            include_images=False,
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted is not None
+    assert extracted.image_count == 1
+    assert extracted.image_paths == []
+    assert all(item.type == "text" for item in extracted.items)
+
+
 @pytest.mark.asyncio
 async def test_file_tool_service_streams_docx_images_as_tool_results():
     workspace_dir = _make_workspace("stream-docx-images")
@@ -922,7 +961,7 @@ async def test_file_tool_service_skips_unreadable_docx_image_bytes(
         monkeypatch.setattr(
             workspace_service,
             "extract_word_content",
-            lambda _path: extracted,
+            lambda _path, include_images=True: extracted,
         )
         service = FileToolService(
             workspace_service=workspace_service,
@@ -991,6 +1030,7 @@ async def test_file_tool_service_limits_inline_docx_images():
                     small_image_2,
                     small_image_3,
                 ],
+                image_count=4,
                 items=[
                     SimpleNamespace(type="text", text="文档正文"),
                     SimpleNamespace(type="image", image_path=small_image_1),
@@ -1063,9 +1103,14 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
             return_value=SimpleNamespace(
                 text="文档正文",
                 image_paths=[image_path],
+                image_count=1,
                 items=[
                     SimpleNamespace(type="text", text="图前说明"),
-                    SimpleNamespace(type="image", image_path=image_path),
+                    SimpleNamespace(
+                        type="image",
+                        image_path=image_path,
+                        image_index=1,
+                    ),
                     SimpleNamespace(type="text", text="图后说明"),
                 ],
             )
@@ -1099,6 +1144,10 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
     assert "图前说明" in results[0]
     assert "图后说明" in results[0]
     assert "[插图1]" not in results[0]
+    workspace_service.extract_word_content.assert_called_once_with(
+        docx_path,
+        include_images=False,
+    )
 
 
 @pytest.mark.asyncio
@@ -1124,7 +1173,14 @@ async def test_file_tool_service_returns_message_for_image_only_docx_when_review
             return_value=SimpleNamespace(
                 text=None,
                 image_paths=[image_path],
-                items=[SimpleNamespace(type="image", image_path=image_path)],
+                image_count=1,
+                items=[
+                    SimpleNamespace(
+                        type="image",
+                        image_path=image_path,
+                        image_index=1,
+                    )
+                ],
             )
         )
 
@@ -1155,6 +1211,10 @@ async def test_file_tool_service_returns_message_for_image_only_docx_when_review
     assert isinstance(results[0], str)
     assert "仅包含图片内容" in results[0]
     assert "[插图1]" not in results[0]
+    workspace_service.extract_word_content.assert_called_once_with(
+        docx_path,
+        include_images=False,
+    )
 
 
 @pytest.mark.asyncio
