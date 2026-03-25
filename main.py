@@ -298,7 +298,7 @@ class FileOperationPlugin(Star):
         self,
         event: AstrMessageEvent,
         filename: str = "",
-    ) -> str | None:
+    ):
         """读取文本、Office 或 PDF 文件内容。
 
         支持格式：
@@ -313,7 +313,11 @@ class FileOperationPlugin(Star):
         Args:
             filename(string): 要读取的文件名。
         """
-        return await self._file_tool_service.read_file(event, filename)
+        async for result in self._file_tool_service.iter_read_file_tool_results(
+            event,
+            filename,
+        ):
+            yield result
 
     @llm_tool(name="create_office_file")
     async def create_office_file(

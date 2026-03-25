@@ -73,6 +73,24 @@
                 "hint": "允许读取/发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
                 "default": 20
             },
+            "enable_docx_image_review": {
+                "description": "启用 Word 图片理解",
+                "type": "bool",
+                "hint": "读取 .docx 时，是否把文档里的嵌入图片注入模型上下文。关闭后按纯文本读取，不再输出 [插图N] 占位。",
+                "default": true
+            },
+            "max_inline_docx_image_mb": {
+                "description": "Word图片注入大小上限(MB)",
+                "type": "int",
+                "hint": "读取 .docx 时，单张嵌入图片超过该大小就不注入多模态上下文，只在文本结果里保留说明。默认 2 MB。",
+                "default": 2
+            },
+            "max_inline_docx_image_count": {
+                "description": "Word图片最多注入张数",
+                "type": "int",
+                "hint": "读取 .docx 时，最多向多模态上下文注入多少张嵌入图片。超出的图片只在文本结果里保留说明。默认 3 张。",
+                "default": 3
+            },
             "auto_delete_files": {
                 "description": "发送后自动删除文件",
                 "type": "bool",

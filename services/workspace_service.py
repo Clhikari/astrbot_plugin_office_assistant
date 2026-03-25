@@ -10,9 +10,10 @@ from astrbot.api.event import AstrMessageEvent
 
 from ..constants import DEFAULT_CHUNK_SIZE, OfficeType
 from ..utils import (
+    ExtractedWordContent,
     extract_excel_text,
     extract_ppt_text,
-    extract_word_text,
+    extract_word_content,
     format_file_size,
 )
 
@@ -136,8 +137,11 @@ class WorkspaceService:
     def extract_office_text(
         self, file_path: Path, office_type: OfficeType
     ) -> str | None:
+        if office_type is OfficeType.WORD:
+            extracted = self.extract_word_content(file_path)
+            return self.format_word_content(extracted)
+
         extractors = {
-            OfficeType.WORD: ("docx", extract_word_text),
             OfficeType.EXCEL: ("openpyxl", extract_excel_text),
             OfficeType.POWERPOINT: ("pptx", extract_ppt_text),
         }
@@ -155,6 +159,38 @@ class WorkspaceService:
             return None
 
         return extractor(file_path)
+
+    def extract_word_content(self, file_path: Path) -> ExtractedWordContent | None:
+        if not self._office_libs.get("docx"):
+            logger.debug("[文件管理] Word 解析库未加载，无法提取结构化内容。")
+            return None
+        return extract_word_content(file_path, self.plugin_data_path)
+
+    def format_word_content(self, content: ExtractedWordContent | None) -> str | None:
+        if content is None:
+            return None
+
+        parts: list[str] = []
+
+        if content.items:
+            for item in content.items:
+                if item.type == "text":
+                    text = (item.text or "").strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if item.type == "image" and item.image_path is not None:
+                    parts.append(f"[插图{item.image_index}]")
+            return "\n".join(parts) if parts else None
+
+        if content.text:
+            parts.append(content.text)
+
+        if content.image_paths:
+            for index, image_path in enumerate(content.image_paths, start=1):
+                parts.append(f"[插图{index}]")
+
+        return "\n".join(parts) if parts else None
 
     def format_file_result(
         self, filename: str, suffix: str, file_size: int, content: str

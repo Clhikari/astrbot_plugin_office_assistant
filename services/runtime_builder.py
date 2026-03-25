@@ -8,7 +8,12 @@ from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from ..agent_tools import build_document_toolset
-from ..constants import DEFAULT_MAX_FILE_SIZE_MB, OFFICE_LIBS
+from ..constants import (
+    DEFAULT_MAX_FILE_SIZE_MB,
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
+    OFFICE_LIBS,
+)
 from ..message_buffer import MessageBuffer
 from ..office_generator import OfficeGenerator
 from ..pdf_converter import PDFConverter
@@ -28,6 +33,9 @@ from .workspace_service import WorkspaceService
 class PluginSettings:
     auto_delete: bool
     max_file_size: int
+    enable_docx_image_review: bool
+    max_inline_docx_image_bytes: int
+    max_inline_docx_image_count: int
     buffer_wait: int
     reply_to_user: bool
     require_at_in_group: bool
@@ -131,12 +139,16 @@ def build_plugin_runtime(
         reply_to_user=settings.reply_to_user,
     )
     file_tool_service = FileToolService(
+        plugin_context=context,
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,
         delivery_service=delivery_service,
         office_libs=office_libs,
         allow_external_input_files=settings.allow_external_input_files,
+        enable_docx_image_review=settings.enable_docx_image_review,
+        max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
+        max_inline_docx_image_count=settings.max_inline_docx_image_count,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
@@ -200,6 +212,18 @@ def _load_settings(config) -> PluginSettings:
     max_file_size = (
         file_settings.get("max_file_size_mb", DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024
     )
+    enable_docx_image_review = file_settings.get("enable_docx_image_review", True)
+    max_inline_docx_image_bytes = (
+        file_settings.get(
+            "max_inline_docx_image_mb", DEFAULT_MAX_INLINE_DOCX_IMAGE_MB
+        )
+        * 1024
+        * 1024
+    )
+    max_inline_docx_image_count = file_settings.get(
+        "max_inline_docx_image_count",
+        DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    )
     buffer_wait = file_settings.get("message_buffer_seconds", 4)
     reply_to_user = trigger_settings.get("reply_to_user", True)
     require_at_in_group = trigger_settings.get("require_at_in_group", True)
@@ -218,6 +242,9 @@ def _load_settings(config) -> PluginSettings:
     return PluginSettings(
         auto_delete=auto_delete,
         max_file_size=max_file_size,
+        enable_docx_image_review=enable_docx_image_review,
+        max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+        max_inline_docx_image_count=max_inline_docx_image_count,
         buffer_wait=buffer_wait,
         reply_to_user=reply_to_user,
         require_at_in_group=require_at_in_group,
