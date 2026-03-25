@@ -213,10 +213,12 @@ class UploadSessionService:
             logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
             return
 
-        user_instruction = " ".join(texts) if texts else ""
+        user_instruction = " ".join(texts).strip() if texts else ""
         restored_recent_text = False
         if not user_instruction:
-            user_instruction = self.pop_recent_text(event)
+            # Restore recent text before upload parsing so slow file extraction
+            # does not consume the recovery window.
+            user_instruction = self.pop_recent_text(event).strip()
             restored_recent_text = bool(user_instruction)
 
         upload_infos = await self._ensure_upload_infos(event, files)

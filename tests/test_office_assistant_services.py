@@ -238,8 +238,8 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.enable_preview is True
         assert runtime.settings.preview_dpi == 180
         assert runtime.settings.allow_external_input_files is True
-        assert runtime.settings.recent_text_ttl_seconds == 60
-        assert runtime.settings.recent_text_cleanup_interval_seconds == 60
+        assert runtime.settings.recent_text_ttl_seconds == 20
+        assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.command_service._plugin_data_path == data_root / "files"
         assert runtime.workspace_service.plugin_data_path == data_root / "files"
         assert called["plugin_name"] == "astrbot_plugin_office_assistant"
