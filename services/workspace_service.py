@@ -176,8 +176,17 @@ class WorkspaceService:
             include_images=include_images,
         )
 
-    def format_word_content(self, content: ExtractedWordContent | None) -> str | None:
-        return format_extracted_word_content(content)
+    def format_word_content(
+        self,
+        content: ExtractedWordContent | None,
+        *,
+        include_image_paths: bool = False,
+    ) -> str | None:
+        return format_extracted_word_content(
+            content,
+            workspace_root=self.plugin_data_path,
+            include_image_paths=include_image_paths,
+        )
 
     def format_file_result(
         self, filename: str, suffix: str, file_size: int, content: str

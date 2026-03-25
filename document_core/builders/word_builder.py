@@ -429,7 +429,9 @@ class WordDocumentBuilder:
             return "".join(run.text for run in block.runs)
         return block.text
 
-    def _append_paragraph_runs(self, paragraph, block: ParagraphBlock, theme: dict) -> None:
+    def _append_paragraph_runs(
+        self, paragraph, block: ParagraphBlock, theme: dict
+    ) -> None:
         from docx.shared import Pt
 
         font_size = Pt(
@@ -466,9 +468,7 @@ class WordDocumentBuilder:
                 run,
                 font_name=theme["font_name"],
                 font_size=font_size,
-                bold=self._resolved_bold(
-                    False, getattr(block.style, "emphasis", None)
-                ),
+                bold=self._resolved_bold(False, getattr(block.style, "emphasis", None)),
                 color=default_color,
             )
 

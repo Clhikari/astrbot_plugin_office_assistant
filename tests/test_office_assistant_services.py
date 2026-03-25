@@ -842,6 +842,54 @@ def test_workspace_service_extract_word_content_skips_docx_image_materialization
     assert all(item.type == "text" for item in extracted.items)
 
 
+def test_workspace_service_extract_word_content_formats_relative_image_paths_when_enabled():
+    workspace_dir = _make_workspace("workspace-docx-image-materialize")
+    executor = ThreadPoolExecutor(max_workers=1)
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_paragraph("图前说明")
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.add_paragraph("图后说明")
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+
+        extracted = workspace_service.extract_word_content(
+            docx_path,
+            include_images=True,
+        )
+        formatted = workspace_service.format_word_content(
+            extracted,
+            include_image_paths=True,
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted is not None
+    assert extracted.image_count == 1
+    assert len(extracted.image_paths) == 1
+    assert formatted is not None
+    assert "图前说明" in formatted
+    assert "图后说明" in formatted
+    assert "[插图1]" in formatted
+    assert ".read_assets/" in formatted
+    assert str(workspace_dir) not in formatted
+    assert str(workspace_dir.resolve()) not in formatted
+
+
 @pytest.mark.asyncio
 async def test_file_tool_service_streams_docx_images_as_tool_results():
     workspace_dir = _make_workspace("stream-docx-images")
