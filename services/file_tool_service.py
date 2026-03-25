@@ -248,7 +248,7 @@ class FileToolService:
         self,
         event: AstrMessageEvent,
         filename: str = "",
-    ) -> AsyncGenerator[str | mcp.types.CallToolResult | None, None]:
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
         if not filename:
             yield "错误：请提供要读取的文件名"
             return
@@ -340,8 +340,6 @@ class FileToolService:
     ) -> str | None:
         text_parts: list[str] = []
         async for result in self.iter_read_file_tool_results(event, filename):
-            if result is None:
-                return None
             if isinstance(result, str):
                 text_parts.append(result)
         if not text_parts:

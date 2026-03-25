@@ -300,7 +300,7 @@ class FileOperationPlugin(Star):
         self,
         event: AstrMessageEvent,
         filename: str = "",
-    ) -> AsyncGenerator[str | mcp.types.CallToolResult | None, None]:
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
         """读取文本、Office 或 PDF 文件内容。
 
         支持格式：
