@@ -121,7 +121,9 @@ class TableRenderer:
                         body_alignment,
                         default=default_alignment,
                     ),
-                    font_size=Pt(self._table_font_size(style_name, theme, header=False)),
+                    font_size=Pt(
+                        self._table_font_size(style_name, theme, header=False)
+                    ),
                     font_name=theme["font_name"],
                     background=self._table_row_fill(style_name, data_row_index + 1),
                 )

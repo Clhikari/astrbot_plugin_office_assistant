@@ -1,11 +1,19 @@
+import base64
 import shutil
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import mcp
 import pytest
+import astrbot_plugin_office_assistant.utils as office_utils
+from astrbot_plugin_office_assistant.constants import (
+    EXPLICIT_FILE_TOOL_EVENT_KEY,
+    OfficeType,
+)
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
     AccessPolicyService,
@@ -18,7 +26,12 @@ from astrbot_plugin_office_assistant.services import (
     WorkspaceService,
     build_plugin_runtime,
 )
-from astrbot_plugin_office_assistant.constants import EXPLICIT_FILE_TOOL_EVENT_KEY
+from astrbot_plugin_office_assistant.utils import (
+    ExtractedWordContent,
+    ExtractedWordItem,
+    extract_word_text,
+    format_extracted_word_content,
+)
 
 import astrbot.api.message_components as Comp
 from astrbot.core.platform.message_type import MessageType
@@ -47,6 +60,32 @@ def _make_workspace(name: str) -> Path:
     workspace_dir = workspace_base / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     return workspace_dir
+
+
+def _write_png(path: Path) -> None:
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9kAAAAASUVORK5CYII="
+    )
+    path.write_bytes(png_bytes)
+
+
+def _import_docx():
+    return pytest.importorskip("docx")
+
+
+def _rewrite_docx_document_xml(path: Path, transform) -> None:
+    with zipfile.ZipFile(path, "r") as source_zip:
+        file_map = {
+            info.filename: source_zip.read(info.filename)
+            for info in source_zip.infolist()
+        }
+
+    document_xml = file_map["word/document.xml"].decode("utf-8")
+    file_map["word/document.xml"] = transform(document_xml).encode("utf-8")
+
+    with zipfile.ZipFile(path, "w") as target_zip:
+        for filename, content in file_map.items():
+            target_zip.writestr(filename, content)
 
 
 def test_access_policy_service_handles_whitelist_and_group_flags():
@@ -79,6 +118,9 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         "file_settings": {
             "auto_delete_files": True,
             "max_file_size_mb": 8,
+            "enable_docx_image_review": False,
+            "max_inline_docx_image_mb": 3,
+            "max_inline_docx_image_count": 4,
             "message_buffer_seconds": 4,
         },
         "trigger_settings": {
@@ -111,6 +153,9 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.auto_delete is True
         assert runtime.plugin_data_path.exists()
         assert runtime.temp_dir is not None
+        assert runtime.settings.enable_docx_image_review is False
+        assert runtime.settings.max_inline_docx_image_bytes == 3 * 1024 * 1024
+        assert runtime.settings.max_inline_docx_image_count == 4
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
         assert runtime.message_buffer is not None
         assert runtime.incoming_message_service is not None
@@ -135,6 +180,8 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         "file_settings": {
             "auto_delete_files": False,
             "max_file_size_mb": 16,
+            "max_inline_docx_image_mb": 5,
+            "max_inline_docx_image_count": 6,
             "message_buffer_seconds": 7,
         },
         "trigger_settings": {
@@ -182,6 +229,8 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.plugin_data_path.exists()
         assert runtime.settings.auto_delete is False
         assert runtime.settings.max_file_size == 16 * 1024 * 1024
+        assert runtime.settings.max_inline_docx_image_bytes == 5 * 1024 * 1024
+        assert runtime.settings.max_inline_docx_image_count == 6
         assert runtime.settings.reply_to_user is False
         assert runtime.settings.require_at_in_group is False
         assert runtime.settings.enable_features_in_group is True
@@ -586,6 +635,744 @@ async def test_file_tool_service_reads_text_from_workspace_file():
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
+    workspace_dir = _make_workspace("read-docx-images")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_paragraph("文档正文")
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.add_paragraph("图片后的说明")
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        result = await service.read_file(event, docx_path.name)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result is not None
+    assert "文档正文" in result
+    assert "[插图1]" in result
+    assert "图片后的说明" in result
+
+
+def test_extract_word_text_ignores_deleted_and_field_code_runs():
+    workspace_dir = _make_workspace("extract-docx-hidden-runs")
+    docx_path = workspace_dir / "tracked.docx"
+
+    try:
+        docx = _import_docx()
+
+        document = docx.Document()
+        document.add_paragraph("保留文本")
+        document.save(docx_path)
+
+        _rewrite_docx_document_xml(
+            docx_path,
+            lambda xml: xml.replace(
+                "<w:t>保留文本</w:t>",
+                (
+                    "<w:t>保留文本</w:t>"
+                    "<w:delText>删除内容</w:delText>"
+                    "<w:instrText> MERGEFIELD secret </w:instrText>"
+                ),
+            ),
+        )
+
+        extracted = extract_word_text(docx_path, workspace_dir)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted is not None
+    assert "保留文本" in extracted
+    assert "删除内容" not in extracted
+    assert "MERGEFIELD secret" not in extracted
+
+
+def test_format_extracted_word_content_uses_basename_outside_workspace():
+    workspace_dir = _make_workspace("format-word-content-paths")
+    outside_image = Path(__file__).resolve()
+
+    try:
+        content = ExtractedWordContent(
+            items=[
+                ExtractedWordItem(type="text", text="正文"),
+                ExtractedWordItem(
+                    type="image",
+                    image_path=outside_image,
+                    image_index=1,
+                ),
+            ]
+        )
+
+        formatted = format_extracted_word_content(
+            content,
+            workspace_root=workspace_dir,
+            include_image_paths=True,
+        )
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert formatted is not None
+    assert "[插图1]" in formatted
+    assert outside_image.name in formatted
+    assert outside_image.as_posix() not in formatted
+
+
+def test_extract_word_content_returns_structured_result_for_legacy_doc(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_dir = _make_workspace("extract-legacy-doc")
+    doc_path = workspace_dir / "legacy.doc"
+    doc_path.write_bytes(b"legacy")
+
+    monkeypatch.setattr(office_utils, "_ANTIWORD_AVAILABLE", True)
+    monkeypatch.setattr(office_utils, "_WIN32COM_AVAILABLE", False)
+    monkeypatch.setattr(
+        office_utils,
+        "_extract_doc_text_antiword",
+        lambda _path: "Legacy Word content",
+    )
+
+    try:
+        extracted = office_utils.extract_word_content(doc_path, workspace_dir)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted == ExtractedWordContent(
+        text="Legacy Word content",
+        image_paths=[],
+        items=[],
+    )
+
+
+def test_workspace_service_extract_office_text_reads_legacy_doc(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_dir = _make_workspace("workspace-legacy-doc")
+    executor = ThreadPoolExecutor(max_workers=1)
+    doc_path = workspace_dir / "legacy.doc"
+    doc_path.write_bytes(b"legacy")
+
+    monkeypatch.setattr(office_utils, "_ANTIWORD_AVAILABLE", True)
+    monkeypatch.setattr(office_utils, "_WIN32COM_AVAILABLE", False)
+    monkeypatch.setattr(
+        office_utils,
+        "_extract_doc_text_antiword",
+        lambda _path: "Legacy document text",
+    )
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        extracted = workspace_service.extract_office_text(doc_path, OfficeType.WORD)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted == "Legacy document text"
+
+
+def test_workspace_service_extract_word_content_skips_docx_image_materialization_when_disabled():
+    workspace_dir = _make_workspace("workspace-docx-no-image-materialize")
+    executor = ThreadPoolExecutor(max_workers=1)
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_paragraph("图前说明")
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.add_paragraph("图后说明")
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+
+        extracted = workspace_service.extract_word_content(
+            docx_path,
+            include_images=False,
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted is not None
+    assert extracted.image_count == 1
+    assert extracted.image_paths == []
+    assert all(item.type == "text" for item in extracted.items)
+
+
+def test_workspace_service_extract_word_content_formats_relative_image_paths_when_enabled():
+    workspace_dir = _make_workspace("workspace-docx-image-materialize")
+    executor = ThreadPoolExecutor(max_workers=1)
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_paragraph("图前说明")
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.add_paragraph("图后说明")
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+
+        extracted = workspace_service.extract_word_content(
+            docx_path,
+            include_images=True,
+        )
+        formatted = workspace_service.format_word_content(
+            extracted,
+            include_image_paths=True,
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted is not None
+    assert extracted.image_count == 1
+    assert len(extracted.image_paths) == 1
+    assert formatted is not None
+    assert "图前说明" in formatted
+    assert "图后说明" in formatted
+    assert "[插图1]" in formatted
+    assert ".read_assets/" in formatted
+    assert str(workspace_dir) not in formatted
+    assert str(workspace_dir.resolve()) not in formatted
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_streams_docx_images_as_tool_results():
+    workspace_dir = _make_workspace("stream-docx-images")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_paragraph("文档正文")
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.add_paragraph("图片后的说明")
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert isinstance(results[0], str)
+    assert "文档正文" in results[0]
+    assert "[插图1]" in results[0]
+    assert len(results) == 2
+    assert isinstance(results[1], mcp.types.CallToolResult)
+    assert isinstance(results[1].content[0], mcp.types.ImageContent)
+    assert results[1].content[0].mimeType == "image/png"
+    assert results[1].content[0].data
+    assert "图片后的说明" in results[0]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_error_when_docx_library_missing():
+    workspace_dir = _make_workspace("missing-docx-lib")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "missing-lib.docx"
+    docx_path.write_bytes(b"not-a-real-docx")
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert results == ["错误：文件 'missing-lib.docx' 无法读取，可能未安装对应解析库"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_skips_unreadable_docx_image_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_dir = _make_workspace("broken-docx-image")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "broken-image.docx"
+    docx_path.write_bytes(b"placeholder")
+    broken_image_path = workspace_dir / "broken.png"
+    healthy_image_path = workspace_dir / "healthy.png"
+    broken_image_path.write_bytes(b"broken")
+    _write_png(healthy_image_path)
+
+    extracted = ExtractedWordContent(
+        items=[
+            ExtractedWordItem(type="text", text="文档正文"),
+            ExtractedWordItem(
+                type="image",
+                image_path=broken_image_path,
+                image_index=1,
+            ),
+            ExtractedWordItem(type="text", text="收尾说明"),
+            ExtractedWordItem(
+                type="image",
+                image_path=healthy_image_path,
+                image_index=2,
+            ),
+        ],
+        image_paths=[broken_image_path, healthy_image_path],
+    )
+
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == broken_image_path:
+            raise OSError("broken image")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        monkeypatch.setattr(
+            workspace_service,
+            "extract_word_content",
+            lambda _path, include_images=True: extracted,
+        )
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 2
+    assert isinstance(results[0], str)
+    assert "文档正文" in results[0]
+    assert "[插图1]" in results[0]
+    assert "[插图2]" in results[0]
+    assert "收尾说明" in results[0]
+    assert isinstance(results[1], mcp.types.CallToolResult)
+    assert len(results[1].content) == 1
+    assert isinstance(results[1].content[0], mcp.types.ImageContent)
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
+    workspace_dir = _make_workspace("stream-docx-image-index")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-report.docx"
+    large_image = workspace_dir / "embedded-large.png"
+    small_image = workspace_dir / "embedded-small.png"
+
+    try:
+        docx_path.write_bytes(b"docx")
+        large_image.write_bytes(b"a" * 40)
+        small_image.write_bytes(b"b" * 10)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        workspace_service.extract_word_content = MagicMock(
+            return_value=SimpleNamespace(
+                text="文档正文",
+                image_paths=[large_image, small_image],
+                image_count=2,
+                items=[
+                    SimpleNamespace(type="text", text="文档正文"),
+                    SimpleNamespace(
+                        type="image",
+                        image_path=small_image,
+                        image_index=2,
+                    ),
+                    SimpleNamespace(
+                        type="image",
+                        image_path=large_image,
+                        image_index=1,
+                    ),
+                    SimpleNamespace(type="text", text="收尾说明"),
+                ],
+            )
+        )
+
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            max_inline_docx_image_bytes=20,
+            max_inline_docx_image_count=2,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert isinstance(results[0], str)
+    assert "[插图2]" in results[0]
+    assert "[插图1]（未注入模型上下文" in results[0]
+    assert "超过 20.00 B 限制" in results[0]
+    assert isinstance(results[1], mcp.types.CallToolResult)
+    assert len(results[1].content) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_limits_inline_docx_images():
+    workspace_dir = _make_workspace("stream-docx-image-limits")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-report.docx"
+    small_image_1 = workspace_dir / "embedded-1.png"
+    large_image = workspace_dir / "embedded-large.png"
+    small_image_2 = workspace_dir / "embedded-2.png"
+    small_image_3 = workspace_dir / "embedded-3.png"
+
+    try:
+        docx_path.write_bytes(b"docx")
+        small_image_1.write_bytes(b"a" * 10)
+        large_image.write_bytes(b"b" * 40)
+        small_image_2.write_bytes(b"c" * 10)
+        small_image_3.write_bytes(b"d" * 10)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        workspace_service.extract_word_content = MagicMock(
+            return_value=SimpleNamespace(
+                text="文档正文",
+                image_paths=[
+                    small_image_1,
+                    large_image,
+                    small_image_2,
+                    small_image_3,
+                ],
+                image_count=4,
+                items=[
+                    SimpleNamespace(type="text", text="文档正文"),
+                    SimpleNamespace(type="image", image_path=small_image_1),
+                    SimpleNamespace(type="image", image_path=large_image),
+                    SimpleNamespace(type="image", image_path=small_image_2),
+                    SimpleNamespace(type="image", image_path=small_image_3),
+                    SimpleNamespace(type="text", text="收尾说明"),
+                ],
+            )
+        )
+
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            max_inline_docx_image_bytes=20,
+            max_inline_docx_image_count=2,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert isinstance(results[0], str)
+    assert "文档正文" in results[0]
+    assert "[插图1]" in results[0]
+    assert "插图2" in results[0]
+    assert "超过 20.00 B 限制" in results[0]
+    assert "插图4" in results[0]
+    assert "超过单文档最多 2 张限制" in results[0]
+    assert "收尾说明" in results[0]
+    assert isinstance(results[1], mcp.types.CallToolResult)
+    assert len(results[1].content) == 2
+    assert all(isinstance(item, mcp.types.ImageContent) for item in results[1].content)
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_skips_docx_image_review_when_disabled():
+    workspace_dir = _make_workspace("stream-docx-image-review-disabled")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-report.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        _write_png(image_path)
+        docx_path.write_bytes(b"docx")
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        workspace_service.extract_word_content = MagicMock(
+            return_value=SimpleNamespace(
+                text="文档正文",
+                image_paths=[image_path],
+                image_count=1,
+                items=[
+                    SimpleNamespace(type="text", text="图前说明"),
+                    SimpleNamespace(
+                        type="image",
+                        image_path=image_path,
+                        image_index=1,
+                    ),
+                    SimpleNamespace(type="text", text="图后说明"),
+                ],
+            )
+        )
+
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            enable_docx_image_review=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], str)
+    assert "图前说明" in results[0]
+    assert "图后说明" in results[0]
+    assert "[插图1]" not in results[0]
+    workspace_service.extract_word_content.assert_called_once_with(
+        docx_path,
+        include_images=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_message_for_image_only_docx_when_review_disabled():
+    workspace_dir = _make_workspace("stream-docx-image-only-disabled")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-only.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        _write_png(image_path)
+        docx_path.write_bytes(b"docx")
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        workspace_service.extract_word_content = MagicMock(
+            return_value=SimpleNamespace(
+                text=None,
+                image_paths=[image_path],
+                image_count=1,
+                items=[
+                    SimpleNamespace(
+                        type="image",
+                        image_path=image_path,
+                        image_index=1,
+                    )
+                ],
+            )
+        )
+
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            enable_docx_image_review=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], str)
+    assert "仅包含图片内容" in results[0]
+    assert "[插图1]" not in results[0]
+    workspace_service.extract_word_content.assert_called_once_with(
+        docx_path,
+        include_images=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_returns_local_guidance_for_missing_file():
     workspace_dir = Path(__file__).resolve().parent
     executor = ThreadPoolExecutor(max_workers=1)
@@ -806,11 +1593,9 @@ async def test_file_tool_service_create_office_file_returns_direct_result_for_ex
     workspace_dir = Path(__file__).resolve().parent
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    event.get_extra.side_effect = (
-        lambda key, default=None: {EXPLICIT_FILE_TOOL_EVENT_KEY: "create_office_file"}.get(
-            key, default
-        )
-    )
+    event.get_extra.side_effect = lambda key, default=None: {
+        EXPLICIT_FILE_TOOL_EVENT_KEY: "create_office_file"
+    }.get(key, default)
     event.plain_result.side_effect = lambda text: f"DIRECT::{text}"
     office_generator = MagicMock()
     delivery_service = MagicMock()

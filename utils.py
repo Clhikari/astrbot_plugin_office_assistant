@@ -1,10 +1,13 @@
+import hashlib
 import platform
 import re
 import shutil
 import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from astrbot.api import logger
 
@@ -100,16 +103,93 @@ def safe_error_message(error: Exception, context: str = "") -> str:
     return error_str
 
 
-def extract_word_text(file_path: Path) -> str | None:
-    """提取 Word 文档文本（支持 .docx 和 .doc）"""
+WordItemType = Literal["text", "image"]
+WORD_ITEM_TEXT: WordItemType = "text"
+WORD_ITEM_IMAGE: WordItemType = "image"
+
+
+@dataclass(slots=True)
+class ExtractedWordItem:
+    type: WordItemType
+    text: str | None = None
+    image_path: Path | None = None
+    image_index: int | None = None
+
+
+@dataclass(slots=True)
+class ExtractedWordContent:
+    text: str | None = None
+    image_paths: list[Path] = field(default_factory=list)
+    items: list[ExtractedWordItem] = field(default_factory=list)
+    image_count: int = 0
+
+
+def format_extracted_word_content(
+    content: ExtractedWordContent | None,
+    *,
+    workspace_root: Path | None = None,
+    include_image_paths: bool = False,
+    item_separator: str = "\n",
+) -> str | None:
+    if content is None:
+        return None
+
+    normalized_root = workspace_root.resolve() if workspace_root is not None else None
+
+    def build_image_line(index: int | None, image_path: Path | None) -> str | None:
+        label = f"[插图{index}]" if index is not None else "[插图]"
+        if not include_image_paths:
+            return label
+        if image_path is None:
+            return None
+        if normalized_root is not None and image_path.is_relative_to(normalized_root):
+            display_path = image_path.relative_to(normalized_root).as_posix()
+        else:
+            display_path = image_path.name
+        return f"{label} {display_path}"
+
+    if content.items:
+        item_lines: list[str] = []
+        for item in content.items:
+            if item.type == WORD_ITEM_TEXT:
+                text = (item.text or "").strip()
+                if text:
+                    item_lines.append(text)
+                continue
+            if item.type == WORD_ITEM_IMAGE:
+                image_line = build_image_line(item.image_index, item.image_path)
+                if image_line:
+                    item_lines.append(image_line)
+        if item_lines:
+            return item_separator.join(item_lines)
+
+    parts: list[str] = []
+    if content.text:
+        parts.append(content.text)
+
+    if content.image_paths:
+        for index, image_path in enumerate(content.image_paths, start=1):
+            image_line = build_image_line(index, image_path)
+            if image_line:
+                parts.append(image_line)
+
+    return item_separator.join(parts) if parts else None
+
+
+def extract_word_content(
+    file_path: Path,
+    workspace_root: Path | None = None,
+    *,
+    include_images: bool = True,
+) -> ExtractedWordContent | None:
+    """Extract structured Word content for downstream tool formatting."""
     suffix = file_path.suffix.lower()
 
-    # 旧格式 .doc 优先用 antiword（跨平台），其次 win32com（Windows）
     if suffix == ".doc":
         if _ANTIWORD_AVAILABLE:
-            return _extract_doc_text_antiword(file_path)
+            text = _extract_doc_text_antiword(file_path)
         elif _WIN32COM_AVAILABLE:
-            return _extract_doc_text_win32com(file_path)
+            text = _extract_doc_text_win32com(file_path)
         else:
             if _IS_WINDOWS:
                 logger.warning(
@@ -120,19 +200,224 @@ def extract_word_text(file_path: Path) -> str | None:
                     "读取 .doc 文件需要 antiword，请安装: apt install antiword (Linux) 或 brew install antiword (macOS)"
                 )
             return None
+        if not text:
+            return None
+        return ExtractedWordContent(text=text)
 
-    # 新格式 .docx 使用 python-docx
     try:
         from docx import Document
 
         doc = Document(file_path)
-        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        return "\n".join(paragraphs)
+        image_parts = _collect_docx_image_parts(doc)
+        image_count = len(image_parts)
+        image_rel_paths = _extract_docx_images(
+            image_parts,
+            file_path,
+            workspace_root,
+            include_images=include_images,
+        )
+        items = _extract_docx_items(
+            doc,
+            image_rel_paths,
+            include_images=include_images,
+        )
+        if not items and image_count == 0:
+            return None
+        image_paths = [
+            item.image_path
+            for item in items
+            if item.type == WORD_ITEM_IMAGE and item.image_path is not None
+        ]
+        text_items = [
+            item.text.strip()
+            for item in items
+            if item.type == WORD_ITEM_TEXT and item.text and item.text.strip()
+        ]
+        text = "\n".join(text_items) if text_items else None
+        return ExtractedWordContent(
+            text=text,
+            image_paths=image_paths,
+            items=items,
+            image_count=image_count,
+        )
     except ImportError:
         return None
     except Exception as e:
         logger.warning(f"Word 文本提取失败: {e}", exc_info=True)
         return None
+
+
+def extract_word_text(
+    file_path: Path,
+    workspace_root: Path | None = None,
+) -> str | None:
+    """提取 Word 文档文本（支持 .docx 和 .doc）"""
+    extracted = extract_word_content(file_path, workspace_root)
+    return format_extracted_word_content(
+        extracted,
+        workspace_root=workspace_root,
+        include_image_paths=True,
+        item_separator="\n\n",
+    )
+
+
+def _collect_docx_image_parts(doc) -> list[tuple[str, bytes, str]]:
+    image_parts = []
+    for rel_id, rel in doc.part.rels.items():
+        if "image" not in rel.reltype:
+            continue
+        target_part = getattr(rel, "target_part", None)
+        if target_part is None:
+            continue
+        blob = getattr(target_part, "blob", None)
+        partname = getattr(target_part, "partname", "")
+        if not blob:
+            continue
+        image_parts.append((rel_id, blob, Path(str(partname)).suffix or ".bin"))
+
+    return image_parts
+
+
+def _extract_docx_images(
+    image_parts: list[tuple[str, bytes, str]],
+    file_path: Path,
+    workspace_root: Path | None,
+    *,
+    include_images: bool,
+) -> dict[str, Path]:
+    if workspace_root is None or not include_images or not image_parts:
+        return {}
+
+    workspace_root = workspace_root.resolve()
+    image_dir = _build_docx_asset_dir(file_path, workspace_root)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    digest_to_path: dict[str, Path] = {}
+    rel_paths: dict[str, Path] = {}
+    image_index = 1
+    for rel_id, blob, suffix in image_parts:
+        digest = hashlib.md5(blob).hexdigest()
+        output_path = digest_to_path.get(digest)
+        if output_path is None:
+            output_path = image_dir / f"image_{image_index:02d}{suffix}"
+            output_path.write_bytes(blob)
+            digest_to_path[digest] = output_path
+            image_index += 1
+        rel_paths[rel_id] = output_path
+    return rel_paths
+
+
+def _extract_docx_items(
+    doc,
+    image_rel_paths: dict[str, Path],
+    *,
+    include_images: bool,
+) -> list[ExtractedWordItem]:
+    items: list[ExtractedWordItem] = []
+
+    for body_child in doc.element.body.iterchildren():
+        local_name = body_child.tag.rsplit("}", 1)[-1]
+        if local_name != "p":
+            continue
+
+        paragraph_buffer: list[str] = []
+        for child in body_child.iterchildren():
+            child_name = child.tag.rsplit("}", 1)[-1]
+            if child_name in {"r", "hyperlink", "smartTag", "sdt", "ins"}:
+                _collect_paragraph_items(
+                    child,
+                    image_rel_paths=image_rel_paths,
+                    paragraph_buffer=paragraph_buffer,
+                    items=items,
+                    include_images=include_images,
+                )
+
+        paragraph_text = "".join(paragraph_buffer).strip()
+        if paragraph_text:
+            items.append(ExtractedWordItem(type=WORD_ITEM_TEXT, text=paragraph_text))
+
+    image_index = 1
+    for item in items:
+        if item.type == WORD_ITEM_IMAGE:
+            item.image_index = image_index
+            image_index += 1
+    return items
+
+
+def _collect_paragraph_items(
+    element,
+    *,
+    image_rel_paths: dict[str, Path],
+    paragraph_buffer: list[str],
+    items: list[ExtractedWordItem],
+    include_images: bool,
+) -> None:
+    local_name = element.tag.rsplit("}", 1)[-1]
+
+    if local_name == "r":
+        for child in element.iterchildren():
+            child_name = child.tag.rsplit("}", 1)[-1]
+            if child_name == "t":
+                if child.text:
+                    paragraph_buffer.append(child.text)
+            elif child_name == "tab":
+                paragraph_buffer.append("\t")
+            elif child_name in {"br", "cr"}:
+                paragraph_buffer.append("\n")
+            elif child_name in {"drawing", "object", "pict"}:
+                paragraph_text = "".join(paragraph_buffer).strip()
+                if paragraph_text:
+                    items.append(
+                        ExtractedWordItem(type=WORD_ITEM_TEXT, text=paragraph_text)
+                    )
+                paragraph_buffer.clear()
+                if include_images:
+                    for image_path in _extract_embedded_image_paths(
+                        child, image_rel_paths
+                    ):
+                        items.append(
+                            ExtractedWordItem(
+                                type=WORD_ITEM_IMAGE,
+                                image_path=image_path,
+                            )
+                        )
+        return
+
+    for child in element.iterchildren():
+        child_name = child.tag.rsplit("}", 1)[-1]
+        if child_name in {"r", "hyperlink", "smartTag", "sdt", "ins"}:
+            _collect_paragraph_items(
+                child,
+                image_rel_paths=image_rel_paths,
+                paragraph_buffer=paragraph_buffer,
+                items=items,
+                include_images=include_images,
+            )
+
+
+def _extract_embedded_image_paths(
+    element, image_rel_paths: dict[str, Path]
+) -> list[Path]:
+    image_paths: list[Path] = []
+    seen_rel_ids: set[str] = set()
+
+    for node in element.iter():
+        for attr_name, attr_value in node.attrib.items():
+            local_name = attr_name.rsplit("}", 1)[-1]
+            if local_name not in {"embed", "id"}:
+                continue
+            image_path = image_rel_paths.get(attr_value)
+            if image_path is None or attr_value in seen_rel_ids:
+                continue
+            seen_rel_ids.add(attr_value)
+            image_paths.append(image_path)
+
+    return image_paths
+
+
+def _build_docx_asset_dir(file_path: Path, workspace_root: Path) -> Path:
+    digest = hashlib.md5(str(file_path.resolve()).encode("utf-8")).hexdigest()[:8]
+    return workspace_root / ".read_assets" / f"{file_path.stem}_{digest}"
 
 
 def _extract_doc_text_antiword(file_path: Path) -> str | None:

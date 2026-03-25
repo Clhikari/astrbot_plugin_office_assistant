@@ -10,9 +10,11 @@ from astrbot.api.event import AstrMessageEvent
 
 from ..constants import DEFAULT_CHUNK_SIZE, OfficeType
 from ..utils import (
+    ExtractedWordContent,
     extract_excel_text,
     extract_ppt_text,
-    extract_word_text,
+    extract_word_content,
+    format_extracted_word_content,
     format_file_size,
 )
 
@@ -136,8 +138,11 @@ class WorkspaceService:
     def extract_office_text(
         self, file_path: Path, office_type: OfficeType
     ) -> str | None:
+        if office_type is OfficeType.WORD:
+            extracted = self.extract_word_content(file_path)
+            return self.format_word_content(extracted)
+
         extractors = {
-            OfficeType.WORD: ("docx", extract_word_text),
             OfficeType.EXCEL: ("openpyxl", extract_excel_text),
             OfficeType.POWERPOINT: ("pptx", extract_ppt_text),
         }
@@ -155,6 +160,33 @@ class WorkspaceService:
             return None
 
         return extractor(file_path)
+
+    def extract_word_content(
+        self,
+        file_path: Path,
+        *,
+        include_images: bool = True,
+    ) -> ExtractedWordContent | None:
+        if file_path.suffix.lower() != ".doc" and not self._office_libs.get("docx"):
+            logger.debug("[文件管理] Word 解析库未加载，无法提取结构化内容。")
+            return None
+        return extract_word_content(
+            file_path,
+            self.plugin_data_path,
+            include_images=include_images,
+        )
+
+    def format_word_content(
+        self,
+        content: ExtractedWordContent | None,
+        *,
+        include_image_paths: bool = False,
+    ) -> str | None:
+        return format_extracted_word_content(
+            content,
+            workspace_root=self.plugin_data_path,
+            include_image_paths=include_image_paths,
+        )
 
     def format_file_result(
         self, filename: str, suffix: str, file_size: int, content: str
