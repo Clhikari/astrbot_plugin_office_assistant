@@ -179,9 +179,6 @@ def extract_word_text(
     if extracted is None:
         return None
 
-    parts = []
-    if extracted.text:
-        parts.append(extracted.text)
     if extracted.items:
         item_lines: list[str] = []
         if workspace_root is not None:
@@ -196,13 +193,19 @@ def extract_word_text(
                 if workspace_root is not None and item.image_path.is_relative_to(
                     workspace_root
                 ):
-                    display_path = item.image_path.relative_to(workspace_root).as_posix()
+                    display_path = item.image_path.relative_to(
+                        workspace_root
+                    ).as_posix()
                 else:
                     display_path = item.image_path.as_posix()
                 item_lines.append(f"[插图{item.image_index}] {display_path}")
         if item_lines:
-            parts = item_lines
-    elif extracted.image_paths:
+            return "\n\n".join(item_lines)
+
+    if extracted.text:
+        return extracted.text
+
+    if extracted.image_paths:
         image_lines = []
         if workspace_root is not None:
             workspace_root = workspace_root.resolve()
@@ -212,11 +215,14 @@ def extract_word_text(
             else:
                 display_path = image_path.as_posix()
             image_lines.append(f"[插图{index}] {display_path}")
-        parts.append("\n".join(image_lines))
-    return "\n\n".join(parts) if parts else None
+        return "\n".join(image_lines)
+
+    return None
 
 
-def _extract_docx_images(doc, file_path: Path, workspace_root: Path | None) -> dict[str, Path]:
+def _extract_docx_images(
+    doc, file_path: Path, workspace_root: Path | None
+) -> dict[str, Path]:
     if workspace_root is None:
         return {}
 
@@ -255,7 +261,9 @@ def _extract_docx_images(doc, file_path: Path, workspace_root: Path | None) -> d
     return rel_paths
 
 
-def _extract_docx_items(doc, image_rel_paths: dict[str, Path]) -> list[ExtractedWordItem]:
+def _extract_docx_items(
+    doc, image_rel_paths: dict[str, Path]
+) -> list[ExtractedWordItem]:
     items: list[ExtractedWordItem] = []
 
     for body_child in doc.element.body.iterchildren():
@@ -298,7 +306,7 @@ def _collect_paragraph_items(
     if local_name == "r":
         for child in element.iterchildren():
             child_name = child.tag.rsplit("}", 1)[-1]
-            if child_name in {"t", "delText", "instrText"}:
+            if child_name == "t":
                 if child.text:
                     paragraph_buffer.append(child.text)
             elif child_name == "tab":
@@ -325,7 +333,9 @@ def _collect_paragraph_items(
             )
 
 
-def _extract_embedded_image_paths(element, image_rel_paths: dict[str, Path]) -> list[Path]:
+def _extract_embedded_image_paths(
+    element, image_rel_paths: dict[str, Path]
+) -> list[Path]:
     image_paths: list[Path] = []
     seen_rel_ids: set[str] = set()
 

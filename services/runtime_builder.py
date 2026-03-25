@@ -139,7 +139,6 @@ def build_plugin_runtime(
         reply_to_user=settings.reply_to_user,
     )
     file_tool_service = FileToolService(
-        plugin_context=context,
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,
@@ -214,9 +213,7 @@ def _load_settings(config) -> PluginSettings:
     )
     enable_docx_image_review = file_settings.get("enable_docx_image_review", True)
     max_inline_docx_image_bytes = (
-        file_settings.get(
-            "max_inline_docx_image_mb", DEFAULT_MAX_INLINE_DOCX_IMAGE_MB
-        )
+        file_settings.get("max_inline_docx_image_mb", DEFAULT_MAX_INLINE_DOCX_IMAGE_MB)
         * 1024
         * 1024
     )

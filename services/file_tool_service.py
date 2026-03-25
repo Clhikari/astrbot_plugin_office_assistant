@@ -29,7 +29,6 @@ class FileToolService:
     def __init__(
         self,
         *,
-        plugin_context=None,
         workspace_service,
         office_generator,
         pdf_converter,
@@ -37,13 +36,14 @@ class FileToolService:
         office_libs: dict,
         allow_external_input_files: bool,
         enable_docx_image_review: bool = True,
-        max_inline_docx_image_bytes: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_MB * 1024 * 1024,
+        max_inline_docx_image_bytes: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_MB
+        * 1024
+        * 1024,
         max_inline_docx_image_count: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
         is_group_feature_enabled,
         check_permission,
         group_feature_disabled_error,
     ) -> None:
-        self._plugin_context = plugin_context
         self._workspace_service = workspace_service
         self._office_generator = office_generator
         self._pdf_converter = pdf_converter
@@ -112,8 +112,7 @@ class FileToolService:
     def _plan_inline_word_images(
         self,
         image_paths: list[Path],
-    ) -> tuple[set[int], dict[int, str]]:
-        selected_indices: set[int] = set()
+    ) -> dict[int, str]:
         skipped_reasons: dict[int, str] = {}
         selected_count = 0
 
@@ -148,10 +147,9 @@ class FileToolService:
                 )
                 continue
 
-            selected_indices.add(index)
             selected_count += 1
 
-        return selected_indices, skipped_reasons
+        return skipped_reasons
 
     async def iter_read_file_tool_results(
         self,
@@ -205,12 +203,14 @@ class FileToolService:
             office_type = SUFFIX_TO_OFFICE_TYPE.get(suffix)
             if office_type:
                 if office_type is OfficeType.WORD:
-                    extracted = self._workspace_service.extract_word_content(resolved_path)
+                    extracted = self._workspace_service.extract_word_content(
+                        resolved_path
+                    )
                     if extracted:
                         skipped_image_reasons: dict[int, str] = {}
                         if self._enable_docx_image_review:
-                            _selected_image_indices, skipped_image_reasons = (
-                                self._plan_inline_word_images(extracted.image_paths)
+                            skipped_image_reasons = self._plan_inline_word_images(
+                                extracted.image_paths
                             )
                         image_order = 0
                         text_chunks: list[str] = []
@@ -230,7 +230,9 @@ class FileToolService:
                                 image_order += 1
                                 reason = skipped_image_reasons.get(image_order)
                                 if reason:
-                                    text_chunks.append(f"[插图{image_order}]（{reason}）")
+                                    text_chunks.append(
+                                        f"[插图{image_order}]（{reason}）"
+                                    )
                                     continue
 
                                 if self._enable_docx_image_review:
@@ -240,6 +242,14 @@ class FileToolService:
                             final_text = "\n".join(
                                 part.strip() for part in text_chunks if part.strip()
                             )
+                            if (
+                                not final_text
+                                and not self._enable_docx_image_review
+                                and extracted.image_paths
+                            ):
+                                final_text = (
+                                    "该 Word 文档仅包含图片内容，当前未启用图片理解。"
+                                )
                             if final_text:
                                 yield self._workspace_service.format_file_result(
                                     display_name, suffix, file_size, final_text
@@ -251,7 +261,9 @@ class FileToolService:
                                 yield image_result
                             return
 
-                        formatted = self._workspace_service.format_word_content(extracted)
+                        formatted = self._workspace_service.format_word_content(
+                            extracted
+                        )
                         if formatted:
                             yield self._workspace_service.format_file_result(
                                 display_name, suffix, file_size, formatted
@@ -353,14 +365,14 @@ class FileToolService:
                 return self._finalize_create_office_file_error(
                     event,
                     "错误：未指定文件类型。请提供带后缀的文件名，"
-                    f"或显式传入 file_type（{allowed_fallback_types}）。"
+                    f"或显式传入 file_type（{allowed_fallback_types}）。",
                 )
             if normalized_file_type == "word":
                 return self._finalize_create_office_file_error(
                     event,
                     "错误：Word 文档请直接提供 .docx/.doc 文件名，"
                     "或改用 create_document → add_blocks → finalize_document → "
-                    "export_document。"
+                    "export_document。",
                 )
             office_type = OFFICE_TYPE_MAP.get(normalized_file_type)
 
@@ -368,7 +380,7 @@ class FileToolService:
             return self._finalize_create_office_file_error(
                 event,
                 f"错误：不支持的文件类型 '{normalized_file_type}'。"
-                f"允许值：{allowed_fallback_types}"
+                f"允许值：{allowed_fallback_types}",
             )
 
         module_name = OFFICE_LIBS[office_type][0]

@@ -1,5 +1,6 @@
 import base64
 import shutil
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from astrbot_plugin_office_assistant.services import (
     WorkspaceService,
     build_plugin_runtime,
 )
+from astrbot_plugin_office_assistant.utils import extract_word_text
 
 import astrbot.api.message_components as Comp
 from astrbot.core.platform.message_type import MessageType
@@ -56,6 +58,21 @@ def _write_png(path: Path) -> None:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9kAAAAASUVORK5CYII="
     )
     path.write_bytes(png_bytes)
+
+
+def _rewrite_docx_document_xml(path: Path, transform) -> None:
+    with zipfile.ZipFile(path, "r") as source_zip:
+        file_map = {
+            info.filename: source_zip.read(info.filename)
+            for info in source_zip.infolist()
+        }
+
+    document_xml = file_map["word/document.xml"].decode("utf-8")
+    file_map["word/document.xml"] = transform(document_xml).encode("utf-8")
+
+    with zipfile.ZipFile(path, "w") as target_zip:
+        for filename, content in file_map.items():
+            target_zip.writestr(filename, content)
 
 
 def test_access_policy_service_handles_whitelist_and_group_flags():
@@ -653,6 +670,39 @@ async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
     assert "图片后的说明" in result
 
 
+def test_extract_word_text_ignores_deleted_and_field_code_runs():
+    workspace_dir = _make_workspace("extract-docx-hidden-runs")
+    docx_path = workspace_dir / "tracked.docx"
+
+    try:
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("保留文本")
+        document.save(docx_path)
+
+        _rewrite_docx_document_xml(
+            docx_path,
+            lambda xml: xml.replace(
+                "<w:t>保留文本</w:t>",
+                (
+                    "<w:t>保留文本</w:t>"
+                    "<w:delText>删除内容</w:delText>"
+                    "<w:instrText> MERGEFIELD secret </w:instrText>"
+                ),
+            ),
+        )
+
+        extracted = extract_word_text(docx_path, workspace_dir)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert extracted is not None
+    assert "保留文本" in extracted
+    assert "删除内容" not in extracted
+    assert "MERGEFIELD secret" not in extracted
+
+
 @pytest.mark.asyncio
 async def test_file_tool_service_streams_docx_images_as_tool_results():
     workspace_dir = _make_workspace("stream-docx-images")
@@ -693,7 +743,9 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
 
         results = [
             result
-            async for result in service.iter_read_file_tool_results(event, docx_path.name)
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
         ]
     finally:
         executor.shutdown(wait=False)
@@ -771,7 +823,9 @@ async def test_file_tool_service_limits_inline_docx_images():
 
         results = [
             result
-            async for result in service.iter_read_file_tool_results(event, docx_path.name)
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
         ]
     finally:
         executor.shutdown(wait=False)
@@ -837,7 +891,9 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
 
         results = [
             result
-            async for result in service.iter_read_file_tool_results(event, docx_path.name)
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
         ]
     finally:
         executor.shutdown(wait=False)
@@ -847,6 +903,62 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
     assert isinstance(results[0], str)
     assert "图前说明" in results[0]
     assert "图后说明" in results[0]
+    assert "[插图1]" not in results[0]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_message_for_image_only_docx_when_review_disabled():
+    workspace_dir = _make_workspace("stream-docx-image-only-disabled")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    docx_path = workspace_dir / "image-only.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        _write_png(image_path)
+        docx_path.write_bytes(b"docx")
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        workspace_service.extract_word_content = MagicMock(
+            return_value=SimpleNamespace(
+                text=None,
+                image_paths=[image_path],
+                items=[SimpleNamespace(type="image", image_path=image_path)],
+            )
+        )
+
+        service = FileToolService(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            office_libs={"docx": object()},
+            allow_external_input_files=False,
+            enable_docx_image_review=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, docx_path.name
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], str)
+    assert "仅包含图片内容" in results[0]
     assert "[插图1]" not in results[0]
 
 
@@ -1071,11 +1183,9 @@ async def test_file_tool_service_create_office_file_returns_direct_result_for_ex
     workspace_dir = Path(__file__).resolve().parent
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    event.get_extra.side_effect = (
-        lambda key, default=None: {EXPLICIT_FILE_TOOL_EVENT_KEY: "create_office_file"}.get(
-            key, default
-        )
-    )
+    event.get_extra.side_effect = lambda key, default=None: {
+        EXPLICIT_FILE_TOOL_EVENT_KEY: "create_office_file"
+    }.get(key, default)
     event.plain_result.side_effect = lambda text: f"DIRECT::{text}"
     office_generator = MagicMock()
     delivery_service = MagicMock()
