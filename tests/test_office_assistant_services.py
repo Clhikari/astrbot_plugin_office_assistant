@@ -342,6 +342,144 @@ async def test_post_export_hook_service_handles_exported_document_tool():
 
 
 @pytest.mark.asyncio
+async def test_post_export_hook_service_returns_missing_message_without_sending():
+    event = _build_event()
+    event.send = AsyncMock()
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=MagicMock(),
+        enable_preview=False,
+        auto_delete=False,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+    missing_path = Path(__file__).resolve().parent / "missing-export.docx"
+
+    try:
+        result = await service.send_exported_document(event, missing_path)
+    finally:
+        service._executor.shutdown(wait=False)
+
+    assert "but the file does not exist" in result
+    event.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_sends_preview_reply_and_deletes_files():
+    workspace_dir = _make_workspace("post-export-preview")
+    event = _build_event()
+    event.send = AsyncMock()
+    file_path = workspace_dir / "report.docx"
+    preview_path = workspace_dir / "report-preview.png"
+    file_path.write_text("docx", encoding="utf-8")
+    _write_png(preview_path)
+    preview_generator = MagicMock()
+    preview_generator.generate_preview.return_value = preview_path
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=preview_generator,
+        enable_preview=True,
+        auto_delete=True,
+        reply_to_user=True,
+        exported_message="✅ 文档已导出",
+    )
+
+    try:
+        result = await service.send_exported_document(event, file_path)
+    finally:
+        service._executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert event.send.await_count == 3
+
+    success_chain = event.send.await_args_list[0].args[0]
+    assert "✅ 文档已导出" in success_chain.chain[0].text
+    assert any(isinstance(component, Comp.At) for component in success_chain.chain)
+
+    preview_chain = event.send.await_args_list[1].args[0]
+    assert isinstance(preview_chain.chain[0], Comp.Image)
+    assert preview_chain.chain[0].file == str(preview_path.resolve())
+
+    file_chain = event.send.await_args_list[2].args[0]
+    assert isinstance(file_chain.chain[0], Comp.File)
+    assert file_chain.chain[0].name == file_path.name
+
+    assert not preview_path.exists()
+    assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_skips_preview_when_generation_fails():
+    workspace_dir = _make_workspace("post-export-preview-fail")
+    event = _build_event()
+    event.send = AsyncMock()
+    file_path = workspace_dir / "report.docx"
+    file_path.write_text("docx", encoding="utf-8")
+    preview_generator = MagicMock()
+    preview_generator.generate_preview.side_effect = RuntimeError("preview boom")
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=preview_generator,
+        enable_preview=True,
+        auto_delete=True,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+
+    try:
+        with patch(
+            "astrbot_plugin_office_assistant.services.post_export_hook_service.logger.warning"
+        ) as logger_warning:
+            result = await service.send_exported_document(event, file_path)
+    finally:
+        service._executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert event.send.await_count == 2
+    logger_warning.assert_called()
+    assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_logs_main_file_delete_failure_without_failing():
+    workspace_dir = _make_workspace("post-export-delete-fail")
+    event = _build_event()
+    event.send = AsyncMock()
+    file_path = workspace_dir / "report.docx"
+    file_path.write_text("docx", encoding="utf-8")
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=MagicMock(),
+        enable_preview=False,
+        auto_delete=True,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+    original_unlink = Path.unlink
+
+    def _fake_unlink(path: Path, *args, **kwargs):
+        if path == file_path:
+            raise OSError("unlink boom")
+        return original_unlink(path, *args, **kwargs)
+
+    try:
+        with patch.object(Path, "unlink", _fake_unlink):
+            with patch(
+                "astrbot_plugin_office_assistant.services.post_export_hook_service.logger.warning"
+            ) as logger_warning:
+                result = await service.send_exported_document(event, file_path)
+    finally:
+        service._executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert event.send.await_count == 2
+    logger_warning.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_export_hook_service_aliases_post_export_hook_service():
     assert ExportHookService is PostExportHookService
 
