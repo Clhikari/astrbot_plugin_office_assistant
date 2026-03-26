@@ -414,7 +414,9 @@ async def test_post_export_hook_service_returns_missing_message_without_sending(
     finally:
         service._executor.shutdown(wait=False)
 
-    assert "but the file does not exist" in result
+    assert "does not exist" in result
+    assert missing_path.name in result
+    assert str(missing_path) not in result
     event.send.assert_not_awaited()
 
 
@@ -620,6 +622,53 @@ def test_upload_prompt_service_builds_notice_for_readable_files_without_instruct
     assert "[用户指令]" not in prompt_text
     assert "工作区文件名: report_1.docx" in prompt_text
     assert "外部绝对路径" not in prompt_text
+
+
+def test_upload_prompt_service_handles_empty_upload_infos():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[],
+        user_instruction="随便看看",
+    )
+
+    assert isinstance(prompt_text, str)
+    assert "[文件信息]" in prompt_text
+    assert "[操作要求]" in prompt_text
+    assert "[用户指令]" not in prompt_text
+    assert "工作区文件名" not in prompt_text
+    assert "外部绝对路径" not in prompt_text
+
+
+def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "readable.txt",
+                "file_suffix": ".txt",
+                "stored_name": "readable_1.txt",
+                "source_path": "/AstrBot/data/temp/readable.txt",
+                "is_supported": True,
+            },
+            {
+                "original_name": "unreadable.bin",
+                "file_suffix": ".bin",
+                "stored_name": "unreadable_1.bin",
+                "source_path": "/AstrBot/data/temp/unreadable.bin",
+                "is_supported": False,
+            },
+        ],
+        user_instruction="阅读可用文件",
+    )
+
+    assert "[文件信息]" in prompt_text
+    assert "工作区文件名: readable_1.txt" in prompt_text
+    assert "工作区文件名: unreadable_1.bin" in prompt_text
+    assert "外部绝对路径: /AstrBot/data/temp/readable.txt" in prompt_text
+    assert "外部绝对路径: /AstrBot/data/temp/unreadable.bin" in prompt_text
+    assert "先调用 `read_file` 读取文件" in prompt_text
 
 
 def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():

@@ -87,7 +87,7 @@ class PostExportHookService:
 
     @staticmethod
     def _missing_export_message(file_path: Path) -> str:
-        return f"Document exported to {file_path}, but the file does not exist."
+        return f"Document exported, but the file '{file_path.name}' does not exist."
 
     async def send_exported_document(
         self,
