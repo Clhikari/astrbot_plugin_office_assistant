@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from astrbot_plugin_office_assistant.main import FileOperationPlugin
@@ -540,6 +540,33 @@ async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
     assert "[custom notice]" in req.system_prompt
     assert "create_document" not in set(req.func_tool.names())
     assert "existing_tool" in set(req.func_tool.names())
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_does_not_build_request_hook_service_when_hooks_are_provided():
+    async def _fake_extract_upload_source(_component):
+        return None, ""
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.llm_request_policy.RequestHookService"
+    ) as request_hook_service_cls:
+        policy = LLMRequestPolicy(
+            document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+            auto_block_execution_tools=False,
+            require_at_in_group=True,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            is_bot_mentioned=lambda _event: True,
+            get_cached_upload_infos=lambda _event: [],
+            extract_upload_source=_fake_extract_upload_source,
+            store_uploaded_file=lambda _src, _name: Path("ignored.txt"),
+            allow_external_input_files=False,
+            notice_hooks=[],
+            tool_exposure_hooks=[],
+        )
+
+    assert policy is not None
+    request_hook_service_cls.assert_not_called()
 
 
 @pytest.mark.asyncio

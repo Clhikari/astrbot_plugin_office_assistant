@@ -7,8 +7,6 @@ import mcp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
-from .generated_file_delivery_service import GeneratedFileDeliveryService
-from .word_read_service import WordReadService
 from ..constants import (
     CONVERTIBLE_TO_PDF,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
@@ -36,8 +34,8 @@ class FileToolService:
         office_generator,
         pdf_converter,
         delivery_service,
-        generated_file_delivery_service=None,
-        word_read_service=None,
+        generated_file_delivery_service,
+        word_read_service,
         office_libs: dict,
         allow_external_input_files: bool,
         enable_docx_image_review: bool = True,
@@ -53,19 +51,8 @@ class FileToolService:
         self._office_generator = office_generator
         self._pdf_converter = pdf_converter
         self._delivery_service = delivery_service
-        self._generated_file_delivery_service = (
-            generated_file_delivery_service
-            or GeneratedFileDeliveryService(
-                workspace_service=workspace_service,
-                delivery_service=delivery_service,
-            )
-        )
-        self._word_read_service = word_read_service or WordReadService(
-            workspace_service=workspace_service,
-            enable_docx_image_review=enable_docx_image_review,
-            max_inline_docx_image_bytes=max_inline_docx_image_bytes,
-            max_inline_docx_image_count=max_inline_docx_image_count,
-        )
+        self._generated_file_delivery_service = generated_file_delivery_service
+        self._word_read_service = word_read_service
         self._office_libs = office_libs
         self._allow_external_input_files = allow_external_input_files
         self._enable_docx_image_review = bool(enable_docx_image_review)

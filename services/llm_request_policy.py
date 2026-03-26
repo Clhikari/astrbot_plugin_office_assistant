@@ -53,16 +53,24 @@ class LLMRequestPolicy:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._is_bot_mentioned = is_bot_mentioned
-        request_hook_service = RequestHookService(
-            auto_block_execution_tools=auto_block_execution_tools,
-            get_cached_upload_infos=get_cached_upload_infos,
-            extract_upload_source=extract_upload_source,
-            store_uploaded_file=store_uploaded_file,
-            allow_external_input_files=allow_external_input_files,
+        request_hook_service = None
+        if notice_hooks is None or tool_exposure_hooks is None:
+            request_hook_service = RequestHookService(
+                auto_block_execution_tools=auto_block_execution_tools,
+                get_cached_upload_infos=get_cached_upload_infos,
+                extract_upload_source=extract_upload_source,
+                store_uploaded_file=store_uploaded_file,
+                allow_external_input_files=allow_external_input_files,
+            )
+        self._notice_hooks = (
+            notice_hooks
+            if notice_hooks is not None
+            else request_hook_service.build_notice_hooks()
         )
-        self._notice_hooks = notice_hooks or request_hook_service.build_notice_hooks()
         self._tool_exposure_hooks = (
-            tool_exposure_hooks or request_hook_service.build_tool_exposure_hooks()
+            tool_exposure_hooks
+            if tool_exposure_hooks is not None
+            else request_hook_service.build_tool_exposure_hooks()
         )
 
     def _detect_explicit_file_tool(self, text: str) -> str | None:

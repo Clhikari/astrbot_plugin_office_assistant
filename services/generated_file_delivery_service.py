@@ -26,6 +26,10 @@ class GeneratedFileDeliveryService:
         success_message: str | None = None,
     ) -> GeneratedFileDeliveryResult:
         if output_path is None or not output_path.exists():
+            logger.info(
+                "[文件管理] 生成文件不存在，跳过发送: %s",
+                str(output_path) if output_path is not None else "<none>",
+            )
             return GeneratedFileDeliveryResult(status="missing")
 
         file_size = output_path.stat().st_size

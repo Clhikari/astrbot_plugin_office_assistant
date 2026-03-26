@@ -11,6 +11,8 @@ import mcp
 import pytest
 import astrbot_plugin_office_assistant.utils as office_utils
 from astrbot_plugin_office_assistant.constants import (
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     OfficeType,
 )
@@ -88,6 +90,49 @@ def _write_png(path: Path) -> None:
 
 def _import_docx():
     return pytest.importorskip("docx")
+
+
+def _build_file_tool_service(
+    *,
+    workspace_service,
+    office_generator=None,
+    pdf_converter=None,
+    delivery_service=None,
+    office_libs=None,
+    allow_external_input_files: bool = False,
+    enable_docx_image_review: bool = True,
+    max_inline_docx_image_bytes: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_MB * 1024 * 1024,
+    max_inline_docx_image_count: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    is_group_feature_enabled=None,
+    check_permission=None,
+    group_feature_disabled_error=None,
+):
+    delivery_service = delivery_service or MagicMock()
+    return FileToolService(
+        workspace_service=workspace_service,
+        office_generator=office_generator or MagicMock(),
+        pdf_converter=pdf_converter or MagicMock(),
+        delivery_service=delivery_service,
+        generated_file_delivery_service=GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        ),
+        word_read_service=WordReadService(
+            workspace_service=workspace_service,
+            enable_docx_image_review=enable_docx_image_review,
+            max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+            max_inline_docx_image_count=max_inline_docx_image_count,
+        ),
+        office_libs=office_libs or {},
+        allow_external_input_files=allow_external_input_files,
+        enable_docx_image_review=enable_docx_image_review,
+        max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+        max_inline_docx_image_count=max_inline_docx_image_count,
+        is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
+        check_permission=check_permission or (lambda _event: True),
+        group_feature_disabled_error=group_feature_disabled_error
+        or (lambda: "group disabled"),
+    )
 
 
 def _rewrite_docx_document_xml(path: Path, transform) -> None:
@@ -722,6 +767,40 @@ async def test_generated_file_delivery_service_rejects_oversized_output():
 
 
 @pytest.mark.asyncio
+async def test_generated_file_delivery_service_logs_missing_output_path():
+    workspace_dir = _make_workspace("generated-file-delivery-missing")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=8,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.generated_file_delivery_service.logger.info"
+        ) as logger_info:
+            result = await service.deliver_generated_file(event, None)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "missing"
+    delivery_service.send_file_with_preview.assert_not_called()
+    logger_info.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_delivery_service_logs_preview_generation_failure():
     event = _build_event()
     event.send = AsyncMock()
@@ -871,16 +950,9 @@ async def test_file_tool_service_reads_text_from_workspace_file():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.read_file(event, Path(__file__).resolve().name)
@@ -917,16 +989,9 @@ async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.read_file(event, docx_path.name)
@@ -1173,16 +1238,9 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1222,16 +1280,9 @@ async def test_file_tool_service_returns_error_when_docx_library_missing():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1301,16 +1352,9 @@ async def test_file_tool_service_skips_unreadable_docx_image_bytes(
             "extract_word_content",
             lambda _path, include_images=True: extracted,
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1377,18 +1421,11 @@ async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             max_inline_docx_image_bytes=20,
             max_inline_docx_image_count=2,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1455,18 +1492,11 @@ async def test_file_tool_service_limits_inline_docx_images():
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             max_inline_docx_image_bytes=20,
             max_inline_docx_image_count=2,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1529,17 +1559,10 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             enable_docx_image_review=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1597,17 +1620,10 @@ async def test_file_tool_service_returns_message_for_image_only_docx_when_review
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             enable_docx_image_review=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1644,16 +1660,9 @@ async def test_file_tool_service_returns_local_guidance_for_missing_file():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.read_file(event, "CLAUDE.md")
@@ -1685,16 +1694,12 @@ async def test_file_tool_service_creates_office_file_via_generator_and_delivery(
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1728,16 +1733,12 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1771,16 +1772,12 @@ async def test_file_tool_service_create_office_file_requires_explicit_type_witho
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"openpyxl": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1816,16 +1813,12 @@ async def test_file_tool_service_create_office_file_rejects_word_fallback_withou
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1866,16 +1859,12 @@ async def test_file_tool_service_create_office_file_returns_direct_result_for_ex
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1919,16 +1908,12 @@ async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
             max_file_size=1024 * 1024,
             feature_settings={"enable_pdf_conversion": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=MagicMock(),
             pdf_converter=pdf_converter,
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
         output_path.write_text("pdf", encoding="utf-8")
 
