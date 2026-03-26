@@ -546,6 +546,28 @@ def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
     assert "先调用 `read_file` 读取文件" in prompt_text
 
 
+def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
+    service = UploadPromptService(allow_external_input_files=False)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/AstrBot/data/temp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="",
+    )
+
+    assert "用户上传了可读取文件，后续应优先围绕这些文件处理" in prompt_text
+    assert "[用户指令]" not in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径" not in prompt_text
+
+
 def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
     service = UploadPromptService(allow_external_input_files=False)
 
@@ -1947,6 +1969,45 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_returns_error_when_generated_file_missing():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    office_generator = MagicMock()
+    office_generator.generate = AsyncMock(return_value=None)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report.docx",
+            content="hello world",
+            file_type="word",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert result == "错误：文件生成失败，未找到输出文件"
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_create_office_file_requires_explicit_type_without_suffix():
     workspace_dir = Path(__file__).resolve().parent
     executor = ThreadPoolExecutor(max_workers=1)
@@ -2119,6 +2180,90 @@ async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
     pdf_converter.office_to_pdf.assert_awaited_once_with(source_path)
     delivery_service.send_file_with_preview.assert_awaited_once()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_convert_to_pdf_returns_error_when_generated_file_missing():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    source_path = workspace_dir / "convert-source-missing.docx"
+    source_path.write_text("demo", encoding="utf-8")
+    pdf_converter = MagicMock()
+    pdf_converter.is_available.return_value = True
+    pdf_converter.office_to_pdf = AsyncMock(return_value=None)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_pdf_conversion": True},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=pdf_converter,
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+        )
+
+        result = await service.convert_to_pdf(
+            event,
+            filename=source_path.name,
+        )
+    finally:
+        source_path.unlink(missing_ok=True)
+        executor.shutdown(wait=False)
+
+    assert result == "错误：PDF 转换失败，未找到生成的 PDF 文件"
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_convert_from_pdf_returns_error_when_generated_file_missing():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    source_path = workspace_dir / "convert-back-missing.pdf"
+    source_path.write_text("pdf", encoding="utf-8")
+    pdf_converter = MagicMock()
+    pdf_converter.is_available.return_value = True
+    pdf_converter.get_missing_dependencies.return_value = []
+    pdf_converter.pdf_to_word = AsyncMock(return_value=None)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_pdf_conversion": True},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=pdf_converter,
+            delivery_service=delivery_service,
+            office_libs={},
+        )
+
+        result = await service.convert_from_pdf(
+            event,
+            filename=source_path.name,
+            target_format="word",
+        )
+    finally:
+        source_path.unlink(missing_ok=True)
+        executor.shutdown(wait=False)
+
+    assert result == "错误：PDF→Word 文档 转换失败，未找到生成的文件"
+    delivery_service.send_file_with_preview.assert_not_called()
 
 
 def test_command_service_lists_office_files_in_workspace():

@@ -85,6 +85,10 @@ class FileToolService:
             return event.plain_result(message)
         return message
 
+    @staticmethod
+    def _is_generated_file_missing(delivery_result) -> bool:
+        return delivery_result.status == "missing"
+
     async def iter_read_file_tool_results(
         self,
         event: AstrMessageEvent,
@@ -283,6 +287,11 @@ class FileToolService:
                     event,
                     f"错误：文件过大 ({size_str})，超过限制 {max_str}",
                 )
+            if self._is_generated_file_missing(delivery_result):
+                return self._finalize_create_office_file_error(
+                    event,
+                    "错误：文件生成失败，未找到输出文件",
+                )
             if delivery_result.status == "sent":
                 return None
         except Exception as exc:
@@ -344,6 +353,8 @@ class FileToolService:
                     "错误：生成的 PDF 文件过大 "
                     f"({format_file_size(delivery_result.file_size)})"
                 )
+            if self._is_generated_file_missing(delivery_result):
+                return "错误：PDF 转换失败，未找到生成的 PDF 文件"
             if delivery_result.status == "sent":
                 return None
 
@@ -410,6 +421,8 @@ class FileToolService:
             )
             if delivery_result.status == "oversized":
                 return f"错误：生成的文件过大 ({format_file_size(delivery_result.file_size)})"
+            if self._is_generated_file_missing(delivery_result):
+                return f"错误：PDF→{target_desc} 转换失败，未找到生成的文件"
             if delivery_result.status == "sent":
                 return None
 
