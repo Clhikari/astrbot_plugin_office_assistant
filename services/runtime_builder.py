@@ -149,15 +149,11 @@ def build_plugin_runtime(
     )
     llm_request_policy = LLMRequestPolicy(
         document_toolset=document_toolset,
-        auto_block_execution_tools=settings.auto_block_execution_tools,
         require_at_in_group=settings.require_at_in_group,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         is_bot_mentioned=access_policy_service.is_bot_mentioned,
-        get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
-        extract_upload_source=extract_upload_source,
-        store_uploaded_file=store_uploaded_file,
-        allow_external_input_files=settings.allow_external_input_files,
+        request_hook_service=request_hook_service,
         notice_hooks=request_hook_service.build_notice_hooks(),
         tool_exposure_hooks=request_hook_service.build_tool_exposure_hooks(),
     )

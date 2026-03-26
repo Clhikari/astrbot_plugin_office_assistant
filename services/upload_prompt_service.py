@@ -1,3 +1,15 @@
+from typing import NotRequired, TypedDict
+
+
+class UploadInfo(TypedDict):
+    original_name: str
+    file_suffix: str
+    stored_name: str
+    source_path: str
+    is_supported: bool
+    type_desc: NotRequired[str]
+
+
 class UploadPromptService:
     def __init__(self, *, allow_external_input_files: bool) -> None:
         self._allow_external_input_files = allow_external_input_files
@@ -5,7 +17,7 @@ class UploadPromptService:
     def build_prompt(
         self,
         *,
-        upload_infos: list[dict],
+        upload_infos: list[UploadInfo],
         user_instruction: str,
     ) -> str:
         file_info_list = [self._format_file_info(info) for info in upload_infos]
@@ -54,7 +66,7 @@ class UploadPromptService:
             "请根据用户要求处理这些文件，使用中文与用户沟通。"
         )
 
-    def _format_file_info(self, info: dict) -> str:
+    def _format_file_info(self, info: UploadInfo) -> str:
         file_lines = [
             f"原始文件名: {info['original_name']} (类型: {info['file_suffix']})"
         ]

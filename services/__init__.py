@@ -13,7 +13,7 @@ from .llm_request_policy import LLMRequestPolicy
 from .post_export_hook_service import PostExportHookService
 from .request_hook_service import RequestHookService
 from .runtime_builder import PluginRuntimeBundle, PluginSettings, build_plugin_runtime
-from .upload_prompt_service import UploadPromptService
+from .upload_prompt_service import UploadInfo, UploadPromptService
 from .upload_session_service import UploadSessionService
 from .workspace_service import WorkspaceService
 from .word_read_service import WordReadService
@@ -34,6 +34,7 @@ __all__ = [
     "PluginSettings",
     "RequestHookService",
     "UploadPromptService",
+    "UploadInfo",
     "UploadSessionService",
     "WorkspaceService",
     "WordReadService",

@@ -8,7 +8,7 @@ from astrbot.api.star import Context
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
 from ..message_buffer import BufferedMessage
-from .upload_prompt_service import UploadPromptService
+from .upload_prompt_service import UploadInfo, UploadPromptService
 
 EVENT_UPLOAD_CACHE_ATTR = "_office_assistant_uploaded_files"
 
@@ -137,7 +137,7 @@ class UploadSessionService:
         self._recent_text_by_session.pop(session_key, None)
         return text
 
-    def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[dict]:
+    def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[UploadInfo]:
         cached = getattr(event, EVENT_UPLOAD_CACHE_ATTR, None)
         if isinstance(cached, list):
             return cached
@@ -157,19 +157,19 @@ class UploadSessionService:
         self,
         event: AstrMessageEvent,
         files: list,
-    ) -> list[dict]:
+    ) -> list[UploadInfo]:
         cached = self.get_cached_upload_infos(event)
         if cached:
             return cached
 
-        upload_infos: list[dict] = []
+        upload_infos: list[UploadInfo] = []
         for file_component in files:
             name = ""
             if isinstance(file_component, Comp.File):
                 name = file_component.name or ""
             name = name or "未命名文件"
             type_desc, is_supported = self._resolve_upload_type(name)
-            info = {
+            info: UploadInfo = {
                 "original_name": name,
                 "file_suffix": Path(name).suffix.lower() if name else "",
                 "type_desc": type_desc,

@@ -20,6 +20,7 @@ from ..internal_hooks import (
     ToolExposureContext,
     ToolExposureHook,
 )
+from .upload_prompt_service import UploadInfo
 
 
 class RequestHookService:
@@ -27,7 +28,7 @@ class RequestHookService:
         self,
         *,
         auto_block_execution_tools: bool,
-        get_cached_upload_infos: Callable[[AstrMessageEvent], list[dict]],
+        get_cached_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]],
         extract_upload_source: Callable[
             [Comp.File], Awaitable[tuple[Path | None, str]]
         ],

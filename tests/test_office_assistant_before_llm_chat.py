@@ -12,6 +12,9 @@ from astrbot_plugin_office_assistant.internal_hooks import (
 from astrbot_plugin_office_assistant.services.llm_request_policy import (
     LLMRequestPolicy,
 )
+from astrbot_plugin_office_assistant.services.request_hook_service import (
+    RequestHookService,
+)
 from astrbot_plugin_office_assistant.services.upload_session_service import (
     UploadSessionService,
 )
@@ -502,9 +505,6 @@ async def test_before_llm_chat_can_still_restrict_tool_from_buffered_user_instru
 
 @pytest.mark.asyncio
 async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
-    async def _fake_extract_upload_source(_component):
-        return None, ""
-
     async def _custom_notice_hook(context: NoticeBuildContext):
         context.notices.append("\n[custom notice]")
         return context
@@ -516,15 +516,10 @@ async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
 
     policy = LLMRequestPolicy(
         document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
-        auto_block_execution_tools=False,
         require_at_in_group=True,
         is_group_feature_enabled=lambda _event: True,
         check_permission=lambda _event: True,
         is_bot_mentioned=lambda _event: True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=_fake_extract_upload_source,
-        store_uploaded_file=lambda _src, _name: Path("ignored.txt"),
-        allow_external_input_files=False,
         notice_hooks=[_custom_notice_hook],
         tool_exposure_hooks=[_custom_tool_hook],
     )
@@ -544,29 +539,73 @@ async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
 
 @pytest.mark.asyncio
 async def test_llm_request_policy_does_not_build_request_hook_service_when_hooks_are_provided():
-    async def _fake_extract_upload_source(_component):
-        return None, ""
-
     with patch(
         "astrbot_plugin_office_assistant.services.llm_request_policy.RequestHookService"
     ) as request_hook_service_cls:
         policy = LLMRequestPolicy(
             document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
-            auto_block_execution_tools=False,
             require_at_in_group=True,
             is_group_feature_enabled=lambda _event: True,
             check_permission=lambda _event: True,
             is_bot_mentioned=lambda _event: True,
-            get_cached_upload_infos=lambda _event: [],
-            extract_upload_source=_fake_extract_upload_source,
-            store_uploaded_file=lambda _src, _name: Path("ignored.txt"),
-            allow_external_input_files=False,
             notice_hooks=[],
             tool_exposure_hooks=[],
         )
 
     assert policy is not None
     request_hook_service_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_uses_injected_request_hook_service_for_default_hooks():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: True,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1")
+    req = ProviderRequest(
+        prompt="hello",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("create_document"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    tool_names = set(req.func_tool.names())
+    assert "create_document" in tool_names
+    assert "existing_tool" in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "文件工具使用指南" in req.system_prompt
+
+
+def test_llm_request_policy_requires_hook_pairs():
+    with pytest.raises(ValueError, match="must be provided together"):
+        LLMRequestPolicy(
+            document_toolset=SimpleNamespace(tools=[]),
+            require_at_in_group=True,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            is_bot_mentioned=lambda _event: True,
+            notice_hooks=[],
+            tool_exposure_hooks=None,
+        )
 
 
 @pytest.mark.asyncio

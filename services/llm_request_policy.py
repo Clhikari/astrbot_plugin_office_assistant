@@ -1,10 +1,8 @@
 import re
-from collections.abc import Awaitable, Callable
-from pathlib import Path
+from collections.abc import Callable
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-import astrbot.api.message_components as Comp
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 
@@ -38,17 +36,11 @@ class LLMRequestPolicy:
         self,
         *,
         document_toolset,
-        auto_block_execution_tools: bool,
         require_at_in_group: bool,
         is_group_feature_enabled: Callable[[AstrMessageEvent], bool],
         check_permission: Callable[[AstrMessageEvent], bool],
         is_bot_mentioned: Callable[[AstrMessageEvent], bool],
-        get_cached_upload_infos: Callable[[AstrMessageEvent], list[dict]],
-        extract_upload_source: Callable[
-            [Comp.File], Awaitable[tuple[Path | None, str]]
-        ],
-        store_uploaded_file: Callable[[Path, str], Path],
-        allow_external_input_files: bool,
+        request_hook_service: RequestHookService | None = None,
         notice_hooks: list[NoticeBuildHook] | None = None,
         tool_exposure_hooks: list[ToolExposureHook] | None = None,
     ) -> None:
@@ -57,14 +49,13 @@ class LLMRequestPolicy:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._is_bot_mentioned = is_bot_mentioned
-        request_hook_service = None
-        if notice_hooks is None or tool_exposure_hooks is None:
-            request_hook_service = RequestHookService(
-                auto_block_execution_tools=auto_block_execution_tools,
-                get_cached_upload_infos=get_cached_upload_infos,
-                extract_upload_source=extract_upload_source,
-                store_uploaded_file=store_uploaded_file,
-                allow_external_input_files=allow_external_input_files,
+        if (notice_hooks is None) != (tool_exposure_hooks is None):
+            raise ValueError(
+                "notice_hooks and tool_exposure_hooks must be provided together"
+            )
+        if request_hook_service is None and notice_hooks is None:
+            raise ValueError(
+                "request_hook_service is required when hooks are not provided"
             )
         self._notice_hooks = (
             notice_hooks

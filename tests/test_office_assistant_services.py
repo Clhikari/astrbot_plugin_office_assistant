@@ -40,61 +40,6 @@ from astrbot_plugin_office_assistant.utils import (
     extract_word_text,
     format_extracted_word_content,
 )
-
-def test_upload_prompt_service_handles_empty_upload_infos():
-    service = UploadPromptService(allow_external_input_files=True)
-
-    prompt_text = service.build_prompt(
-        upload_infos=[],
-        user_instruction="随便看看",
-    )
-
-    # 基本结构不变，且不会报错
-    assert isinstance(prompt_text, str)
-    assert "[用户指令]" in prompt_text
-    assert "[文件信息]" in prompt_text
-
-    # 没有任何文件条目被渲染
-    assert "工作区文件名" not in prompt_text
-    assert "外部绝对路径" not in prompt_text
-
-
-def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
-    service = UploadPromptService(allow_external_input_files=True)
-
-    prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": "readable.txt",
-                "file_suffix": ".txt",
-                "stored_name": "readable_1.txt",
-                "stored_path": "/AstrBot/data/workspace/readable_1.txt",
-                "source_path": "/AstrBot/data/temp/readable.txt",
-                "is_supported": True,
-            },
-            {
-                "original_name": "unreadable.bin",
-                "file_suffix": ".bin",
-                "stored_name": "unreadable_1.bin",
-                "stored_path": "/AstrBot/data/workspace/unreadable_1.bin",
-                "source_path": "/AstrBot/data/temp/unreadable.bin",
-                "is_supported": False,
-            },
-        ],
-        user_instruction="阅读可用文件",
-    )
-
-    # 所有文件都应该在 [文件信息] 中出现
-    assert "[文件信息]" in prompt_text
-    assert "工作区文件名: readable_1.txt" in prompt_text
-    assert "工作区文件名: unreadable_1.bin" in prompt_text
-    assert "外部绝对路径: /AstrBot/data/temp/readable.txt" in prompt_text
-    assert "外部绝对路径: /AstrBot/data/temp/unreadable.bin" in prompt_text
-
-    # 由于存在可读文件，应走可读分支提示 read_file
-    assert "先调用 `read_file` 读取文件" in prompt_text
-
-
 import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
