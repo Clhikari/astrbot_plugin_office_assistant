@@ -12,6 +12,7 @@ from ..constants import (
     DEFAULT_MAX_FILE_SIZE_MB,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
+    MSG_DOCUMENT_EXPORTED,
     OFFICE_LIBS,
 )
 from ..message_buffer import MessageBuffer
@@ -23,10 +24,14 @@ from .command_service import CommandService
 from .delivery_service import DeliveryService
 from .error_hook_service import ErrorHookService
 from .file_tool_service import FileToolService
+from .generated_file_delivery_service import GeneratedFileDeliveryService
 from .incoming_message_service import IncomingMessageService
 from .llm_request_policy import LLMRequestPolicy
+from .post_export_hook_service import PostExportHookService
+from .request_hook_service import RequestHookService
 from .upload_session_service import UploadSessionService
 from .workspace_service import WorkspaceService
+from .word_read_service import WordReadService
 
 
 @dataclass(slots=True)
@@ -67,6 +72,7 @@ class PluginRuntimeBundle:
     document_toolset: object
     llm_request_policy: LLMRequestPolicy
     delivery_service: DeliveryService
+    post_export_hook_service: PostExportHookService
     file_tool_service: FileToolService
     command_service: CommandService
     error_hook_service: ErrorHookService
@@ -115,9 +121,31 @@ def build_plugin_runtime(
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,
     )
+    delivery_service = DeliveryService(
+        executor=executor,
+        preview_generator=preview_gen,
+        enable_preview=settings.enable_preview,
+        auto_delete=settings.auto_delete,
+        reply_to_user=settings.reply_to_user,
+    )
+    post_export_hook_service = PostExportHookService(
+        executor=executor,
+        preview_generator=preview_gen,
+        enable_preview=settings.enable_preview,
+        auto_delete=settings.auto_delete,
+        reply_to_user=settings.reply_to_user,
+        exported_message=MSG_DOCUMENT_EXPORTED,
+    )
     document_toolset = build_document_toolset(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
+    )
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=settings.auto_block_execution_tools,
+        get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
+        extract_upload_source=extract_upload_source,
+        store_uploaded_file=store_uploaded_file,
+        allow_external_input_files=settings.allow_external_input_files,
     )
     llm_request_policy = LLMRequestPolicy(
         document_toolset=document_toolset,
@@ -130,19 +158,24 @@ def build_plugin_runtime(
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,
-    )
-    delivery_service = DeliveryService(
-        executor=executor,
-        preview_generator=preview_gen,
-        enable_preview=settings.enable_preview,
-        auto_delete=settings.auto_delete,
-        reply_to_user=settings.reply_to_user,
+        notice_hooks=request_hook_service.build_notice_hooks(),
+        tool_exposure_hooks=request_hook_service.build_tool_exposure_hooks(),
     )
     file_tool_service = FileToolService(
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,
         delivery_service=delivery_service,
+        generated_file_delivery_service=GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        ),
+        word_read_service=WordReadService(
+            workspace_service=workspace_service,
+            enable_docx_image_review=settings.enable_docx_image_review,
+            max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
+            max_inline_docx_image_count=settings.max_inline_docx_image_count,
+        ),
         office_libs=office_libs,
         allow_external_input_files=settings.allow_external_input_files,
         enable_docx_image_review=settings.enable_docx_image_review,
@@ -193,6 +226,7 @@ def build_plugin_runtime(
         document_toolset=document_toolset,
         llm_request_policy=llm_request_policy,
         delivery_service=delivery_service,
+        post_export_hook_service=post_export_hook_service,
         file_tool_service=file_tool_service,
         command_service=command_service,
         error_hook_service=error_hook_service,

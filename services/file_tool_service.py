@@ -1,5 +1,3 @@
-import base64
-import mimetypes
 import warnings
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -9,6 +7,8 @@ import mcp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
+from .generated_file_delivery_service import GeneratedFileDeliveryService
+from .word_read_service import WordReadService
 from ..constants import (
     CONVERTIBLE_TO_PDF,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
@@ -23,8 +23,6 @@ from ..constants import (
     OfficeType,
 )
 from ..utils import (
-    WORD_ITEM_IMAGE,
-    WORD_ITEM_TEXT,
     format_file_size,
     safe_error_message,
 )
@@ -38,6 +36,8 @@ class FileToolService:
         office_generator,
         pdf_converter,
         delivery_service,
+        generated_file_delivery_service=None,
+        word_read_service=None,
         office_libs: dict,
         allow_external_input_files: bool,
         enable_docx_image_review: bool = True,
@@ -53,6 +53,19 @@ class FileToolService:
         self._office_generator = office_generator
         self._pdf_converter = pdf_converter
         self._delivery_service = delivery_service
+        self._generated_file_delivery_service = (
+            generated_file_delivery_service
+            or GeneratedFileDeliveryService(
+                workspace_service=workspace_service,
+                delivery_service=delivery_service,
+            )
+        )
+        self._word_read_service = word_read_service or WordReadService(
+            workspace_service=workspace_service,
+            enable_docx_image_review=enable_docx_image_review,
+            max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+            max_inline_docx_image_count=max_inline_docx_image_count,
+        )
         self._office_libs = office_libs
         self._allow_external_input_files = allow_external_input_files
         self._enable_docx_image_review = bool(enable_docx_image_review)
@@ -84,165 +97,6 @@ class FileToolService:
         if self._is_explicit_tool_locked(event, "create_office_file"):
             return event.plain_result(message)
         return message
-
-    def _build_image_tool_result(
-        self,
-        image_paths: list[Path],
-    ) -> mcp.types.CallToolResult | None:
-        content: list[mcp.types.ImageContent] = []
-        for image_path in image_paths:
-            try:
-                base64_data = base64.b64encode(image_path.read_bytes()).decode("utf-8")
-            except Exception as exc:
-                logger.warning(
-                    "[文件管理] 读取嵌入图片失败: %s",
-                    safe_error_message(exc, "读取嵌入图片失败"),
-                )
-                continue
-
-            mime_type = mimetypes.guess_type(image_path.name)[0] or "image/png"
-            content.append(
-                mcp.types.ImageContent(
-                    type="image",
-                    data=base64_data,
-                    mimeType=mime_type,
-                )
-            )
-
-        if not content:
-            return None
-
-        return mcp.types.CallToolResult(content=content)
-
-    def _plan_inline_word_images(
-        self,
-        image_paths: list[Path],
-    ) -> dict[int, str]:
-        skipped_reasons: dict[int, str] = {}
-        selected_count = 0
-
-        logger.info("[文件管理] Word 嵌入图片提取数量: %d", len(image_paths))
-
-        for index, image_path in enumerate(image_paths, start=1):
-            try:
-                image_size = image_path.stat().st_size
-            except OSError as exc:
-                skipped_reasons[index] = (
-                    f"未注入模型上下文（读取失败：{safe_error_message(exc)}）。"
-                )
-                continue
-
-            logger.info(
-                "[文件管理] Word 嵌入图片%d 实际大小: %s",
-                index,
-                format_file_size(image_size),
-            )
-
-            if selected_count >= self._max_inline_docx_image_count:
-                skipped_reasons[index] = (
-                    f"未注入模型上下文（超过单文档最多 {self._max_inline_docx_image_count} 张限制）。"
-                )
-                continue
-
-            if image_size > self._max_inline_docx_image_bytes:
-                skipped_reasons[index] = (
-                    "未注入模型上下文（文件大小 "
-                    f"{format_file_size(image_size)} 超过 "
-                    f"{format_file_size(self._max_inline_docx_image_bytes)} 限制）。"
-                )
-                continue
-
-            selected_count += 1
-
-        return skipped_reasons
-
-    async def _iter_word_file_results(
-        self,
-        resolved_path: Path,
-        display_name: str,
-        suffix: str,
-        file_size: int,
-    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
-        extracted = self._workspace_service.extract_word_content(
-            resolved_path,
-            include_images=self._enable_docx_image_review,
-        )
-        if extracted is None:
-            yield f"错误：文件 '{display_name}' 无法读取，可能未安装对应解析库"
-            return
-
-        image_count = getattr(extracted, "image_count", 0) or len(
-            getattr(extracted, "image_paths", [])
-        )
-
-        if not self._enable_docx_image_review:
-            text_chunks: list[str] = []
-            for item in getattr(extracted, "items", []):
-                if item.type != WORD_ITEM_TEXT:
-                    continue
-                text = (item.text or "").strip()
-                if text:
-                    text_chunks.append(text)
-            formatted = "\n".join(text_chunks) if text_chunks else None
-            if not formatted and extracted.text:
-                formatted = extracted.text.strip() or None
-            if formatted:
-                yield self._workspace_service.format_file_result(
-                    display_name, suffix, file_size, formatted
-                )
-            elif image_count > 0:
-                yield self._workspace_service.format_file_result(
-                    display_name,
-                    suffix,
-                    file_size,
-                    "该 Word 文档仅包含图片内容，当前未启用图片理解。",
-                )
-            return
-
-        skipped_image_reasons = self._plan_inline_word_images(extracted.image_paths)
-        fallback_image_index = 0
-        text_chunks: list[str] = []
-        selected_image_paths: list[Path] = []
-
-        if extracted.items:
-            for item in extracted.items:
-                if item.type == WORD_ITEM_TEXT:
-                    text = (item.text or "").strip()
-                    if text:
-                        text_chunks.append(text)
-                    continue
-
-                if item.type != WORD_ITEM_IMAGE or item.image_path is None:
-                    continue
-
-                image_index = getattr(item, "image_index", None)
-                if image_index is None:
-                    fallback_image_index += 1
-                    image_index = fallback_image_index
-
-                reason = skipped_image_reasons.get(image_index)
-                if reason:
-                    text_chunks.append(f"[插图{image_index}]（{reason}）")
-                    continue
-
-                text_chunks.append(f"[插图{image_index}]")
-                selected_image_paths.append(item.image_path)
-
-            final_text = "\n".join(part.strip() for part in text_chunks if part.strip())
-            if final_text:
-                yield self._workspace_service.format_file_result(
-                    display_name, suffix, file_size, final_text
-                )
-            image_result = self._build_image_tool_result(selected_image_paths)
-            if image_result is not None:
-                yield image_result
-            return
-
-        formatted = self._workspace_service.format_word_content(extracted)
-        if formatted:
-            yield self._workspace_service.format_file_result(
-                display_name, suffix, file_size, formatted
-            )
 
     async def iter_read_file_tool_results(
         self,
@@ -296,7 +150,7 @@ class FileToolService:
             office_type = SUFFIX_TO_OFFICE_TYPE.get(suffix)
             if office_type:
                 if office_type is OfficeType.WORD:
-                    async for result in self._iter_word_file_results(
+                    async for result in self._word_read_service.iter_word_results(
                         resolved_path,
                         display_name,
                         suffix,
@@ -429,19 +283,20 @@ class FileToolService:
             output_path = await self._office_generator.generate(
                 event, file_info["type"], filename, file_info
             )
-            if output_path and output_path.exists():
-                file_size = output_path.stat().st_size
-                max_size = self._workspace_service.get_max_file_size()
-                if file_size > max_size:
-                    output_path.unlink()
-                    size_str = format_file_size(file_size)
-                    max_str = format_file_size(max_size)
-                    return self._finalize_create_office_file_error(
-                        event,
-                        f"错误：文件过大 ({size_str})，超过限制 {max_str}",
-                    )
-
-                await self._delivery_service.send_file_with_preview(event, output_path)
+            delivery_result = (
+                await self._generated_file_delivery_service.deliver_generated_file(
+                    event,
+                    output_path,
+                )
+            )
+            if delivery_result.status == "oversized":
+                size_str = format_file_size(delivery_result.file_size)
+                max_str = format_file_size(delivery_result.max_size)
+                return self._finalize_create_office_file_error(
+                    event,
+                    f"错误：文件过大 ({size_str})，超过限制 {max_str}",
+                )
+            if delivery_result.status == "sent":
                 return None
         except Exception as exc:
             return self._finalize_create_office_file_error(
@@ -490,16 +345,19 @@ class FileToolService:
         try:
             logger.info(f"[PDF转换] 开始转换: {display_name} → PDF")
             output_path = await self._pdf_converter.office_to_pdf(resolved_path)
-            if output_path and output_path.exists():
-                file_size = output_path.stat().st_size
-                max_size = self._workspace_service.get_max_file_size()
-                if file_size > max_size:
-                    output_path.unlink()
-                    return f"错误：生成的 PDF 文件过大 ({format_file_size(file_size)})"
-
-                await self._delivery_service.send_file_with_preview(
-                    event, output_path, f"✅ 已将 {display_name} 转换为 PDF"
+            delivery_result = (
+                await self._generated_file_delivery_service.deliver_generated_file(
+                    event,
+                    output_path,
+                    success_message=f"✅ 已将 {display_name} 转换为 PDF",
                 )
+            )
+            if delivery_result.status == "oversized":
+                return (
+                    "错误：生成的 PDF 文件过大 "
+                    f"({format_file_size(delivery_result.file_size)})"
+                )
+            if delivery_result.status == "sent":
                 return None
 
             return "错误：PDF 转换失败，请检查文件格式是否正确"
@@ -556,18 +414,16 @@ class FileToolService:
             else:
                 return f"错误：未实现的转换类型: {target}"
 
-            if output_path and output_path.exists():
-                file_size = output_path.stat().st_size
-                max_size = self._workspace_service.get_max_file_size()
-                if file_size > max_size:
-                    output_path.unlink()
-                    return f"错误：生成的文件过大 ({format_file_size(file_size)})"
-
-                await self._delivery_service.send_file_with_preview(
+            delivery_result = (
+                await self._generated_file_delivery_service.deliver_generated_file(
                     event,
                     output_path,
-                    f"✅ 已将 {display_name} 转换为 {target_desc}",
+                    success_message=f"✅ 已将 {display_name} 转换为 {target_desc}",
                 )
+            )
+            if delivery_result.status == "oversized":
+                return f"错误：生成的文件过大 ({format_file_size(delivery_result.file_size)})"
+            if delivery_result.status == "sent":
                 return None
 
             return f"错误：PDF→{target_desc} 转换失败"

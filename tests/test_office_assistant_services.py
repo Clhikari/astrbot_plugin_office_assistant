@@ -20,10 +20,16 @@ from astrbot_plugin_office_assistant.services import (
     CommandService,
     DeliveryService,
     ErrorHookService,
+    ExportHookService,
     FileToolService,
+    GeneratedFileDeliveryService,
     IncomingMessageService,
+    PostExportHookService,
+    RequestHookService,
+    UploadPromptService,
     UploadSessionService,
     WorkspaceService,
+    WordReadService,
     build_plugin_runtime,
 )
 from astrbot_plugin_office_assistant.utils import (
@@ -34,7 +40,9 @@ from astrbot_plugin_office_assistant.utils import (
 )
 
 import astrbot.api.message_components as Comp
+from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
+from astrbot.core.provider.entities import ProviderRequest
 
 
 def _build_event(
@@ -52,6 +60,15 @@ def _build_event(
     event._buffer_reentry_count = 0
     event._buffered = False
     return event
+
+
+def _tool(name: str) -> FunctionTool:
+    return FunctionTool(
+        name=name,
+        description=f"tool {name}",
+        parameters={"type": "object", "properties": {}},
+        handler=None,
+    )
 
 
 def _make_workspace(name: str) -> Path:
@@ -157,6 +174,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.max_inline_docx_image_bytes == 3 * 1024 * 1024
         assert runtime.settings.max_inline_docx_image_count == 4
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
+        assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
         assert runtime.incoming_message_service is not None
     finally:
@@ -242,12 +260,174 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.command_service._plugin_data_path == data_root / "files"
         assert runtime.workspace_service.plugin_data_path == data_root / "files"
+        assert runtime.post_export_hook_service is not None
         assert called["plugin_name"] == "astrbot_plugin_office_assistant"
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()
         runtime.pdf_converter.cleanup()
         shutil.rmtree(data_root, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_handles_exported_document_tool():
+    event = _build_event()
+    event.send = AsyncMock()
+    context = SimpleNamespace(context=SimpleNamespace(event=event))
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=MagicMock(),
+        enable_preview=False,
+        auto_delete=False,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+    file_path = Path(__file__).resolve()
+
+    try:
+        result = await service.handle_exported_document_tool(
+            context,
+            str(file_path),
+        )
+    finally:
+        service._executor.shutdown(wait=False)
+
+    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert event.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_export_hook_service_aliases_post_export_hook_service():
+    assert ExportHookService is PostExportHookService
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_builds_default_tool_hooks():
+    request = ProviderRequest(
+        prompt="请用 read_file 看一下 report.docx",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("create_document"),
+                _tool("astrbot_execute_shell"),
+                _tool("astrbot_execute_python"),
+            ]
+        ),
+    )
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=_build_event(),
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name="read_file",
+    )
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_file" in tool_names
+    assert "create_document" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "astrbot_execute_python" not in tool_names
+
+
+def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/AstrBot/data/temp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="看看里面的内容",
+    )
+
+    assert "[用户指令]" in prompt_text
+    assert "看看里面的内容" in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径: /AstrBot/data/temp/report.docx" in prompt_text
+    assert "先调用 `read_file` 读取文件" in prompt_text
+
+
+def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
+    service = UploadPromptService(allow_external_input_files=False)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "archive.bin",
+                "file_suffix": ".bin",
+                "stored_name": "",
+                "source_path": "",
+                "is_supported": False,
+            }
+        ],
+        user_instruction="",
+    )
+
+    assert "[操作要求]" in prompt_text
+    assert "使用中文与用户沟通" in prompt_text
+    assert "[用户指令]" not in prompt_text
+    assert "工作区文件名" not in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_word_read_service_returns_disabled_image_notice_for_image_only_docx():
+    workspace_dir = _make_workspace("word-read-service-image-only")
+    executor = ThreadPoolExecutor(max_workers=1)
+    docx_path = workspace_dir / "image-only.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = WordReadService(
+            workspace_service=workspace_service,
+            enable_docx_image_review=False,
+        )
+
+        results = [
+            result
+            async for result in service.iter_word_results(
+                docx_path,
+                docx_path.name,
+                docx_path.suffix.lower(),
+                docx_path.stat().st_size,
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], str)
+    assert "该 Word 文档仅包含图片内容，当前未启用图片理解。" in results[0]
 
 
 def test_workspace_service_pre_check_rejects_outside_workspace():
@@ -505,6 +685,40 @@ async def test_delivery_service_handles_exported_document_tool_via_context_event
 
     assert result == f"Document exported and sent to the user: {file_path.name}"
     assert event.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_rejects_oversized_output():
+    workspace_dir = _make_workspace("generated-file-delivery")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    output_path = workspace_dir / "oversized.pdf"
+    output_path.write_bytes(b"x" * 32)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=8,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "oversized"
+    assert result.file_size == 32
+    assert result.max_size == 8
+    delivery_service.send_file_with_preview.assert_not_called()
 
 
 @pytest.mark.asyncio
