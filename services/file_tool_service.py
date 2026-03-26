@@ -24,6 +24,7 @@ from ..utils import (
     format_file_size,
     safe_error_message,
 )
+from .generated_file_delivery_service import GeneratedFileDeliveryResult
 
 
 class FileToolService:
@@ -86,8 +87,26 @@ class FileToolService:
         return message
 
     @staticmethod
-    def _is_generated_file_missing(delivery_result) -> bool:
+    def _is_generated_file_missing(
+        delivery_result: GeneratedFileDeliveryResult,
+    ) -> bool:
         return delivery_result.status == "missing"
+
+    @staticmethod
+    def _format_generated_file_delivery_error(
+        delivery_result: GeneratedFileDeliveryResult,
+        *,
+        missing_message: str,
+        oversized_template: str,
+    ) -> str | None:
+        if delivery_result.status == "missing":
+            return missing_message
+        if delivery_result.status == "oversized":
+            return oversized_template.format(
+                file_size=format_file_size(delivery_result.file_size),
+                max_size=format_file_size(delivery_result.max_size),
+            )
+        return None
 
     async def iter_read_file_tool_results(
         self,
@@ -280,17 +299,15 @@ class FileToolService:
                     output_path,
                 )
             )
-            if delivery_result.status == "oversized":
-                size_str = format_file_size(delivery_result.file_size)
-                max_str = format_file_size(delivery_result.max_size)
+            delivery_error = self._format_generated_file_delivery_error(
+                delivery_result,
+                missing_message="错误：文件生成失败，未找到输出文件",
+                oversized_template="错误：文件过大 ({file_size})，超过限制 {max_size}",
+            )
+            if delivery_error:
                 return self._finalize_create_office_file_error(
                     event,
-                    f"错误：文件过大 ({size_str})，超过限制 {max_str}",
-                )
-            if self._is_generated_file_missing(delivery_result):
-                return self._finalize_create_office_file_error(
-                    event,
-                    "错误：文件生成失败，未找到输出文件",
+                    delivery_error,
                 )
             if delivery_result.status == "sent":
                 return None
@@ -348,13 +365,13 @@ class FileToolService:
                     success_message=f"✅ 已将 {display_name} 转换为 PDF",
                 )
             )
-            if delivery_result.status == "oversized":
-                return (
-                    "错误：生成的 PDF 文件过大 "
-                    f"({format_file_size(delivery_result.file_size)})"
-                )
-            if self._is_generated_file_missing(delivery_result):
-                return "错误：PDF 转换失败，未找到生成的 PDF 文件"
+            delivery_error = self._format_generated_file_delivery_error(
+                delivery_result,
+                missing_message="错误：PDF 转换失败，未找到生成的 PDF 文件",
+                oversized_template="错误：生成的 PDF 文件过大 ({file_size})",
+            )
+            if delivery_error:
+                return delivery_error
             if delivery_result.status == "sent":
                 return None
 
@@ -419,10 +436,13 @@ class FileToolService:
                     success_message=f"✅ 已将 {display_name} 转换为 {target_desc}",
                 )
             )
-            if delivery_result.status == "oversized":
-                return f"错误：生成的文件过大 ({format_file_size(delivery_result.file_size)})"
-            if self._is_generated_file_missing(delivery_result):
-                return f"错误：PDF→{target_desc} 转换失败，未找到生成的文件"
+            delivery_error = self._format_generated_file_delivery_error(
+                delivery_result,
+                missing_message=f"错误：PDF→{target_desc} 转换失败，未找到生成的文件",
+                oversized_template="错误：生成的文件过大 ({file_size})",
+            )
+            if delivery_error:
+                return delivery_error
             if delivery_result.status == "sent":
                 return None
 

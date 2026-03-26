@@ -87,7 +87,7 @@ class PostExportHookService:
 
     @staticmethod
     def _missing_export_message(file_path: Path) -> str:
-        return f"Document exported, but the file '{file_path.name}' does not exist."
+        return f"文档已导出，但文件“{file_path.name}”不存在。"
 
     async def send_exported_document(
         self,
@@ -102,7 +102,7 @@ class PostExportHookService:
         await self._send_preview_if_available(event, preview_path)
         await self._send_output_file(event, file_path)
         await self._delete_file_if_needed(file_path, "文件")
-        return f"Document exported and sent to the user: {file_path.name}"
+        return f"文档已导出并发送给用户：{file_path.name}"
 
     async def handle_exported_document_tool(
         self,

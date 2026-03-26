@@ -49,24 +49,27 @@ class LLMRequestPolicy:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._is_bot_mentioned = is_bot_mentioned
-        if (notice_hooks is None) != (tool_exposure_hooks is None):
+        explicit_hooks_provided = (
+            notice_hooks is not None or tool_exposure_hooks is not None
+        )
+        if explicit_hooks_provided and (
+            notice_hooks is None or tool_exposure_hooks is None
+        ):
             raise ValueError(
                 "notice_hooks and tool_exposure_hooks must be provided together"
             )
-        if request_hook_service is None and notice_hooks is None:
+        if not explicit_hooks_provided and request_hook_service is None:
             raise ValueError(
                 "request_hook_service is required when hooks are not provided"
             )
-        self._notice_hooks = (
-            notice_hooks
-            if notice_hooks is not None
-            else request_hook_service.build_notice_hooks()
-        )
-        self._tool_exposure_hooks = (
-            tool_exposure_hooks
-            if tool_exposure_hooks is not None
-            else request_hook_service.build_tool_exposure_hooks()
-        )
+        if explicit_hooks_provided:
+            self._notice_hooks = notice_hooks
+            self._tool_exposure_hooks = tool_exposure_hooks
+        else:
+            self._notice_hooks = request_hook_service.build_notice_hooks()
+            self._tool_exposure_hooks = (
+                request_hook_service.build_tool_exposure_hooks()
+            )
 
     def _detect_explicit_file_tool(self, text: str) -> str | None:
         if not text:

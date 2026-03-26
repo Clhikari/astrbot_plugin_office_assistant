@@ -154,8 +154,6 @@ def build_plugin_runtime(
         check_permission=access_policy_service.check_permission,
         is_bot_mentioned=access_policy_service.is_bot_mentioned,
         request_hook_service=request_hook_service,
-        notice_hooks=request_hook_service.build_notice_hooks(),
-        tool_exposure_hooks=request_hook_service.build_tool_exposure_hooks(),
     )
     file_tool_service = FileToolService(
         workspace_service=workspace_service,

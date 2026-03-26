@@ -336,7 +336,7 @@ async def test_post_export_hook_service_handles_exported_document_tool():
     finally:
         service._executor.shutdown(wait=False)
 
-    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
     assert event.send.await_count == 2
 
 
@@ -359,7 +359,7 @@ async def test_post_export_hook_service_returns_missing_message_without_sending(
     finally:
         service._executor.shutdown(wait=False)
 
-    assert "does not exist" in result
+    assert "不存在" in result
     assert missing_path.name in result
     assert str(missing_path) not in result
     event.send.assert_not_awaited()
@@ -391,7 +391,7 @@ async def test_post_export_hook_service_sends_preview_reply_and_deletes_files():
         service._executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
-    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
     assert event.send.await_count == 3
 
     success_chain = event.send.await_args_list[0].args[0]
@@ -437,7 +437,7 @@ async def test_post_export_hook_service_skips_preview_when_generation_fails():
         service._executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
-    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
     assert event.send.await_count == 2
     logger_warning.assert_called()
     assert not file_path.exists()
@@ -475,7 +475,7 @@ async def test_post_export_hook_service_logs_main_file_delete_failure_without_fa
         service._executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
-    assert result == f"Document exported and sent to the user: {file_path.name}"
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
     assert event.send.await_count == 2
     logger_warning.assert_called_once()
 
