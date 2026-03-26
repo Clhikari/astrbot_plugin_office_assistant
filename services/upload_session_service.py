@@ -8,6 +8,7 @@ from astrbot.api.star import Context
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
 from ..message_buffer import BufferedMessage
+from .upload_prompt_service import UploadInfo, UploadPromptService
 
 EVENT_UPLOAD_CACHE_ATTR = "_office_assistant_uploaded_files"
 
@@ -33,6 +34,9 @@ class UploadSessionService:
         self._extract_upload_source = extract_upload_source
         self._store_uploaded_file = store_uploaded_file
         self._allow_external_input_files = allow_external_input_files
+        self._prompt_service = UploadPromptService(
+            allow_external_input_files=allow_external_input_files
+        )
         self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
         self._recent_text_last_cleanup_ts = 0.0
 
@@ -133,7 +137,7 @@ class UploadSessionService:
         self._recent_text_by_session.pop(session_key, None)
         return text
 
-    def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[dict]:
+    def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[UploadInfo]:
         cached = getattr(event, EVENT_UPLOAD_CACHE_ATTR, None)
         if isinstance(cached, list):
             return cached
@@ -153,19 +157,19 @@ class UploadSessionService:
         self,
         event: AstrMessageEvent,
         files: list,
-    ) -> list[dict]:
+    ) -> list[UploadInfo]:
         cached = self.get_cached_upload_infos(event)
         if cached:
             return cached
 
-        upload_infos: list[dict] = []
+        upload_infos: list[UploadInfo] = []
         for file_component in files:
             name = ""
             if isinstance(file_component, Comp.File):
                 name = file_component.name or ""
             name = name or "未命名文件"
             type_desc, is_supported = self._resolve_upload_type(name)
-            info = {
+            info: UploadInfo = {
                 "original_name": name,
                 "file_suffix": Path(name).suffix.lower() if name else "",
                 "type_desc": type_desc,
@@ -222,19 +226,6 @@ class UploadSessionService:
             restored_recent_text = bool(user_instruction)
 
         upload_infos = await self._ensure_upload_infos(event, files)
-        file_info_list = []
-        has_readable_file = False
-        for info in upload_infos:
-            file_lines = [
-                f"原始文件名: {info['original_name']} (类型: {info['file_suffix']})"
-            ]
-            if info["stored_name"]:
-                file_lines.append(f"  工作区文件名: {info['stored_name']}")
-            if self._allow_external_input_files and info["source_path"]:
-                file_lines.append(f"  外部绝对路径: {info['source_path']}")
-            file_info_list.append("\n".join(file_lines))
-            if info["is_supported"]:
-                has_readable_file = True
 
         logger.info(
             "[消息缓冲] 缓冲完成，文件数: %s, 缓冲文本数: %s, 回补文本: %s",
@@ -243,55 +234,10 @@ class UploadSessionService:
             "yes" if restored_recent_text else "no",
         )
 
-        relative_path_guidance = "3. 若使用相对路径，请使用上面的工作区文件名。\n"
-        if self._allow_external_input_files:
-            relative_path_guidance = (
-                "3. 若使用相对路径，请使用上面的工作区文件名；"
-                "如果已提供外部绝对路径，则可直接使用该绝对路径。\n"
-            )
-
-        if has_readable_file and user_instruction:
-            prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
-                + "\n"
-                + "[文件信息]\n"
-                + "\n".join(f"- {info}" for info in file_info_list)
-                + "\n"
-                + "\n"
-                + "[用户指令]\n"
-                + f"{user_instruction}\n"
-                + "\n"
-                + "[处理建议]\n"
-                + "1. 优先围绕这些上传文件完成用户请求。\n"
-                + "2. 先调用 `read_file` 读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
-                + relative_path_guidance
-                + "4. 所有面向用户的回复 MUST 使用中文。"
-            )
-        elif has_readable_file:
-            prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
-                + "\n"
-                + "[文件信息]\n"
-                + "\n".join(f"- {info}" for info in file_info_list)
-                + "\n"
-                + "\n"
-                + "[处理建议]\n"
-                + "1. 用户上传了可读取文件，后续应优先围绕这些文件处理。\n"
-                + "2. 如果要读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
-                + relative_path_guidance
-                + "4. 用户意图尚不明确时，再用中文询问用户想要如何处理。"
-            )
-        else:
-            prompt_text = (
-                f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
-                "\n"
-                "[文件信息]\n"
-                + "\n".join(f"- {info}" for info in file_info_list)
-                + "\n"
-                "\n"
-                "[操作要求]\n"
-                "请根据用户要求处理这些文件，使用中文与用户沟通。"
-            )
+        prompt_text = self._prompt_service.build_prompt(
+            upload_infos=upload_infos,
+            user_instruction=user_instruction,
+        )
 
         new_chain = [Comp.Plain(prompt_text)]
         for file_component in files:

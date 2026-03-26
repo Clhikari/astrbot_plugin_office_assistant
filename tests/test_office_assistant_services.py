@@ -11,6 +11,8 @@ import mcp
 import pytest
 import astrbot_plugin_office_assistant.utils as office_utils
 from astrbot_plugin_office_assistant.constants import (
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     OfficeType,
 )
@@ -20,10 +22,16 @@ from astrbot_plugin_office_assistant.services import (
     CommandService,
     DeliveryService,
     ErrorHookService,
+    ExportHookService,
     FileToolService,
+    GeneratedFileDeliveryService,
     IncomingMessageService,
+    PostExportHookService,
+    RequestHookService,
+    UploadPromptService,
     UploadSessionService,
     WorkspaceService,
+    WordReadService,
     build_plugin_runtime,
 )
 from astrbot_plugin_office_assistant.utils import (
@@ -32,9 +40,10 @@ from astrbot_plugin_office_assistant.utils import (
     extract_word_text,
     format_extracted_word_content,
 )
-
 import astrbot.api.message_components as Comp
+from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
+from astrbot.core.provider.entities import ProviderRequest
 
 
 def _build_event(
@@ -54,6 +63,15 @@ def _build_event(
     return event
 
 
+def _tool(name: str) -> FunctionTool:
+    return FunctionTool(
+        name=name,
+        description=f"tool {name}",
+        parameters={"type": "object", "properties": {}},
+        handler=None,
+    )
+
+
 def _make_workspace(name: str) -> Path:
     workspace_base = Path(__file__).resolve().parent / ".tmp_services"
     workspace_base.mkdir(parents=True, exist_ok=True)
@@ -71,6 +89,49 @@ def _write_png(path: Path) -> None:
 
 def _import_docx():
     return pytest.importorskip("docx")
+
+
+def _build_file_tool_service(
+    *,
+    workspace_service,
+    office_generator=None,
+    pdf_converter=None,
+    delivery_service=None,
+    office_libs=None,
+    allow_external_input_files: bool = False,
+    enable_docx_image_review: bool = True,
+    max_inline_docx_image_bytes: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_MB * 1024 * 1024,
+    max_inline_docx_image_count: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    is_group_feature_enabled=None,
+    check_permission=None,
+    group_feature_disabled_error=None,
+):
+    delivery_service = delivery_service or MagicMock()
+    return FileToolService(
+        workspace_service=workspace_service,
+        office_generator=office_generator or MagicMock(),
+        pdf_converter=pdf_converter or MagicMock(),
+        delivery_service=delivery_service,
+        generated_file_delivery_service=GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        ),
+        word_read_service=WordReadService(
+            workspace_service=workspace_service,
+            enable_docx_image_review=enable_docx_image_review,
+            max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+            max_inline_docx_image_count=max_inline_docx_image_count,
+        ),
+        office_libs=office_libs or {},
+        allow_external_input_files=allow_external_input_files,
+        enable_docx_image_review=enable_docx_image_review,
+        max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+        max_inline_docx_image_count=max_inline_docx_image_count,
+        is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
+        check_permission=check_permission or (lambda _event: True),
+        group_feature_disabled_error=group_feature_disabled_error
+        or (lambda: "group disabled"),
+    )
 
 
 def _rewrite_docx_document_xml(path: Path, transform) -> None:
@@ -157,6 +218,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.max_inline_docx_image_bytes == 3 * 1024 * 1024
         assert runtime.settings.max_inline_docx_image_count == 4
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
+        assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
         assert runtime.incoming_message_service is not None
     finally:
@@ -242,12 +304,383 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.command_service._plugin_data_path == data_root / "files"
         assert runtime.workspace_service.plugin_data_path == data_root / "files"
+        assert runtime.post_export_hook_service is not None
         assert called["plugin_name"] == "astrbot_plugin_office_assistant"
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()
         runtime.pdf_converter.cleanup()
         shutil.rmtree(data_root, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_handles_exported_document_tool():
+    event = _build_event()
+    event.send = AsyncMock()
+    context = SimpleNamespace(context=SimpleNamespace(event=event))
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=MagicMock(),
+        enable_preview=False,
+        auto_delete=False,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+    file_path = Path(__file__).resolve()
+
+    try:
+        result = await service.handle_exported_document_tool(
+            context,
+            str(file_path),
+        )
+    finally:
+        service._executor.shutdown(wait=False)
+
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
+    assert event.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_returns_missing_message_without_sending():
+    event = _build_event()
+    event.send = AsyncMock()
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=MagicMock(),
+        enable_preview=False,
+        auto_delete=False,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+    missing_path = Path(__file__).resolve().parent / "missing-export.docx"
+
+    try:
+        result = await service.send_exported_document(event, missing_path)
+    finally:
+        service._executor.shutdown(wait=False)
+
+    assert "不存在" in result
+    assert missing_path.name in result
+    assert str(missing_path) not in result
+    event.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_sends_preview_reply_and_deletes_files():
+    workspace_dir = _make_workspace("post-export-preview")
+    event = _build_event()
+    event.send = AsyncMock()
+    file_path = workspace_dir / "report.docx"
+    preview_path = workspace_dir / "report-preview.png"
+    file_path.write_text("docx", encoding="utf-8")
+    _write_png(preview_path)
+    preview_generator = MagicMock()
+    preview_generator.generate_preview.return_value = preview_path
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=preview_generator,
+        enable_preview=True,
+        auto_delete=True,
+        reply_to_user=True,
+        exported_message="✅ 文档已导出",
+    )
+
+    try:
+        result = await service.send_exported_document(event, file_path)
+    finally:
+        service._executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
+    assert event.send.await_count == 3
+
+    success_chain = event.send.await_args_list[0].args[0]
+    assert "✅ 文档已导出" in success_chain.chain[0].text
+    assert any(isinstance(component, Comp.At) for component in success_chain.chain)
+
+    preview_chain = event.send.await_args_list[1].args[0]
+    assert isinstance(preview_chain.chain[0], Comp.Image)
+    assert preview_chain.chain[0].file == str(preview_path.resolve())
+
+    file_chain = event.send.await_args_list[2].args[0]
+    assert isinstance(file_chain.chain[0], Comp.File)
+    assert file_chain.chain[0].name == file_path.name
+
+    assert not preview_path.exists()
+    assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_skips_preview_when_generation_fails():
+    workspace_dir = _make_workspace("post-export-preview-fail")
+    event = _build_event()
+    event.send = AsyncMock()
+    file_path = workspace_dir / "report.docx"
+    file_path.write_text("docx", encoding="utf-8")
+    preview_generator = MagicMock()
+    preview_generator.generate_preview.side_effect = RuntimeError("preview boom")
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=preview_generator,
+        enable_preview=True,
+        auto_delete=True,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+
+    try:
+        with patch(
+            "astrbot_plugin_office_assistant.services.post_export_hook_service.logger.warning"
+        ) as logger_warning:
+            result = await service.send_exported_document(event, file_path)
+    finally:
+        service._executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
+    assert event.send.await_count == 2
+    logger_warning.assert_called()
+    assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_export_hook_service_logs_main_file_delete_failure_without_failing():
+    workspace_dir = _make_workspace("post-export-delete-fail")
+    event = _build_event()
+    event.send = AsyncMock()
+    file_path = workspace_dir / "report.docx"
+    file_path.write_text("docx", encoding="utf-8")
+    service = PostExportHookService(
+        executor=ThreadPoolExecutor(max_workers=1),
+        preview_generator=MagicMock(),
+        enable_preview=False,
+        auto_delete=True,
+        reply_to_user=False,
+        exported_message="✅ 文档已导出",
+    )
+    original_unlink = Path.unlink
+
+    def _fake_unlink(path: Path, *args, **kwargs):
+        if path == file_path:
+            raise OSError("unlink boom")
+        return original_unlink(path, *args, **kwargs)
+
+    try:
+        with patch.object(Path, "unlink", _fake_unlink):
+            with patch(
+                "astrbot_plugin_office_assistant.services.post_export_hook_service.logger.warning"
+            ) as logger_warning:
+                result = await service.send_exported_document(event, file_path)
+    finally:
+        service._executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result == f"文档已导出并发送给用户：{file_path.name}"
+    assert event.send.await_count == 2
+    logger_warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_export_hook_service_aliases_post_export_hook_service():
+    assert ExportHookService is PostExportHookService
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_builds_default_tool_hooks():
+    request = ProviderRequest(
+        prompt="请用 read_file 看一下 report.docx",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("create_document"),
+                _tool("astrbot_execute_shell"),
+                _tool("astrbot_execute_python"),
+            ]
+        ),
+    )
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=_build_event(),
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name="read_file",
+    )
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_file" in tool_names
+    assert "create_document" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "astrbot_execute_python" not in tool_names
+
+
+def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/AstrBot/data/temp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="看看里面的内容",
+    )
+
+    assert "[用户指令]" in prompt_text
+    assert "看看里面的内容" in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径: /AstrBot/data/temp/report.docx" in prompt_text
+    assert "先调用 `read_file` 读取文件" in prompt_text
+
+
+def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
+    service = UploadPromptService(allow_external_input_files=False)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/AstrBot/data/temp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="",
+    )
+
+    assert "用户上传了可读取文件，后续应优先围绕这些文件处理" in prompt_text
+    assert "[用户指令]" not in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+    assert "外部绝对路径" not in prompt_text
+
+
+def test_upload_prompt_service_handles_empty_upload_infos():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[],
+        user_instruction="随便看看",
+    )
+
+    assert isinstance(prompt_text, str)
+    assert "[文件信息]" in prompt_text
+    assert "[操作要求]" in prompt_text
+    assert "[用户指令]" not in prompt_text
+    assert "工作区文件名" not in prompt_text
+    assert "外部绝对路径" not in prompt_text
+
+
+def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "readable.txt",
+                "file_suffix": ".txt",
+                "stored_name": "readable_1.txt",
+                "source_path": "/AstrBot/data/temp/readable.txt",
+                "is_supported": True,
+            },
+            {
+                "original_name": "unreadable.bin",
+                "file_suffix": ".bin",
+                "stored_name": "unreadable_1.bin",
+                "source_path": "/AstrBot/data/temp/unreadable.bin",
+                "is_supported": False,
+            },
+        ],
+        user_instruction="阅读可用文件",
+    )
+
+    assert "[文件信息]" in prompt_text
+    assert "工作区文件名: readable_1.txt" in prompt_text
+    assert "工作区文件名: unreadable_1.bin" in prompt_text
+    assert "外部绝对路径: /AstrBot/data/temp/readable.txt" in prompt_text
+    assert "外部绝对路径: /AstrBot/data/temp/unreadable.bin" in prompt_text
+    assert "先调用 `read_file` 读取文件" in prompt_text
+
+
+def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
+    service = UploadPromptService(allow_external_input_files=False)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "archive.bin",
+                "file_suffix": ".bin",
+                "stored_name": "",
+                "source_path": "",
+                "is_supported": False,
+            }
+        ],
+        user_instruction="",
+    )
+
+    assert "[操作要求]" in prompt_text
+    assert "使用中文与用户沟通" in prompt_text
+    assert "[用户指令]" not in prompt_text
+    assert "工作区文件名" not in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_word_read_service_returns_disabled_image_notice_for_image_only_docx():
+    workspace_dir = _make_workspace("word-read-service-image-only")
+    executor = ThreadPoolExecutor(max_workers=1)
+    docx_path = workspace_dir / "image-only.docx"
+    image_path = workspace_dir / "embedded.png"
+
+    try:
+        docx = _import_docx()
+
+        _write_png(image_path)
+        document = docx.Document()
+        document.add_picture(str(image_path), width=docx.shared.Inches(1))
+        document.save(docx_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = WordReadService(
+            workspace_service=workspace_service,
+            enable_docx_image_review=False,
+        )
+
+        results = [
+            result
+            async for result in service.iter_word_results(
+                docx_path,
+                docx_path.name,
+                docx_path.suffix.lower(),
+                docx_path.stat().st_size,
+            )
+        ]
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], str)
+    assert "该 Word 文档仅包含图片内容，当前未启用图片理解。" in results[0]
 
 
 def test_workspace_service_pre_check_rejects_outside_workspace():
@@ -508,6 +941,126 @@ async def test_delivery_service_handles_exported_document_tool_via_context_event
 
 
 @pytest.mark.asyncio
+async def test_generated_file_delivery_service_rejects_oversized_output():
+    workspace_dir = _make_workspace("generated-file-delivery")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    output_path = workspace_dir / "oversized.pdf"
+    output_path.write_bytes(b"x" * 32)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=8,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "oversized"
+    assert result.file_size == 32
+    assert result.max_size == 8
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_sends_existing_output_with_expected_args():
+    workspace_dir = _make_workspace("generated-file-delivery-sent")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    output_path = workspace_dir / "report.pdf"
+    output_path.write_bytes(b"small-pdf")
+    file_size = output_path.stat().st_size
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result_without_message = await service.deliver_generated_file(event, output_path)
+        result_with_message = await service.deliver_generated_file(
+            event,
+            output_path,
+            success_message="✅ 已发送",
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result_without_message.status == "sent"
+    assert result_with_message.status == "sent"
+    assert result_without_message.file_size == file_size
+    assert result_with_message.file_size == file_size
+    assert result_without_message.max_size == 64
+    assert result_with_message.max_size == 64
+    assert delivery_service.send_file_with_preview.await_count == 2
+    assert delivery_service.send_file_with_preview.await_args_list[0].args == (
+        event,
+        output_path,
+    )
+    assert delivery_service.send_file_with_preview.await_args_list[1].args == (
+        event,
+        output_path,
+        "✅ 已发送",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_logs_missing_output_path():
+    workspace_dir = _make_workspace("generated-file-delivery-missing")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=8,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.generated_file_delivery_service.logger.info"
+        ) as logger_info:
+            result = await service.deliver_generated_file(event, None)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "missing"
+    delivery_service.send_file_with_preview.assert_not_called()
+    logger_info.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_delivery_service_logs_preview_generation_failure():
     event = _build_event()
     event.send = AsyncMock()
@@ -657,16 +1210,9 @@ async def test_file_tool_service_reads_text_from_workspace_file():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.read_file(event, Path(__file__).resolve().name)
@@ -703,16 +1249,9 @@ async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.read_file(event, docx_path.name)
@@ -959,16 +1498,9 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1008,16 +1540,9 @@ async def test_file_tool_service_returns_error_when_docx_library_missing():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1087,16 +1612,9 @@ async def test_file_tool_service_skips_unreadable_docx_image_bytes(
             "extract_word_content",
             lambda _path, include_images=True: extracted,
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1163,18 +1681,11 @@ async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             max_inline_docx_image_bytes=20,
             max_inline_docx_image_count=2,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1241,18 +1752,11 @@ async def test_file_tool_service_limits_inline_docx_images():
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             max_inline_docx_image_bytes=20,
             max_inline_docx_image_count=2,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1315,17 +1819,10 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             enable_docx_image_review=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1383,17 +1880,10 @@ async def test_file_tool_service_returns_message_for_image_only_docx_when_review
             )
         )
 
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={"docx": object()},
-            allow_external_input_files=False,
             enable_docx_image_review=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         results = [
@@ -1430,16 +1920,9 @@ async def test_file_tool_service_returns_local_guidance_for_missing_file():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
-            office_generator=MagicMock(),
-            pdf_converter=MagicMock(),
-            delivery_service=MagicMock(),
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.read_file(event, "CLAUDE.md")
@@ -1471,16 +1954,12 @@ async def test_file_tool_service_creates_office_file_via_generator_and_delivery(
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1514,16 +1993,12 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1538,6 +2013,45 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
     assert result == "错误：不支持的文件类型 'unknown'。允许值：excel/powerpoint"
     event.send.assert_not_called()
     office_generator.generate.assert_not_called()
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_returns_error_when_generated_file_missing():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    office_generator = MagicMock()
+    office_generator.generate = AsyncMock(return_value=None)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report.docx",
+            content="hello world",
+            file_type="word",
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert result == "错误：文件生成失败，未找到输出文件"
     delivery_service.send_file_with_preview.assert_not_called()
 
 
@@ -1557,16 +2071,12 @@ async def test_file_tool_service_create_office_file_requires_explicit_type_witho
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"openpyxl": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1602,16 +2112,12 @@ async def test_file_tool_service_create_office_file_rejects_word_fallback_withou
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1652,16 +2158,12 @@ async def test_file_tool_service_create_office_file_returns_direct_result_for_ex
             max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=office_generator,
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = await service.create_office_file(
@@ -1705,16 +2207,12 @@ async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
             max_file_size=1024 * 1024,
             feature_settings={"enable_pdf_conversion": True},
         )
-        service = FileToolService(
+        service = _build_file_tool_service(
             workspace_service=workspace_service,
             office_generator=MagicMock(),
             pdf_converter=pdf_converter,
             delivery_service=delivery_service,
             office_libs={"docx": object()},
-            allow_external_input_files=False,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
         output_path.write_text("pdf", encoding="utf-8")
 
@@ -1730,6 +2228,90 @@ async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
     pdf_converter.office_to_pdf.assert_awaited_once_with(source_path)
     delivery_service.send_file_with_preview.assert_awaited_once()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_convert_to_pdf_returns_error_when_generated_file_missing():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    source_path = workspace_dir / "convert-source-missing.docx"
+    source_path.write_text("demo", encoding="utf-8")
+    pdf_converter = MagicMock()
+    pdf_converter.is_available.return_value = True
+    pdf_converter.office_to_pdf = AsyncMock(return_value=None)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_pdf_conversion": True},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=pdf_converter,
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+        )
+
+        result = await service.convert_to_pdf(
+            event,
+            filename=source_path.name,
+        )
+    finally:
+        source_path.unlink(missing_ok=True)
+        executor.shutdown(wait=False)
+
+    assert result == "错误：PDF 转换失败，未找到生成的 PDF 文件"
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_convert_from_pdf_returns_error_when_generated_file_missing():
+    workspace_dir = Path(__file__).resolve().parent
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    source_path = workspace_dir / "convert-back-missing.pdf"
+    source_path.write_text("pdf", encoding="utf-8")
+    pdf_converter = MagicMock()
+    pdf_converter.is_available.return_value = True
+    pdf_converter.get_missing_dependencies.return_value = []
+    pdf_converter.pdf_to_word = AsyncMock(return_value=None)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_pdf_conversion": True},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=MagicMock(),
+            pdf_converter=pdf_converter,
+            delivery_service=delivery_service,
+            office_libs={},
+        )
+
+        result = await service.convert_from_pdf(
+            event,
+            filename=source_path.name,
+            target_format="word",
+        )
+    finally:
+        source_path.unlink(missing_ok=True)
+        executor.shutdown(wait=False)
+
+    assert result == "错误：PDF→Word 文档 转换失败，未找到生成的文件"
+    delivery_service.send_file_with_preview.assert_not_called()
 
 
 def test_command_service_lists_office_files_in_workspace():

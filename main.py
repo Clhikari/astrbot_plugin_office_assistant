@@ -106,6 +106,7 @@ class FileOperationPlugin(Star):
         self._document_toolset = runtime.document_toolset
         self._llm_request_policy = runtime.llm_request_policy
         self._delivery_service = runtime.delivery_service
+        self._post_export_hook_service = runtime.post_export_hook_service
         self._file_tool_service = runtime.file_tool_service
         self._command_service = runtime.command_service
         self._error_hook_service = runtime.error_hook_service
@@ -239,10 +240,8 @@ class FileOperationPlugin(Star):
     async def _handle_exported_document_tool(
         self, context: ContextWrapper[AstrAgentContext], output_path: str
     ) -> str | None:
-        return await self._delivery_service.handle_exported_document_tool(
-            context,
-            output_path,
-            MSG_DOCUMENT_EXPORTED,
+        return await self._post_export_hook_service.handle_exported_document_tool(
+            context, output_path
         )
 
     async def _send_exported_document(
