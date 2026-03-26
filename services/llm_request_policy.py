@@ -1,8 +1,10 @@
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
+import astrbot.api.message_components as Comp
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 
@@ -41,9 +43,11 @@ class LLMRequestPolicy:
         is_group_feature_enabled: Callable[[AstrMessageEvent], bool],
         check_permission: Callable[[AstrMessageEvent], bool],
         is_bot_mentioned: Callable[[AstrMessageEvent], bool],
-        get_cached_upload_infos,
-        extract_upload_source,
-        store_uploaded_file,
+        get_cached_upload_infos: Callable[[AstrMessageEvent], list[dict]],
+        extract_upload_source: Callable[
+            [Comp.File], Awaitable[tuple[Path | None, str]]
+        ],
+        store_uploaded_file: Callable[[Path, str], Path],
         allow_external_input_files: bool,
         notice_hooks: list[NoticeBuildHook] | None = None,
         tool_exposure_hooks: list[ToolExposureHook] | None = None,
