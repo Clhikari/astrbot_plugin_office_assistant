@@ -905,6 +905,58 @@ async def test_generated_file_delivery_service_rejects_oversized_output():
 
 
 @pytest.mark.asyncio
+async def test_generated_file_delivery_service_sends_existing_output_with_expected_args():
+    workspace_dir = _make_workspace("generated-file-delivery-sent")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    output_path = workspace_dir / "report.pdf"
+    output_path.write_bytes(b"small-pdf")
+    file_size = output_path.stat().st_size
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result_without_message = await service.deliver_generated_file(event, output_path)
+        result_with_message = await service.deliver_generated_file(
+            event,
+            output_path,
+            success_message="✅ 已发送",
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result_without_message.status == "sent"
+    assert result_with_message.status == "sent"
+    assert result_without_message.file_size == file_size
+    assert result_with_message.file_size == file_size
+    assert result_without_message.max_size == 64
+    assert result_with_message.max_size == 64
+    assert delivery_service.send_file_with_preview.await_count == 2
+    assert delivery_service.send_file_with_preview.await_args_list[0].args == (
+        event,
+        output_path,
+    )
+    assert delivery_service.send_file_with_preview.await_args_list[1].args == (
+        event,
+        output_path,
+        "✅ 已发送",
+    )
+
+
+@pytest.mark.asyncio
 async def test_generated_file_delivery_service_logs_missing_output_path():
     workspace_dir = _make_workspace("generated-file-delivery-missing")
     event = _build_event()
