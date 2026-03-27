@@ -207,6 +207,18 @@ class AddBlocksTool(DocumentToolBase):
                                     "items": {"type": "string"},
                                 },
                             },
+                            "header_groups": {
+                                "type": "array",
+                                "description": "Optional grouped header row. Each item defines a title and horizontal span.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {"type": "string"},
+                                        "span": {"type": "integer"},
+                                    },
+                                    "required": ["title", "span"],
+                                },
+                            },
                             "table_style": {"type": "string"},
                             "caption": {
                                 "type": "string",

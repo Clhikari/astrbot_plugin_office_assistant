@@ -270,6 +270,7 @@ class DocumentSessionStore:
             return TableBlock(
                 headers=block.headers,
                 rows=block.rows,
+                header_groups=block.header_groups,
                 table_style=block.table_style or document.metadata.table_template,
                 caption=block.caption or block.title,
                 column_widths=block.column_widths,
@@ -393,6 +394,10 @@ class DocumentSessionStore:
                         "type": BLOCK_TYPE_TABLE,
                         "headers": request.headers,
                         "rows": request.rows,
+                        "header_groups": [
+                            group.model_dump(exclude_none=True)
+                            for group in request.header_groups
+                        ],
                         "table_style": request.table_style,
                         "caption": request.caption or request.title,
                         "column_widths": request.column_widths,

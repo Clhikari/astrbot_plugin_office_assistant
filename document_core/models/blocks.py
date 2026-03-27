@@ -76,10 +76,41 @@ class ListBlock(BlockBase):
         return cleaned
 
 
+class TableHeaderGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    span: int = Field(ge=1)
+
+
+def resolve_table_column_count(headers: list[str], rows: list[list[str]]) -> int:
+    if headers:
+        return len(headers)
+    if rows:
+        return max(len(row) for row in rows)
+    return 0
+
+
+def validate_table_structure(
+    headers: list[str],
+    rows: list[list[str]],
+    header_groups: list[TableHeaderGroup] | None = None,
+) -> None:
+    column_count = resolve_table_column_count(headers, rows)
+    if column_count <= 0:
+        raise ValueError("table requires at least one column from headers or rows")
+    if not header_groups:
+        return
+    total_span = sum(group.span for group in header_groups)
+    if total_span != column_count:
+        raise ValueError("header_groups span total must match table column count")
+
+
 class TableBlock(BlockBase):
     type: Literal["table"] = "table"
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
+    header_groups: list[TableHeaderGroup] = Field(default_factory=list)
     table_style: Literal["report_grid", "metrics_compact", "minimal"] = "report_grid"
     caption: str = ""
     column_widths: list[float] = Field(default_factory=list)
@@ -95,6 +126,11 @@ class TableBlock(BlockBase):
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
         cleaned = sorted({index for index in value if index >= 0})
         return cleaned
+
+    @model_validator(mode="after")
+    def validate_table_shape(self) -> TableBlock:
+        validate_table_structure(self.headers, self.rows, self.header_groups)
+        return self
 
 
 class SummaryCardBlock(BlockBase):

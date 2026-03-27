@@ -6,7 +6,13 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..document_core.models.blocks import BlockLayout, BlockStyle, ParagraphRun
+from ..document_core.models.blocks import (
+    BlockLayout,
+    BlockStyle,
+    ParagraphRun,
+    TableHeaderGroup,
+    validate_table_structure,
+)
 from ..document_core.models.document import DocumentModel
 
 SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
@@ -208,6 +214,7 @@ class AddTableRequest(BaseModel):
     document_id: str
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
+    header_groups: list[TableHeaderGroup] = Field(default_factory=list)
     table_style: str = ""
     caption: str = ""
     title: str = ""
@@ -235,6 +242,11 @@ class AddTableRequest(BaseModel):
     @classmethod
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
         return _normalize_numeric_columns(value)
+
+    @model_validator(mode="after")
+    def validate_table_shape(self) -> AddTableRequest:
+        validate_table_structure(self.headers, self.rows, self.header_groups)
+        return self
 
 
 class SectionTableInput(BaseModel):
@@ -243,6 +255,7 @@ class SectionTableInput(BaseModel):
     type: Literal["table"] = "table"
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
+    header_groups: list[TableHeaderGroup] = Field(default_factory=list)
     table_style: str = ""
     caption: str = ""
     title: str = ""
@@ -270,6 +283,11 @@ class SectionTableInput(BaseModel):
     @classmethod
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
         return _normalize_numeric_columns(value)
+
+    @model_validator(mode="after")
+    def validate_table_shape(self) -> SectionTableInput:
+        validate_table_structure(self.headers, self.rows, self.header_groups)
+        return self
 
 
 class AddSummaryCardRequest(BaseModel):

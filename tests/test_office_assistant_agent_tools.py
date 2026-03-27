@@ -58,6 +58,18 @@ def _cell_fill(cell) -> str | None:
     return shd.get(qn("w:fill"))
 
 
+def _grid_span(cell) -> int:
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.tcPr
+    if tc_pr is None:
+        return 1
+    span = tc_pr.find(qn("w:gridSpan"))
+    if span is None:
+        return 1
+    return int(span.get(qn("w:val"), "1"))
+
+
 @pytest.fixture
 def workspace_root() -> Iterator[Path]:
     workspace_base = Path(__file__).resolve().parent / ".tmp_agent_tools"
@@ -146,6 +158,16 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["text"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"
     assert block_properties["runs"]["items"]["type"] == "object"
+    assert block_properties["header_groups"]["type"] == "array"
+    assert block_properties["header_groups"]["items"]["type"] == "object"
+    assert (
+        block_properties["header_groups"]["items"]["properties"]["title"]["type"]
+        == "string"
+    )
+    assert (
+        block_properties["header_groups"]["items"]["properties"]["span"]["type"]
+        == "integer"
+    )
 
 
 def test_paragraph_schema_requires_text_or_runs():
@@ -466,6 +488,77 @@ async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
     assert abs(table.rows[1].cells[1].width - Cm(3.0)) < 20000
     assert _cell_fill(table.rows[2].cells[0]) == "F7FBFF"
     assert _cell_fill(table.rows[3].cells[0]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("table_style", ["report_grid", "metrics_compact", "minimal"])
+async def test_add_blocks_tool_supports_grouped_table_headers(
+    workspace_root: Path,
+    table_style: str,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm
+
+    workspace_dir = _make_workspace(
+        workspace_root, f"pytest-agent-grouped-table-{table_style}"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="分组表头",
+            output_name=f"grouped-table-{table_style}.docx",
+            table_template=table_style,
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "caption": "季度经营指标",
+                "header_groups": [
+                    {"title": "经营数据", "span": 2},
+                    {"title": "结果", "span": 2},
+                ],
+                "headers": ["区域", "目标", "完成值", "完成率"],
+                "rows": [
+                    ["华东", "120", "118", "98%"],
+                    ["华南", "88", "91", "103%"],
+                ],
+                "column_widths": [3.2, 2.4, 2.4, 2.4],
+                "numeric_columns": [1, 2, 3],
+                "table_style": table_style,
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert len(table.rows) == 5
+    assert table.rows[0].cells[0].text == "季度经营指标"
+    assert table.rows[1].cells[0].text == "经营数据"
+    assert _grid_span(table.rows[1].cells[0]) == 2
+    assert table.rows[1].cells[2].text == "结果"
+    assert _grid_span(table.rows[1].cells[2]) == 2
+    assert table.rows[2].cells[0].text == "区域"
+    assert table.rows[3].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert table.rows[4].cells[3].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert abs(table.rows[2].cells[0].width - Cm(3.2)) < 20000
 
 
 @pytest.mark.asyncio
@@ -1304,6 +1397,9 @@ def test_document_session_store_runs_internal_normalize_hooks():
 def test_table_schema_normalizers_are_shared():
     request = AddTableRequest(
         document_id="doc-1",
+        headers=["区域", "目标"],
+        rows=[["华东", "120"]],
+        header_groups=[{"title": "经营数据", "span": 2}],
         table_style="invalid-style",
         column_widths=[4.2, 0, -1.0, 3.0],
         numeric_columns=[2, -1, 1, 2],
@@ -1311,6 +1407,7 @@ def test_table_schema_normalizers_are_shared():
     section = SectionTableInput(
         headers=["区域"],
         rows=[["华东"]],
+        header_groups=[{"title": "经营概览", "span": 1}],
         table_style="invalid-style",
         column_widths=[4.2, 0, -1.0, 3.0],
         numeric_columns=[2, -1, 1, 2],
@@ -1319,9 +1416,76 @@ def test_table_schema_normalizers_are_shared():
     assert request.table_style == ""
     assert request.column_widths == [4.2, 0, 0, 3.0]
     assert request.numeric_columns == [1, 2]
+    assert request.header_groups[0].span == 2
     assert section.table_style == ""
     assert section.column_widths == [4.2, 0, 0, 3.0]
     assert section.numeric_columns == [1, 2]
+    assert section.header_groups[0].title == "经营概览"
+
+
+def test_table_schema_rejects_invalid_grouped_headers():
+    with pytest.raises(ValidationError, match="header_groups span total must match"):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["区域", "目标"],
+            rows=[["华东", "120"]],
+            header_groups=[{"title": "经营数据", "span": 1}],
+        )
+
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        SectionTableInput(
+            headers=["区域", "目标"],
+            rows=[["华东", "120"]],
+            header_groups=[{"title": "经营数据", "span": 0}],
+        )
+
+
+def test_document_session_store_preserves_grouped_headers_for_table_blocks():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Grouped Table"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "table",
+                    "header_groups": [
+                        {"title": "经营数据", "span": 2},
+                        {"title": "结果", "span": 1},
+                    ],
+                    "headers": ["区域", "目标", "完成率"],
+                    "rows": [["华东", "120", "98%"]],
+                }
+            ],
+        )
+    )
+
+    table = updated.blocks[0]
+    assert table.header_groups[0].title == "经营数据"
+    assert table.header_groups[0].span == 2
+    assert table.header_groups[1].title == "结果"
+
+
+def test_document_session_store_add_table_preserves_grouped_headers():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Legacy Table"))
+
+    updated = store.add_table(
+        AddTableRequest(
+            document_id=document.document_id,
+            headers=["区域", "目标", "完成率"],
+            rows=[["华东", "120", "98%"]],
+            header_groups=[
+                {"title": "经营数据", "span": 2},
+                {"title": "结果", "span": 1},
+            ],
+        )
+    )
+
+    table = updated.blocks[0]
+    assert table.header_groups[0].title == "经营数据"
+    assert table.header_groups[1].span == 1
 
 
 @pytest.mark.asyncio
