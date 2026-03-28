@@ -111,8 +111,9 @@ async def test_before_llm_chat_injects_document_tools_per_request():
         assert "文件工具使用指南" in req.system_prompt
         assert "executive_brief" in req.system_prompt
         assert "accent_color=RRGGBB" in req.system_prompt
-        assert "document_style={brief, heading_color," in req.system_prompt
-        assert "body_font_size, body_line_spacing, table_defaults" in req.system_prompt
+        assert "document_style={brief, heading_color, title_align" in req.system_prompt
+        assert "paragraph_space_after, list_space_after" in req.system_prompt
+        assert "summary_card_defaults, table_defaults" in req.system_prompt
         assert "header_fill" in req.system_prompt
         assert "banded_rows" in req.system_prompt
         assert "first_column_bold" in req.system_prompt

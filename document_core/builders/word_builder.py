@@ -131,7 +131,10 @@ class WordDocumentBuilder:
         elif SummaryCardBlock is not None and isinstance(block, SummaryCardBlock):
             self._add_group(
                 doc,
-                expand_summary_card_block(block),
+                expand_summary_card_block(
+                    block,
+                    **self._summary_card_theme_defaults(theme),
+                ),
                 theme,
                 document_model,
                 workspace_dir,
@@ -145,6 +148,7 @@ class WordDocumentBuilder:
             theme.update(
                 {
                     "margins": {"top": 2.2, "bottom": 2.1, "left": 2.4, "right": 2.3},
+                    "title_align": "center",
                     "title_spacing_after": 14,
                     "heading_space_before": 10,
                     "heading_space_after": 5,
@@ -159,6 +163,7 @@ class WordDocumentBuilder:
             theme.update(
                 {
                     "margins": {"top": 2.8, "bottom": 2.6, "left": 2.8, "right": 2.6},
+                    "title_align": "center",
                     "title_spacing_after": 18,
                     "heading_space_before": 14,
                     "heading_space_after": 8,
@@ -180,10 +185,51 @@ class WordDocumentBuilder:
         if document_style is not None:
             if getattr(document_style, "heading_color", None):
                 theme["heading_color"] = document_style.heading_color
+            if getattr(document_style, "title_align", None):
+                theme["title_align"] = document_style.title_align
             if getattr(document_style, "body_font_size", None) is not None:
                 theme["body_size"] = document_style.body_font_size
             if getattr(document_style, "body_line_spacing", None) is not None:
                 theme["body_line_spacing"] = document_style.body_line_spacing
+            if getattr(document_style, "paragraph_space_after", None) is not None:
+                theme["body_space_after"] = document_style.paragraph_space_after
+            if getattr(document_style, "list_space_after", None) is not None:
+                theme["list_space_after"] = document_style.list_space_after
+
+            summary_card_defaults = getattr(
+                document_style, "summary_card_defaults", None
+            )
+            if summary_card_defaults is not None:
+                if getattr(summary_card_defaults, "title_align", None):
+                    theme["summary_card_title_align"] = (
+                        summary_card_defaults.title_align
+                    )
+                if getattr(summary_card_defaults, "title_emphasis", None):
+                    theme["summary_card_title_emphasis"] = (
+                        summary_card_defaults.title_emphasis
+                    )
+                if getattr(summary_card_defaults, "title_font_scale", None) is not None:
+                    theme["summary_card_title_font_scale"] = (
+                        summary_card_defaults.title_font_scale
+                    )
+                if (
+                    getattr(summary_card_defaults, "title_space_before", None)
+                    is not None
+                ):
+                    theme["summary_card_title_space_before"] = (
+                        summary_card_defaults.title_space_before
+                    )
+                if (
+                    getattr(summary_card_defaults, "title_space_after", None)
+                    is not None
+                ):
+                    theme["summary_card_title_space_after"] = (
+                        summary_card_defaults.title_space_after
+                    )
+                if getattr(summary_card_defaults, "list_space_after", None) is not None:
+                    theme["summary_card_list_space_after"] = (
+                        summary_card_defaults.list_space_after
+                    )
 
             table_defaults = getattr(document_style, "table_defaults", None)
             if table_defaults is not None:
@@ -211,11 +257,10 @@ class WordDocumentBuilder:
         return theme
 
     def _add_title(self, doc: WordDocument, text: str, theme: dict) -> None:
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.shared import Pt
 
         paragraph = doc.add_paragraph()
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.alignment = resolve_alignment(theme.get("title_align"), default=None)
         paragraph.paragraph_format.space_after = Pt(theme["title_spacing_after"])
         run = paragraph.add_run(text)
         format_run(
@@ -292,6 +337,7 @@ class WordDocumentBuilder:
                     variant="summary",
                     style=block.style,
                     layout=block.layout,
+                    **self._summary_card_theme_defaults(theme),
                 ),
                 theme,
                 document_model,
@@ -514,3 +560,14 @@ class WordDocumentBuilder:
         if emphasis == "subtle":
             return rgb(theme["accent"])
         return default_color
+
+    @staticmethod
+    def _summary_card_theme_defaults(theme: dict) -> dict:
+        return {
+            "title_align": theme.get("summary_card_title_align"),
+            "title_emphasis": theme.get("summary_card_title_emphasis"),
+            "title_font_scale": theme.get("summary_card_title_font_scale"),
+            "title_space_before": theme.get("summary_card_title_space_before"),
+            "title_space_after": theme.get("summary_card_title_space_after"),
+            "list_space_after": theme.get("summary_card_list_space_after"),
+        }
