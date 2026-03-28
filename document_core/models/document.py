@@ -45,13 +45,30 @@ class DocumentTableDefaults(BaseModel):
         return normalize_optional_hex_color(value)
 
 
+class DocumentSummaryCardDefaults(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title_align: Literal["left", "center", "right", "justify"] | None = None
+    title_emphasis: Literal["normal", "strong", "subtle"] | None = None
+    title_font_scale: float | None = Field(default=None, ge=0.75, le=2.0)
+    title_space_before: float | None = Field(default=None, ge=0, le=72)
+    title_space_after: float | None = Field(default=None, ge=0, le=72)
+    list_space_after: float | None = Field(default=None, ge=0, le=72)
+
+
 class DocumentStyleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     brief: str = ""
     heading_color: str | None = None
+    title_align: Literal["left", "center", "right", "justify"] | None = None
     body_font_size: float | None = Field(default=None, ge=9.0, le=16.0)
     body_line_spacing: float | None = Field(default=None, ge=1.0, le=2.5)
+    paragraph_space_after: float | None = Field(default=None, ge=0, le=72)
+    list_space_after: float | None = Field(default=None, ge=0, le=72)
+    summary_card_defaults: DocumentSummaryCardDefaults = Field(
+        default_factory=DocumentSummaryCardDefaults
+    )
     table_defaults: DocumentTableDefaults = Field(default_factory=DocumentTableDefaults)
 
     @field_validator("heading_color")
