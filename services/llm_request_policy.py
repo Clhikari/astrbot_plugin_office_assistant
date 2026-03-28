@@ -76,9 +76,13 @@ class LLMRequestPolicy:
             return None
 
         explicit_matches: set[str] = set()
+        tool_invocation_prefix = (
+            r"(?:调用|使用|请求(?:调用|使用)?|请(?!问)(?:调用|使用)?|"
+            r"call|use|invoke|please\s+(?:call|use|invoke))"
+        )
         for tool_name in sorted(FILE_TOOLS, key=len, reverse=True):
             patterns = (
-                rf"(?P<tool>(?:调用|使用|call|use|invoke)\s*`?{re.escape(tool_name)}`?)",
+                rf"(?P<tool>{tool_invocation_prefix}\s*`?{re.escape(tool_name)}`?)",
                 rf"(?P<tool>`{re.escape(tool_name)}`)",
                 rf"(?P<tool>{re.escape(tool_name)}\s*\()",
                 rf"(?P<tool>{re.escape(tool_name)}\s*[,，]\s*[a-zA-Z_]\w*\s*=)",
