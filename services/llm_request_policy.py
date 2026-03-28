@@ -77,7 +77,7 @@ class LLMRequestPolicy:
 
         explicit_matches: set[str] = set()
         tool_invocation_prefix = (
-            r"(?:调用|使用|请求(?:调用|使用)?|请(?:调用|使用)?|"
+            r"(?:调用|使用|请求(?:调用|使用)?|请(?!问)(?:调用|使用)?|"
             r"\b(?:call|use|invoke)\b|\bplease\s+(?:call|use|invoke)\b)"
         )
         for tool_name in sorted(FILE_TOOLS, key=len, reverse=True):
