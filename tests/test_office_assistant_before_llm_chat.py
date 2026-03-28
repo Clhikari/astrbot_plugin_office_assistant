@@ -3,12 +3,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from astrbot_plugin_office_assistant.main import FileOperationPlugin
-from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.internal_hooks import (
     NoticeBuildContext,
     ToolExposureContext,
 )
+from astrbot_plugin_office_assistant.main import FileOperationPlugin
+from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services.llm_request_policy import (
     LLMRequestPolicy,
 )
@@ -238,7 +238,23 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
 
 
 @pytest.mark.asyncio
-async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call():
+@pytest.mark.parametrize(
+    ("prompt", "expected_tool"),
+    [
+        (
+            "调用 create_office_file，filename=report，content=hello，file_type=word",
+            "create_office_file",
+        ),
+        (
+            "reviewpr请求create_office_file，filename=report，content=hello，file_type=word",
+            "create_office_file",
+        ),
+    ],
+)
+async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call(
+    prompt: str,
+    expected_tool: str,
+):
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
@@ -247,7 +263,7 @@ async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call():
             sender_id="user-1",
         )
         req = ProviderRequest(
-            prompt="调用 create_office_file，filename=report，content=hello，file_type=word",
+            prompt=prompt,
             system_prompt="base",
             func_tool=ToolSet(
                 [
@@ -266,7 +282,7 @@ async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call():
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert "create_office_file" in tool_names
+        assert expected_tool in tool_names
         assert "create_document" not in tool_names
         assert "add_blocks" not in tool_names
         assert "finalize_document" not in tool_names
@@ -312,6 +328,39 @@ async def test_before_llm_chat_does_not_restrict_when_prompt_mentions_multiple_t
 
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_does_not_restrict_for_question_style_tool_mention():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        req = ProviderRequest(
+            prompt="请问 create_office_file 怎么用？先告诉我可用工具。",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("create_office_file"),
+                    _tool("create_document"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_office_file" in tool_names
+        assert "create_document" in tool_names
+        assert "read_file" in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
@@ -342,7 +391,6 @@ async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
         assert "read_file" in tool_names
     finally:
         await plugin.terminate()
-
 
 @pytest.mark.asyncio
 async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_call():
