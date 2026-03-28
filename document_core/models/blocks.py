@@ -83,6 +83,20 @@ class TableHeaderGroup(BaseModel):
     span: int = Field(ge=1)
 
 
+TableAlignment = Literal["left", "center"]
+TableBorderStyle = Literal["minimal", "standard", "strong"]
+TableCaptionEmphasis = Literal["normal", "strong"]
+
+
+def normalize_optional_hex_color(value: str | None) -> str | None:
+    candidate = str(value or "").strip().lstrip("#").upper()
+    if not candidate:
+        return None
+    if len(candidate) != 6 or any(char not in "0123456789ABCDEF" for char in candidate):
+        raise ValueError("must be a 6-digit hex color")
+    return candidate
+
+
 def resolve_table_column_count(headers: list[str], rows: list[list[str]]) -> int:
     if headers:
         return len(headers)
@@ -123,6 +137,14 @@ class TableBlock(BlockBase):
     caption: str = ""
     column_widths: list[float] = Field(default_factory=list)
     numeric_columns: list[int] = Field(default_factory=list)
+    header_fill: str | None = None
+    header_text_color: str | None = None
+    banded_rows: bool | None = None
+    banded_row_fill: str | None = None
+    first_column_bold: bool | None = None
+    table_align: TableAlignment | None = None
+    border_style: TableBorderStyle | None = None
+    caption_emphasis: TableCaptionEmphasis | None = None
 
     @field_validator("column_widths")
     @classmethod
@@ -134,6 +156,11 @@ class TableBlock(BlockBase):
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
         cleaned = sorted({index for index in value if index >= 0})
         return cleaned
+
+    @field_validator("header_fill", "header_text_color", "banded_row_fill")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> TableBlock:

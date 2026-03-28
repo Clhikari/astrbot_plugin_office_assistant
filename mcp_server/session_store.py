@@ -23,6 +23,11 @@ from ..document_core.models.document import (
     DocumentModel,
     DocumentStatus,
 )
+from ..internal_hooks import (
+    BlockNormalizationContext,
+    BlockNormalizeHook,
+    run_block_normalize_hooks,
+)
 from .schemas import (
     AddBlocksRequest,
     AddHeadingRequest,
@@ -44,11 +49,6 @@ from .schemas import (
     SectionParagraphInput,
     SectionTableInput,
     _normalize_docx_filename,
-)
-from ..internal_hooks import (
-    BlockNormalizationContext,
-    BlockNormalizeHook,
-    run_block_normalize_hooks,
 )
 
 PLUGIN_NAME = "astrbot_plugin_office_assistant"
@@ -140,6 +140,7 @@ class DocumentSessionStore:
                     table_template=request.table_template,
                     density=request.density,
                     accent_color=request.accent_color,
+                    document_style=request.document_style,
                 ),
             )
             self._documents[document_id] = document
@@ -275,6 +276,14 @@ class DocumentSessionStore:
                 caption=block.caption or block.title,
                 column_widths=block.column_widths,
                 numeric_columns=block.numeric_columns,
+                header_fill=block.header_fill,
+                header_text_color=block.header_text_color,
+                banded_rows=block.banded_rows,
+                banded_row_fill=block.banded_row_fill,
+                first_column_bold=block.first_column_bold,
+                table_align=block.table_align,
+                border_style=block.border_style,
+                caption_emphasis=block.caption_emphasis,
                 style=block.style,
                 layout=block.layout,
             )
@@ -402,6 +411,14 @@ class DocumentSessionStore:
                         "caption": request.caption or request.title,
                         "column_widths": request.column_widths,
                         "numeric_columns": request.numeric_columns,
+                        "header_fill": request.header_fill,
+                        "header_text_color": request.header_text_color,
+                        "banded_rows": request.banded_rows,
+                        "banded_row_fill": request.banded_row_fill,
+                        "first_column_bold": request.first_column_bold,
+                        "table_align": request.table_align,
+                        "border_style": request.border_style,
+                        "caption_emphasis": request.caption_emphasis,
                         "style": request.style.model_dump(exclude_none=True),
                         "layout": request.layout.model_dump(exclude_none=True),
                     }

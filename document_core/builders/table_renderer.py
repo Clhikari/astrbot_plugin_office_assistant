@@ -43,12 +43,15 @@ class TableRenderer:
             + header_row_offset
         )
         table = doc.add_table(rows=row_count, cols=column_count)
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
         style_name = (
             getattr(block.style, "table_grid", None)
             or getattr(block, "table_style", "")
             or default_table_style
             or theme["table_style"]
+        )
+        table.alignment = self._table_alignment(
+            block.table_align or theme.get("table_align"),
+            WD_TABLE_ALIGNMENT,
         )
         resolved_style = self.resolve_docx_table_style(style_name)
         if resolved_style:
@@ -60,8 +63,15 @@ class TableRenderer:
                         table.style = DOCX_TABLE_STYLES["report_grid"]
                     except (KeyError, ValueError):
                         pass
+        self._apply_table_borders(
+            table,
+            border_style=block.border_style or theme.get("table_border_style"),
+            accent_color=theme["accent"],
+        )
 
-        body_alignment = getattr(block.style, "cell_align", None)
+        body_alignment = getattr(block.style, "cell_align", None) or theme.get(
+            "table_cell_align"
+        )
         numeric_columns = set(getattr(block, "numeric_columns", []) or [])
 
         if getattr(block, "column_widths", None):
@@ -83,10 +93,15 @@ class TableRenderer:
                 block.caption,
                 bold=True,
                 alignment=WD_ALIGN_PARAGRAPH.CENTER,
-                font_size=Pt(max(theme["body_size"], 11)),
+                font_size=Pt(
+                    self._caption_font_size(
+                        block.caption_emphasis or theme.get("table_caption_emphasis"),
+                        theme,
+                    )
+                ),
                 font_name=theme["font_name"],
-                color=rgb(theme["accent"]),
-                background=theme["accent_soft"],
+                color=self._caption_color(block, theme),
+                background=self._caption_fill(block, theme),
             )
             row_index = 1
 
@@ -94,6 +109,7 @@ class TableRenderer:
             self._render_group_header_row(
                 table.rows[row_index],
                 block.header_groups,
+                block=block,
                 style_name=style_name,
                 theme=theme,
             )
@@ -109,8 +125,8 @@ class TableRenderer:
                     alignment=WD_ALIGN_PARAGRAPH.CENTER,
                     font_size=Pt(self._table_font_size(style_name, theme, header=True)),
                     font_name=theme["font_name"],
-                    color=self._table_header_color(style_name, theme),
-                    background=self._header_fill(style_name, theme),
+                    color=self._table_header_color(block, style_name, theme),
+                    background=self._header_fill(block, style_name, theme),
                 )
             row_index += 1
 
@@ -127,7 +143,7 @@ class TableRenderer:
                 self._set_cell_text(
                     table.rows[current_row].cells[col_index],
                     values[col_index] if col_index < len(values) else "",
-                    bold=False,
+                    bold=bool(self._first_column_bold(block, theme) and col_index == 0),
                     alignment=resolve_alignment(
                         body_alignment,
                         default=default_alignment,
@@ -136,7 +152,12 @@ class TableRenderer:
                         self._table_font_size(style_name, theme, header=False)
                     ),
                     font_name=theme["font_name"],
-                    background=self._table_row_fill(style_name, data_row_index + 1),
+                    background=self._table_row_fill(
+                        block,
+                        style_name,
+                        data_row_index + 1,
+                        theme,
+                    ),
                 )
 
     def _render_group_header_row(
@@ -144,6 +165,7 @@ class TableRenderer:
         row,
         header_groups,
         *,
+        block,
         style_name: str,
         theme: dict,
     ) -> None:
@@ -163,8 +185,8 @@ class TableRenderer:
                 alignment=WD_ALIGN_PARAGRAPH.CENTER,
                 font_size=Pt(self._table_font_size(style_name, theme, header=True)),
                 font_name=theme["font_name"],
-                color=self._table_header_color(style_name, theme),
-                background=self._header_fill(style_name, theme),
+                color=self._table_header_color(block, style_name, theme),
+                background=self._header_fill(block, style_name, theme),
             )
             current_col = span_end
 
@@ -204,22 +226,49 @@ class TableRenderer:
             TableRenderer._set_cell_background(cell, background)
 
     @staticmethod
-    def _header_fill(style_name: str, theme: dict) -> str | None:
+    def _header_fill(block, style_name: str, theme: dict) -> str | None:
+        if block.header_fill:
+            return block.header_fill
+        if theme.get("table_header_fill"):
+            return theme["table_header_fill"]
         if style_name == "minimal":
             return theme["accent_soft"]
         return theme["accent"]
 
     @staticmethod
-    def _table_header_color(style_name: str, theme: dict):
+    def _table_header_color(block, style_name: str, theme: dict):
+        if block.header_text_color:
+            return rgb(block.header_text_color)
+        if theme.get("table_header_text_color"):
+            return rgb(theme["table_header_text_color"])
         if style_name == "minimal":
             return rgb(theme["accent"])
         return rgb("FFFFFF")
 
     @staticmethod
-    def _table_row_fill(style_name: str, row_index: int) -> str | None:
+    def _table_row_fill(
+        block,
+        style_name: str,
+        row_index: int,
+        theme: dict,
+    ) -> str | None:
+        if block.banded_rows is False:
+            return None
+        if block.banded_rows is True and row_index % 2 == 1:
+            return block.banded_row_fill or "F7FBFF"
+        if theme.get("table_banded_rows") is True:
+            if row_index % 2 == 1:
+                return theme.get("table_banded_row_fill") or "F7FBFF"
+            return None
         if style_name == "report_grid" and row_index % 2 == 1:
             return "F7FBFF"
         return None
+
+    @staticmethod
+    def _first_column_bold(block, theme: dict) -> bool:
+        if block.first_column_bold is not None:
+            return block.first_column_bold
+        return bool(theme.get("table_first_column_bold"))
 
     @staticmethod
     def _table_font_size(style_name: str, theme: dict, *, header: bool) -> float:
@@ -241,3 +290,72 @@ class TableRenderer:
             shd = OxmlElement("w:shd")
             tc_pr.append(shd)
         shd.set(qn("w:fill"), fill)
+
+    @staticmethod
+    def _table_alignment(table_align: str | None, alignment_enum):
+        if table_align == "left":
+            return alignment_enum.LEFT
+        return alignment_enum.CENTER
+
+    @staticmethod
+    def _caption_fill(block, theme: dict) -> str:
+        resolved_emphasis = block.caption_emphasis or theme.get(
+            "table_caption_emphasis"
+        )
+        if resolved_emphasis == "strong":
+            return (
+                block.header_fill or theme.get("table_header_fill") or theme["accent"]
+            )
+        return theme["accent_soft"]
+
+    @staticmethod
+    def _caption_color(block, theme: dict):
+        resolved_emphasis = block.caption_emphasis or theme.get(
+            "table_caption_emphasis"
+        )
+        if resolved_emphasis == "strong":
+            return rgb(
+                block.header_text_color
+                or theme.get("table_header_text_color")
+                or "FFFFFF"
+            )
+        return rgb(theme["accent"])
+
+    @staticmethod
+    def _caption_font_size(caption_emphasis: str | None, theme: dict) -> float:
+        base_size = max(theme["body_size"], 11)
+        if caption_emphasis == "strong":
+            return base_size + 1
+        return base_size
+
+    @staticmethod
+    def _apply_table_borders(
+        table, *, border_style: str | None, accent_color: str
+    ) -> None:
+        if not border_style:
+            return
+
+        border_map = {
+            "minimal": {"size": "4", "color": "D0D7DE"},
+            "standard": {"size": "8", "color": "7A7A7A"},
+            "strong": {"size": "16", "color": accent_color},
+        }
+        border_spec = border_map[border_style]
+
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        tbl_pr = table._tbl.tblPr
+        tbl_borders = tbl_pr.find(qn("w:tblBorders"))
+        if tbl_borders is None:
+            tbl_borders = OxmlElement("w:tblBorders")
+            tbl_pr.append(tbl_borders)
+
+        for edge_name in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            edge = tbl_borders.find(qn(f"w:{edge_name}"))
+            if edge is None:
+                edge = OxmlElement(f"w:{edge_name}")
+                tbl_borders.append(edge)
+            edge.set(qn("w:val"), "single")
+            edge.set(qn("w:sz"), border_spec["size"])
+            edge.set(qn("w:color"), border_spec["color"])
