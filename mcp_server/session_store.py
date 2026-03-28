@@ -288,7 +288,7 @@ class DocumentSessionStore:
                 layout=block.layout,
             )
         if isinstance(block, SectionCardInput):
-            expanded = self._expand_summary_card_block(block)
+            expanded = self._expand_summary_card_block(block, document)
             if len(expanded) != 1:
                 return GroupBlock(blocks=expanded)
             return expanded[0]
@@ -318,10 +318,17 @@ class DocumentSessionStore:
             )
         raise TypeError(f"Unsupported block input: {type(block)!r}")
 
-    def _expand_summary_card_block(self, block: SectionCardInput) -> list:
+    def _expand_summary_card_block(
+        self, block: SectionCardInput, document: DocumentModel
+    ) -> list:
         try:
             from ..document_core.macros import build_summary_card_group
 
+            summary_defaults = getattr(
+                getattr(document.metadata, "document_style", None),
+                "summary_card_defaults",
+                None,
+            )
             return [
                 build_summary_card_group(
                     title=block.title,
@@ -329,6 +336,20 @@ class DocumentSessionStore:
                     variant=block.variant,
                     style=block.style,
                     layout=block.layout,
+                    title_align=getattr(summary_defaults, "title_align", None),
+                    title_emphasis=getattr(summary_defaults, "title_emphasis", None),
+                    title_font_scale=getattr(
+                        summary_defaults, "title_font_scale", None
+                    ),
+                    title_space_before=getattr(
+                        summary_defaults, "title_space_before", None
+                    ),
+                    title_space_after=getattr(
+                        summary_defaults, "title_space_after", None
+                    ),
+                    list_space_after=getattr(
+                        summary_defaults, "list_space_after", None
+                    ),
                 )
             ]
         except Exception:

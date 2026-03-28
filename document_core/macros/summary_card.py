@@ -54,19 +54,39 @@ def build_summary_card_group(
     variant: str = "summary",
     style: BlockStyle | None = None,
     layout: BlockLayout | None = None,
+    title_align: str | None = None,
+    title_emphasis: str | None = None,
+    title_font_scale: float | None = None,
+    title_space_before: float | None = None,
+    title_space_after: float | None = None,
+    list_space_after: float | None = None,
 ) -> GroupBlock:
     normalized_variant = "conclusion" if variant == "conclusion" else "summary"
     title_style = _merge_style(
         style,
-        emphasis="subtle" if normalized_variant == "conclusion" else "strong",
-        font_scale=1.05,
+        emphasis=(
+            title_emphasis
+            if title_emphasis is not None
+            else ("subtle" if normalized_variant == "conclusion" else "strong")
+        ),
+        font_scale=title_font_scale if title_font_scale is not None else 1.05,
     )
+    if title_align is not None:
+        title_style.align = title_align
     body_style = _merge_style(
         style,
         emphasis="subtle" if normalized_variant == "conclusion" else None,
     )
-    title_layout = _merge_layout(layout, spacing_before=6, spacing_after=2)
-    list_layout = _merge_layout(layout, spacing_before=0, spacing_after=6)
+    title_layout = _merge_layout(
+        layout,
+        spacing_before=title_space_before if title_space_before is not None else 6,
+        spacing_after=title_space_after if title_space_after is not None else 2,
+    )
+    list_layout = _merge_layout(
+        layout,
+        spacing_before=0,
+        spacing_after=list_space_after if list_space_after is not None else 6,
+    )
     return GroupBlock(
         blocks=[
             ParagraphBlock(
@@ -84,11 +104,26 @@ def build_summary_card_group(
     )
 
 
-def expand_summary_card_block(block: SummaryCardBlock) -> GroupBlock:
+def expand_summary_card_block(
+    block: SummaryCardBlock,
+    *,
+    title_align: str | None = None,
+    title_emphasis: str | None = None,
+    title_font_scale: float | None = None,
+    title_space_before: float | None = None,
+    title_space_after: float | None = None,
+    list_space_after: float | None = None,
+) -> GroupBlock:
     return build_summary_card_group(
         title=block.title,
         items=list(block.items),
         variant=block.variant,
         style=block.style,
         layout=block.layout,
+        title_align=title_align,
+        title_emphasis=title_emphasis,
+        title_font_scale=title_font_scale,
+        title_space_before=title_space_before,
+        title_space_after=title_space_after,
+        list_space_after=list_space_after,
     )
