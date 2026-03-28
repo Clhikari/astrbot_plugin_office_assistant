@@ -125,7 +125,7 @@ class CreateDocumentTool(DocumentToolBase):
                     "properties": {
                         "brief": {
                             "type": "string",
-                            "description": "Optional natural-language style brief for the whole document, such as deep blue business report or light gray minimalist memo.",
+                            "description": "Optional natural-language style brief stored as document metadata for future preset mapping. Explicit document_style fields control rendering today.",
                         },
                         "heading_color": {
                             "type": "string",
@@ -159,15 +159,29 @@ class CreateDocumentTool(DocumentToolBase):
                                 "title_align": {
                                     "type": "string",
                                     "enum": ["left", "center", "right", "justify"],
+                                    "description": "Optional alignment default for summary card titles.",
                                 },
                                 "title_emphasis": {
                                     "type": "string",
                                     "enum": ["normal", "strong", "subtle"],
+                                    "description": "Optional emphasis default for summary card titles.",
                                 },
-                                "title_font_scale": {"type": "number"},
-                                "title_space_before": {"type": "number"},
-                                "title_space_after": {"type": "number"},
-                                "list_space_after": {"type": "number"},
+                                "title_font_scale": {
+                                    "type": "number",
+                                    "description": "Optional font scale default for summary card titles.",
+                                },
+                                "title_space_before": {
+                                    "type": "number",
+                                    "description": "Optional spacing before summary card titles.",
+                                },
+                                "title_space_after": {
+                                    "type": "number",
+                                    "description": "Optional spacing after summary card titles.",
+                                },
+                                "list_space_after": {
+                                    "type": "number",
+                                    "description": "Optional spacing after summary card list items.",
+                                },
                             },
                         },
                         "table_defaults": {
@@ -181,27 +195,47 @@ class CreateDocumentTool(DocumentToolBase):
                                         "metrics_compact",
                                         "minimal",
                                     ],
+                                    "description": "Optional default table preset applied when a table block does not set table_style.",
                                 },
-                                "header_fill": {"type": "string"},
-                                "header_text_color": {"type": "string"},
-                                "banded_rows": {"type": "boolean"},
-                                "banded_row_fill": {"type": "string"},
-                                "first_column_bold": {"type": "boolean"},
+                                "header_fill": {
+                                    "type": "string",
+                                    "description": "Optional 6-digit hex color for default table header backgrounds.",
+                                },
+                                "header_text_color": {
+                                    "type": "string",
+                                    "description": "Optional 6-digit hex color for default table header text.",
+                                },
+                                "banded_rows": {
+                                    "type": "boolean",
+                                    "description": "Optional flag to enable alternating row fills by default.",
+                                },
+                                "banded_row_fill": {
+                                    "type": "string",
+                                    "description": "Optional 6-digit hex color for default alternating table rows.",
+                                },
+                                "first_column_bold": {
+                                    "type": "boolean",
+                                    "description": "Optional flag to emphasize the first table column by default.",
+                                },
                                 "table_align": {
                                     "type": "string",
                                     "enum": ["left", "center"],
+                                    "description": "Optional default alignment for whole tables.",
                                 },
                                 "border_style": {
                                     "type": "string",
                                     "enum": ["minimal", "standard", "strong"],
+                                    "description": "Optional default border weight preset for tables.",
                                 },
                                 "caption_emphasis": {
                                     "type": "string",
                                     "enum": ["normal", "strong"],
+                                    "description": "Optional default emphasis preset for merged table caption rows.",
                                 },
                                 "cell_align": {
                                     "type": "string",
                                     "enum": ["left", "center", "right"],
+                                    "description": "Optional default paragraph alignment for table body cells.",
                                 },
                             },
                         },

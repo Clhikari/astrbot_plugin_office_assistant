@@ -365,6 +365,30 @@ def test_create_document_request_normalizes_document_style():
     assert request.document_style.table_defaults.cell_align == "center"
 
 
+def test_create_document_request_rejects_invalid_document_style_heading_color():
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Invalid heading color",
+            document_style={
+                "brief": "invalid color",
+                "heading_color": "blue",
+            },
+        )
+
+
+def test_create_document_request_rejects_invalid_table_defaults_header_fill():
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Invalid table header fill",
+            document_style={
+                "brief": "invalid table defaults",
+                "table_defaults": {
+                    "header_fill": "123",
+                },
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_document_toolset_smoke_export(workspace_root: Path):
     docx = pytest.importorskip("docx")
@@ -575,6 +599,7 @@ async def test_create_document_tool_applies_document_style_defaults(
     assert _cell_fill(table.rows[2].cells[0]) == "EEF4FA"
     assert _run_bold(table.rows[2].cells[0]) is True
     assert _run_bold(table.rows[2].cells[1]) is False
+    assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert _table_border_size(table, "top") == "8"
 
 
