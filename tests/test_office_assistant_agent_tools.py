@@ -168,6 +168,10 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         block_properties["header_groups"]["items"]["properties"]["span"]["type"]
         == "integer"
     )
+    assert block_properties["header_groups"]["items"]["required"] == [
+        "title",
+        "span",
+    ]
 
 
 def test_paragraph_schema_requires_text_or_runs():
