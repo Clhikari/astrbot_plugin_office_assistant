@@ -304,13 +304,8 @@ async def test_before_llm_chat_restricts_for_request_style_explicit_tool_call():
         await plugin.before_llm_chat(event, req)
 
         tool_names = set(req.func_tool.names())
-        assert "existing_tool" in tool_names
-        assert "create_office_file" in tool_names
-        assert "create_document" not in tool_names
-        assert "add_blocks" not in tool_names
-        assert "finalize_document" not in tool_names
-        assert "export_document" not in tool_names
-        assert "read_file" not in tool_names
+        expected_tools = {"existing_tool", "create_office_file"}
+        assert tool_names == expected_tools
     finally:
         await plugin.terminate()
 
