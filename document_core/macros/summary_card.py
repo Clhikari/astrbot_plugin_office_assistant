@@ -47,15 +47,20 @@ def summary_card_defaults_from_theme(theme: dict) -> dict[str, object | None]:
 def _merge_style(
     base: BlockStyle | None,
     *,
+    align: str | None = None,
     emphasis: str | None = None,
     font_scale: float | None = None,
 ) -> BlockStyle:
     return BlockStyle(
-        align=getattr(base, "align", None),
-        emphasis=emphasis if emphasis is not None else getattr(base, "emphasis", None),
-        font_scale=(
-            font_scale if font_scale is not None else getattr(base, "font_scale", None)
-        ),
+        align=getattr(base, "align", None)
+        if getattr(base, "align", None) is not None
+        else align,
+        emphasis=getattr(base, "emphasis", None)
+        if getattr(base, "emphasis", None) is not None
+        else emphasis,
+        font_scale=getattr(base, "font_scale", None)
+        if getattr(base, "font_scale", None) is not None
+        else font_scale,
         table_grid=getattr(base, "table_grid", None),
         cell_align=getattr(base, "cell_align", None),
     )
@@ -68,16 +73,12 @@ def _merge_layout(
     spacing_after: float | None = None,
 ) -> BlockLayout:
     return BlockLayout(
-        spacing_before=(
-            spacing_before
-            if spacing_before is not None
-            else getattr(base, "spacing_before", None)
-        ),
-        spacing_after=(
-            spacing_after
-            if spacing_after is not None
-            else getattr(base, "spacing_after", None)
-        ),
+        spacing_before=getattr(base, "spacing_before", None)
+        if getattr(base, "spacing_before", None) is not None
+        else spacing_before,
+        spacing_after=getattr(base, "spacing_after", None)
+        if getattr(base, "spacing_after", None) is not None
+        else spacing_after,
     )
 
 
@@ -98,6 +99,7 @@ def build_summary_card_group(
     normalized_variant = "conclusion" if variant == "conclusion" else "summary"
     title_style = _merge_style(
         style,
+        align=title_align,
         emphasis=(
             title_emphasis
             if title_emphasis is not None
@@ -105,8 +107,6 @@ def build_summary_card_group(
         ),
         font_scale=title_font_scale if title_font_scale is not None else 1.05,
     )
-    if title_align is not None:
-        title_style.align = title_align
     body_style = _merge_style(
         style,
         emphasis="subtle" if normalized_variant == "conclusion" else None,
