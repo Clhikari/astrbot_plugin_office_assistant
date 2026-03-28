@@ -1,8 +1,4 @@
-import shutil
 from pathlib import Path
-from uuid import uuid4
-
-import pytest
 
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     ParagraphBlock,
@@ -11,18 +7,6 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
 from astrbot_plugin_office_assistant.office_generator import (
     OfficeGenerator,
 )
-
-
-@pytest.fixture
-def workspace_root() -> Path:
-    workspace_base = Path(__file__).resolve().parent / ".tmp_office_generator"
-    workspace_base.mkdir(parents=True, exist_ok=True)
-    workspace_dir = workspace_base / f"workspace-root-{uuid4().hex}"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        yield workspace_dir
-    finally:
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
 
 def test_build_word_document_model_skips_invalid_blocks(workspace_root: Path):

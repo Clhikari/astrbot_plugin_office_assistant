@@ -209,7 +209,7 @@ class AddBlocksTool(DocumentToolBase):
                             },
                             "header_groups": {
                                 "type": "array",
-                                "description": "Optional grouped header row. Each item defines a title and horizontal span.",
+                                "description": "Optional grouped header definitions. Each item defines a title and horizontal span.",
                                 "items": {
                                     "type": "object",
                                     "properties": {

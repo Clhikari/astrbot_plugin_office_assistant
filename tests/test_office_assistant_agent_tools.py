@@ -1,8 +1,6 @@
 import json
-import shutil
 import struct
 import zlib
-from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -69,20 +67,6 @@ def _grid_span(cell) -> int:
     if span is None:
         return 1
     return int(span.get(qn("w:val"), "1"))
-
-
-@pytest.fixture
-def workspace_root() -> Iterator[Path]:
-    workspace_base = Path(__file__).resolve().parent / ".tmp_agent_tools"
-    workspace_base.mkdir(parents=True, exist_ok=True)
-    temp_dir = workspace_base / f"workspace-root-{uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        yield temp_dir
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
 def _make_workspace(workspace_root: Path, name: str) -> Path:
     workspace_dir = workspace_root / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
