@@ -6,7 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .blocks import DocumentBlock
+from .blocks import (
+    DocumentBlock,
+    TableAlignment,
+    TableBorderStyle,
+    TableCaptionEmphasis,
+    normalize_optional_hex_color,
+)
 
 
 def utc_now() -> datetime:
@@ -17,6 +23,41 @@ class DocumentStatus(StrEnum):
     DRAFT = "draft"
     FINALIZED = "finalized"
     EXPORTED = "exported"
+
+
+class DocumentTableDefaults(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preset: Literal["report_grid", "metrics_compact", "minimal"] | None = None
+    header_fill: str | None = None
+    header_text_color: str | None = None
+    banded_rows: bool | None = None
+    banded_row_fill: str | None = None
+    first_column_bold: bool | None = None
+    table_align: TableAlignment | None = None
+    border_style: TableBorderStyle | None = None
+    caption_emphasis: TableCaptionEmphasis | None = None
+    cell_align: Literal["left", "center", "right"] | None = None
+
+    @field_validator("header_fill", "header_text_color", "banded_row_fill")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class DocumentStyleConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = ""
+    heading_color: str | None = None
+    body_font_size: float | None = Field(default=None, ge=9.0, le=16.0)
+    body_line_spacing: float | None = Field(default=None, ge=1.0, le=2.5)
+    table_defaults: DocumentTableDefaults = Field(default_factory=DocumentTableDefaults)
+
+    @field_validator("heading_color")
+    @classmethod
+    def validate_heading_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
 
 class DocumentMetadata(BaseModel):
@@ -36,6 +77,7 @@ class DocumentMetadata(BaseModel):
     ] = "report_grid"
     density: Literal["comfortable", "compact"] = "comfortable"
     accent_color: str = ""
+    document_style: DocumentStyleConfig = Field(default_factory=DocumentStyleConfig)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

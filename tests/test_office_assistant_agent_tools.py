@@ -67,6 +67,57 @@ def _grid_span(cell) -> int:
     if span is None:
         return 1
     return int(span.get(qn("w:val"), "1"))
+
+
+def _run_rgb(cell) -> str | None:
+    runs = cell.paragraphs[0].runs
+    if not runs:
+        return None
+    color = runs[0].font.color.rgb
+    return str(color) if color is not None else None
+
+
+def _run_bold(cell) -> bool | None:
+    runs = cell.paragraphs[0].runs
+    if not runs:
+        return None
+    return runs[0].bold
+
+
+def _paragraph_run_rgb(paragraph) -> str | None:
+    runs = paragraph.runs
+    if not runs:
+        return None
+    color = runs[0].font.color.rgb
+    return str(color) if color is not None else None
+
+
+def _paragraph_run_size(paragraph) -> float | None:
+    runs = paragraph.runs
+    if not runs or runs[0].font.size is None:
+        return None
+    return runs[0].font.size.pt
+
+
+def _find_paragraph(doc, text: str):
+    return next(paragraph for paragraph in doc.paragraphs if paragraph.text == text)
+
+
+def _table_border_size(table, edge_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    tbl_pr = table._tbl.tblPr
+    if tbl_pr is None:
+        return None
+    tbl_borders = tbl_pr.find(qn("w:tblBorders"))
+    if tbl_borders is None:
+        return None
+    edge = tbl_borders.find(qn(f"w:{edge_name}"))
+    if edge is None:
+        return None
+    return edge.get(qn("w:sz"))
+
+
 def _make_workspace(workspace_root: Path, name: str) -> Path:
     workspace_dir = workspace_root / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +165,34 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
         / "documents"
     )
     assert stores[0].workspace_dir == expected_workspace
+
+
+def test_create_document_tool_schema_exposes_document_style():
+    toolset = build_document_toolset()
+    create_document_tool = next(
+        tool for tool in toolset.tools if tool.name == "create_document"
+    )
+
+    properties = create_document_tool.parameters["properties"]
+    document_style = properties["document_style"]["properties"]
+    table_defaults = document_style["table_defaults"]["properties"]
+
+    assert document_style["brief"]["type"] == "string"
+    assert document_style["heading_color"]["type"] == "string"
+    assert document_style["body_font_size"]["type"] == "number"
+    assert document_style["body_line_spacing"]["type"] == "number"
+    assert table_defaults["preset"]["enum"] == [
+        "report_grid",
+        "metrics_compact",
+        "minimal",
+    ]
+    assert table_defaults["table_align"]["enum"] == ["left", "center"]
+    assert table_defaults["border_style"]["enum"] == [
+        "minimal",
+        "standard",
+        "strong",
+    ]
+    assert table_defaults["cell_align"]["enum"] == ["left", "center", "right"]
 
 
 def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
@@ -164,6 +243,18 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         "title",
         "span",
     ]
+    assert block_properties["header_fill"]["type"] == "string"
+    assert block_properties["header_text_color"]["type"] == "string"
+    assert block_properties["banded_rows"]["type"] == "boolean"
+    assert block_properties["banded_row_fill"]["type"] == "string"
+    assert block_properties["first_column_bold"]["type"] == "boolean"
+    assert block_properties["table_align"]["enum"] == ["left", "center"]
+    assert block_properties["border_style"]["enum"] == [
+        "minimal",
+        "standard",
+        "strong",
+    ]
+    assert block_properties["caption_emphasis"]["enum"] == ["normal", "strong"]
 
 
 def test_paragraph_schema_requires_text_or_runs():
@@ -198,6 +289,45 @@ async def test_create_document_tool_does_not_stringify_missing_session():
     assert created["success"] is True
     document = tool.store.require_document(created["document"]["document_id"])
     assert document.session_id == ""
+
+
+def test_create_document_request_normalizes_document_style():
+    request = CreateDocumentRequest(
+        title="Styled",
+        document_style={
+            "brief": "deep blue business report",
+            "heading_color": "#1f4e79",
+            "body_font_size": 12,
+            "body_line_spacing": 1.25,
+            "table_defaults": {
+                "preset": "minimal",
+                "header_fill": "#dce6f1",
+                "header_text_color": "ffffff",
+                "banded_rows": True,
+                "banded_row_fill": "eef4fa",
+                "first_column_bold": True,
+                "table_align": "left",
+                "border_style": "strong",
+                "caption_emphasis": "strong",
+                "cell_align": "center",
+            },
+        },
+    )
+
+    assert request.document_style.brief == "deep blue business report"
+    assert request.document_style.heading_color == "1F4E79"
+    assert request.document_style.body_font_size == 12
+    assert request.document_style.body_line_spacing == 1.25
+    assert request.document_style.table_defaults.preset == "minimal"
+    assert request.document_style.table_defaults.header_fill == "DCE6F1"
+    assert request.document_style.table_defaults.header_text_color == "FFFFFF"
+    assert request.document_style.table_defaults.banded_rows is True
+    assert request.document_style.table_defaults.banded_row_fill == "EEF4FA"
+    assert request.document_style.table_defaults.first_column_bold is True
+    assert request.document_style.table_defaults.table_align == "left"
+    assert request.document_style.table_defaults.border_style == "strong"
+    assert request.document_style.table_defaults.caption_emphasis == "strong"
+    assert request.document_style.table_defaults.cell_align == "center"
 
 
 @pytest.mark.asyncio
@@ -294,6 +424,91 @@ async def test_document_toolset_smoke_export(workspace_root: Path):
     assert loaded_doc.paragraphs[2].paragraph_format.space_after.pt == pytest.approx(
         9, abs=0.5
     )
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_applies_document_style_defaults(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-document-style")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Styled Report",
+            output_name="styled-report.docx",
+            theme_name="business_report",
+            document_style={
+                "brief": "deep blue business report",
+                "heading_color": "0F4C81",
+                "body_font_size": 12,
+                "body_line_spacing": 1.25,
+                "table_defaults": {
+                    "preset": "minimal",
+                    "header_fill": "DCE6F1",
+                    "header_text_color": "123456",
+                    "banded_rows": True,
+                    "banded_row_fill": "EEF4FA",
+                    "first_column_bold": True,
+                    "table_align": "left",
+                    "border_style": "standard",
+                    "caption_emphasis": "strong",
+                    "cell_align": "center",
+                },
+            },
+        )
+    )
+    document_id = created["document"]["document_id"]
+    assert created["document"]["document_style"]["brief"] == "deep blue business report"
+    assert created["document"]["document_style"]["heading_color"] == "0F4C81"
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "Overview", "level": 1},
+            {"type": "paragraph", "text": "Styled body paragraph."},
+            {"type": "list", "items": ["Alpha", "Beta"]},
+            {
+                "type": "summary_card",
+                "title": "Highlights",
+                "items": ["Stable revenue", "Lower churn"],
+                "variant": "conclusion",
+            },
+            {
+                "type": "table",
+                "caption": "Quarterly Summary",
+                "headers": ["Region", "Score"],
+                "rows": [["East", "92"], ["West", "88"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    heading_paragraph = _find_paragraph(loaded_doc, "Overview")
+    body_paragraph = _find_paragraph(loaded_doc, "Styled body paragraph.")
+    table = loaded_doc.tables[0]
+
+    assert _paragraph_run_rgb(heading_paragraph) == "0F4C81"
+    assert _paragraph_run_size(body_paragraph) == 12
+    assert float(body_paragraph.paragraph_format.line_spacing) == pytest.approx(1.25)
+    assert _cell_fill(table.rows[0].cells[0]) == "DCE6F1"
+    assert _run_rgb(table.rows[0].cells[0]) == "123456"
+    assert _cell_fill(table.rows[2].cells[0]) == "EEF4FA"
+    assert _run_bold(table.rows[2].cells[0]) is True
+    assert _run_bold(table.rows[2].cells[1]) is False
+    assert _table_border_size(table, "top") == "8"
 
 
 @pytest.mark.asyncio
@@ -555,6 +770,76 @@ async def test_add_blocks_tool_supports_grouped_table_headers(
     assert table.rows[3].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert table.rows[4].cells[3].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert abs(table.rows[2].cells[0].width - Cm(3.2)) < 20000
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_applies_custom_table_style_overrides(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-custom-table-style")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="样式覆盖",
+            output_name="custom-table-style.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "caption": "季度经营指标",
+                "caption_emphasis": "strong",
+                "header_groups": [
+                    {"title": "经营数据", "span": 2},
+                    {"title": "结果", "span": 2},
+                ],
+                "headers": ["区域", "目标", "完成值", "完成率"],
+                "rows": [
+                    ["华东", "120", "118", "98%"],
+                    ["华南", "88", "91", "103%"],
+                ],
+                "header_fill": "1F4E79",
+                "header_text_color": "FFFFFF",
+                "banded_rows": True,
+                "banded_row_fill": "EEF4FA",
+                "first_column_bold": True,
+                "table_align": "left",
+                "border_style": "strong",
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert table.alignment == WD_TABLE_ALIGNMENT.LEFT
+    assert _cell_fill(table.rows[0].cells[0]) == "1F4E79"
+    assert _run_rgb(table.rows[0].cells[0]) == "FFFFFF"
+    assert _cell_fill(table.rows[1].cells[0]) == "1F4E79"
+    assert _run_rgb(table.rows[1].cells[0]) == "FFFFFF"
+    assert _cell_fill(table.rows[3].cells[0]) == "EEF4FA"
+    assert _cell_fill(table.rows[4].cells[0]) is None
+    assert _run_bold(table.rows[3].cells[0]) is True
+    assert _run_bold(table.rows[3].cells[1]) is False
+    assert _table_border_size(table, "top") == "16"
 
 
 @pytest.mark.asyncio
@@ -1399,6 +1684,14 @@ def test_table_schema_normalizers_are_shared():
         table_style="invalid-style",
         column_widths=[4.2, 0, -1.0, 3.0],
         numeric_columns=[2, -1, 1, 2],
+        header_fill="#1f4e79",
+        header_text_color="ffffff",
+        banded_rows=True,
+        banded_row_fill="eef4fa",
+        first_column_bold=True,
+        table_align="center",
+        border_style="strong",
+        caption_emphasis="strong",
     )
     section = SectionTableInput(
         headers=["区域"],
@@ -1407,21 +1700,46 @@ def test_table_schema_normalizers_are_shared():
         table_style="invalid-style",
         column_widths=[4.2, 0, -1.0, 3.0],
         numeric_columns=[2, -1, 1, 2],
+        header_fill="1f4e79",
+        header_text_color="#ffffff",
+        banded_rows=False,
+        banded_row_fill="#eef4fa",
+        first_column_bold=False,
+        table_align="left",
+        border_style="minimal",
+        caption_emphasis="normal",
     )
 
     assert request.table_style == ""
     assert request.column_widths == [4.2, 0, 0, 3.0]
     assert request.numeric_columns == [1, 2]
     assert request.header_groups[0].span == 2
+    assert request.header_fill == "1F4E79"
+    assert request.header_text_color == "FFFFFF"
+    assert request.banded_rows is True
+    assert request.banded_row_fill == "EEF4FA"
+    assert request.first_column_bold is True
+    assert request.table_align == "center"
+    assert request.border_style == "strong"
+    assert request.caption_emphasis == "strong"
     assert section.table_style == ""
     assert section.column_widths == [4.2, 0, 0, 3.0]
     assert section.numeric_columns == [1, 2]
     assert section.header_groups[0].title == "经营概览"
+    assert section.header_fill == "1F4E79"
+    assert section.header_text_color == "FFFFFF"
+    assert section.banded_rows is False
+    assert section.banded_row_fill == "EEF4FA"
+    assert section.first_column_bold is False
+    assert section.table_align == "left"
+    assert section.border_style == "minimal"
+    assert section.caption_emphasis == "normal"
 
 
 def test_table_schema_rejects_invalid_grouped_headers():
     with pytest.raises(
-        ValidationError, match=r"header_groups span total \(1\) must equal column count \(2\)"
+        ValidationError,
+        match=r"header_groups span total \(1\) must equal column count \(2\)",
     ):
         AddTableRequest(
             document_id="doc-1",
@@ -1435,6 +1753,21 @@ def test_table_schema_rejects_invalid_grouped_headers():
             headers=["区域", "目标"],
             rows=[["华东", "120"]],
             header_groups=[{"title": "经营数据", "span": 0}],
+        )
+
+    with pytest.raises(ValidationError, match="6-digit hex color"):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["区域"],
+            rows=[["华东"]],
+            header_fill="blue",
+        )
+
+    with pytest.raises(ValidationError):
+        SectionTableInput(
+            headers=["区域"],
+            rows=[["华东"]],
+            border_style="heavy",
         )
 
     with pytest.raises(
@@ -1473,6 +1806,14 @@ def test_document_session_store_preserves_grouped_headers_for_table_blocks():
                     ],
                     "headers": ["区域", "目标", "完成率"],
                     "rows": [["华东", "120", "98%"]],
+                    "header_fill": "1F4E79",
+                    "header_text_color": "FFFFFF",
+                    "banded_rows": True,
+                    "banded_row_fill": "EEF4FA",
+                    "first_column_bold": True,
+                    "table_align": "center",
+                    "border_style": "strong",
+                    "caption_emphasis": "strong",
                 }
             ],
         )
@@ -1482,6 +1823,14 @@ def test_document_session_store_preserves_grouped_headers_for_table_blocks():
     assert table.header_groups[0].title == "经营数据"
     assert table.header_groups[0].span == 2
     assert table.header_groups[1].title == "结果"
+    assert table.header_fill == "1F4E79"
+    assert table.header_text_color == "FFFFFF"
+    assert table.banded_rows is True
+    assert table.banded_row_fill == "EEF4FA"
+    assert table.first_column_bold is True
+    assert table.table_align == "center"
+    assert table.border_style == "strong"
+    assert table.caption_emphasis == "strong"
 
 
 def test_document_session_store_add_table_preserves_grouped_headers():
@@ -1497,12 +1846,28 @@ def test_document_session_store_add_table_preserves_grouped_headers():
                 {"title": "经营数据", "span": 2},
                 {"title": "结果", "span": 1},
             ],
+            header_fill="1F4E79",
+            header_text_color="FFFFFF",
+            banded_rows=True,
+            banded_row_fill="EEF4FA",
+            first_column_bold=True,
+            table_align="center",
+            border_style="strong",
+            caption_emphasis="strong",
         )
     )
 
     table = updated.blocks[0]
     assert table.header_groups[0].title == "经营数据"
     assert table.header_groups[1].span == 1
+    assert table.header_fill == "1F4E79"
+    assert table.header_text_color == "FFFFFF"
+    assert table.banded_rows is True
+    assert table.banded_row_fill == "EEF4FA"
+    assert table.first_column_bold is True
+    assert table.table_align == "center"
+    assert table.border_style == "strong"
+    assert table.caption_emphasis == "strong"
 
 
 @pytest.mark.asyncio

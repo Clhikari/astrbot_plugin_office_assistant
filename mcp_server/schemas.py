@@ -10,10 +10,14 @@ from ..document_core.models.blocks import (
     BlockLayout,
     BlockStyle,
     ParagraphRun,
+    TableAlignment,
+    TableBorderStyle,
+    TableCaptionEmphasis,
     TableHeaderGroup,
+    normalize_optional_hex_color,
     validate_table_structure,
 )
-from ..document_core.models.document import DocumentModel
+from ..document_core.models.document import DocumentModel, DocumentStyleConfig
 
 SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
 SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
@@ -75,6 +79,7 @@ class CreateDocumentRequest(BaseModel):
     table_template: str = "report_grid"
     density: str = "comfortable"
     accent_color: str = ""
+    document_style: DocumentStyleConfig = Field(default_factory=DocumentStyleConfig)
 
     @field_validator("output_name")
     @classmethod
@@ -220,6 +225,14 @@ class AddTableRequest(BaseModel):
     title: str = ""
     column_widths: list[float] = Field(default_factory=list)
     numeric_columns: list[int] = Field(default_factory=list)
+    header_fill: str | None = None
+    header_text_color: str | None = None
+    banded_rows: bool | None = None
+    banded_row_fill: str | None = None
+    first_column_bold: bool | None = None
+    table_align: TableAlignment | None = None
+    border_style: TableBorderStyle | None = None
+    caption_emphasis: TableCaptionEmphasis | None = None
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -242,6 +255,11 @@ class AddTableRequest(BaseModel):
     @classmethod
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
         return _normalize_numeric_columns(value)
+
+    @field_validator("header_fill", "header_text_color", "banded_row_fill")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> AddTableRequest:
@@ -261,6 +279,14 @@ class SectionTableInput(BaseModel):
     title: str = ""
     column_widths: list[float] = Field(default_factory=list)
     numeric_columns: list[int] = Field(default_factory=list)
+    header_fill: str | None = None
+    header_text_color: str | None = None
+    banded_rows: bool | None = None
+    banded_row_fill: str | None = None
+    first_column_bold: bool | None = None
+    table_align: TableAlignment | None = None
+    border_style: TableBorderStyle | None = None
+    caption_emphasis: TableCaptionEmphasis | None = None
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -283,6 +309,11 @@ class SectionTableInput(BaseModel):
     @classmethod
     def validate_numeric_columns(cls, value: list[int]) -> list[int]:
         return _normalize_numeric_columns(value)
+
+    @field_validator("header_fill", "header_text_color", "banded_row_fill")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> SectionTableInput:
@@ -457,6 +488,7 @@ class DocumentSummary(BaseModel):
     table_template: str = ""
     density: str = ""
     accent_color: str = ""
+    document_style: dict = Field(default_factory=dict)
 
 
 class ToolResult(BaseModel):
@@ -485,6 +517,11 @@ def build_document_summary(document_model: DocumentModel) -> DocumentSummary:
         table_template=document_model.metadata.table_template,
         density=document_model.metadata.density,
         accent_color=document_model.metadata.accent_color,
+        document_style=document_model.metadata.document_style.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_defaults=True,
+        ),
     )
 
 

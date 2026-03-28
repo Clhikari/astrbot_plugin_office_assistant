@@ -83,7 +83,9 @@ class CreateDocumentTool(DocumentToolBase):
     name: str = "create_document"
     description: str = (
         "Create a draft Word document session and return its document_id. "
-        "Use this before adding headings, paragraphs, lists, tables, or summary cards."
+        "Use this before adding headings, paragraphs, lists, tables, or summary cards. "
+        "For whole-document styling, put document-wide defaults in document_style and keep "
+        "table block fields for local overrides."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -117,6 +119,63 @@ class CreateDocumentTool(DocumentToolBase):
                     "type": "string",
                     "description": "Optional 6-digit hex accent override such as 1F4E79.",
                 },
+                "document_style": {
+                    "type": "object",
+                    "description": "Optional whole-document style defaults, including high-level visual intent and table defaults.",
+                    "properties": {
+                        "brief": {
+                            "type": "string",
+                            "description": "Optional natural-language style brief for the whole document, such as deep blue business report or light gray minimalist memo.",
+                        },
+                        "heading_color": {
+                            "type": "string",
+                            "description": "Optional 6-digit hex color for heading text, such as 1F4E79.",
+                        },
+                        "body_font_size": {
+                            "type": "number",
+                            "description": "Optional base font size for body paragraphs and lists.",
+                        },
+                        "body_line_spacing": {
+                            "type": "number",
+                            "description": "Optional body paragraph line spacing multiplier.",
+                        },
+                        "table_defaults": {
+                            "type": "object",
+                            "description": "Optional default table styling applied unless a table block overrides it.",
+                            "properties": {
+                                "preset": {
+                                    "type": "string",
+                                    "enum": [
+                                        "report_grid",
+                                        "metrics_compact",
+                                        "minimal",
+                                    ],
+                                },
+                                "header_fill": {"type": "string"},
+                                "header_text_color": {"type": "string"},
+                                "banded_rows": {"type": "boolean"},
+                                "banded_row_fill": {"type": "string"},
+                                "first_column_bold": {"type": "boolean"},
+                                "table_align": {
+                                    "type": "string",
+                                    "enum": ["left", "center"],
+                                },
+                                "border_style": {
+                                    "type": "string",
+                                    "enum": ["minimal", "standard", "strong"],
+                                },
+                                "caption_emphasis": {
+                                    "type": "string",
+                                    "enum": ["normal", "strong"],
+                                },
+                                "cell_align": {
+                                    "type": "string",
+                                    "enum": ["left", "center", "right"],
+                                },
+                            },
+                        },
+                    },
+                },
             },
         }
     )
@@ -138,6 +197,7 @@ class CreateDocumentTool(DocumentToolBase):
             table_template=str(kwargs.get("table_template") or "report_grid"),
             density=str(kwargs.get("density") or "comfortable"),
             accent_color=str(kwargs.get("accent_color") or ""),
+            document_style=dict(kwargs.get("document_style") or {}),
         )
         document = self.store.create_document(request)
         return _dump_result(
@@ -157,7 +217,9 @@ class AddBlocksTool(DocumentToolBase):
         "heading, paragraph, list, table, image, summary_card, page_break, group, or columns. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
-        "not as a separate heading block."
+        "not as a separate heading block. For table styling, use table-specific fields like "
+        "header_fill, header_text_color, banded_rows, first_column_bold, table_align, "
+        "border_style, and caption_emphasis when the user requests a custom visual style."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -226,6 +288,41 @@ class AddBlocksTool(DocumentToolBase):
                                 },
                             },
                             "table_style": {"type": "string"},
+                            "header_fill": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex color for the header row background, such as 1F4E79.",
+                            },
+                            "header_text_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex color for the header row text, such as FFFFFF.",
+                            },
+                            "banded_rows": {
+                                "type": "boolean",
+                                "description": "Optional flag to alternate row fills in the table body.",
+                            },
+                            "banded_row_fill": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex color for alternating table body rows.",
+                            },
+                            "first_column_bold": {
+                                "type": "boolean",
+                                "description": "Optional flag to emphasize the first data column with bold text.",
+                            },
+                            "table_align": {
+                                "type": "string",
+                                "enum": ["left", "center"],
+                                "description": "Optional table alignment override.",
+                            },
+                            "border_style": {
+                                "type": "string",
+                                "enum": ["minimal", "standard", "strong"],
+                                "description": "Optional border weight preset for the table.",
+                            },
+                            "caption_emphasis": {
+                                "type": "string",
+                                "enum": ["normal", "strong"],
+                                "description": "Optional emphasis preset for the merged caption row.",
+                            },
                             "caption": {
                                 "type": "string",
                                 "description": "Table title rendered as the first merged row inside the table.",
