@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+from ..document_core.macros import summary_card_defaults_from_config
 from ..document_core.models.blocks import (
     ColumnBlock,
     ColumnsBlock,
@@ -324,11 +325,6 @@ class DocumentSessionStore:
         try:
             from ..document_core.macros import build_summary_card_group
 
-            summary_defaults = getattr(
-                getattr(document.metadata, "document_style", None),
-                "summary_card_defaults",
-                None,
-            )
             return [
                 build_summary_card_group(
                     title=block.title,
@@ -336,19 +332,12 @@ class DocumentSessionStore:
                     variant=block.variant,
                     style=block.style,
                     layout=block.layout,
-                    title_align=getattr(summary_defaults, "title_align", None),
-                    title_emphasis=getattr(summary_defaults, "title_emphasis", None),
-                    title_font_scale=getattr(
-                        summary_defaults, "title_font_scale", None
-                    ),
-                    title_space_before=getattr(
-                        summary_defaults, "title_space_before", None
-                    ),
-                    title_space_after=getattr(
-                        summary_defaults, "title_space_after", None
-                    ),
-                    list_space_after=getattr(
-                        summary_defaults, "list_space_after", None
+                    **summary_card_defaults_from_config(
+                        getattr(
+                            getattr(document.metadata, "document_style", None),
+                            "summary_card_defaults",
+                            None,
+                        )
                     ),
                 )
             ]

@@ -255,6 +255,10 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
             "reviewpr请求create_office_file，filename=report，content=hello，file_type=word",
             "create_office_file",
         ),
+        (
+            "please call `create_office_file` with filename=report, content=hello, file_type=word",
+            "create_office_file",
+        ),
     ],
 )
 async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call(
