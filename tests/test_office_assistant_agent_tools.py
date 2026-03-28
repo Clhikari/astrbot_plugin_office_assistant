@@ -1436,7 +1436,9 @@ def test_table_schema_normalizers_are_shared():
 
 
 def test_table_schema_rejects_invalid_grouped_headers():
-    with pytest.raises(ValidationError, match="header_groups span total must match"):
+    with pytest.raises(
+        ValidationError, match=r"header_groups span total \(1\) must equal column count \(2\)"
+    ):
         AddTableRequest(
             document_id="doc-1",
             headers=["区域", "目标"],
@@ -1452,7 +1454,8 @@ def test_table_schema_rejects_invalid_grouped_headers():
         )
 
     with pytest.raises(
-        ValidationError, match="header_groups require at least one column"
+        ValidationError,
+        match=r"header_groups require at least one column from headers or rows \(column_count=0\)",
     ):
         TableBlock(header_groups=[{"title": "经营数据", "span": 1}])
 

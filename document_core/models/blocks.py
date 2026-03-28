@@ -100,14 +100,18 @@ def validate_table_structure(
     if column_count <= 0:
         if header_groups:
             raise ValueError(
-                "header_groups require at least one column from headers or rows"
+                "header_groups require at least one column from headers or rows "
+                f"(column_count={column_count})"
             )
         return
     if not header_groups:
         return
     total_span = sum(group.span for group in header_groups)
     if total_span != column_count:
-        raise ValueError("header_groups span total must match table column count")
+        raise ValueError(
+            f"header_groups span total ({total_span}) must equal column count "
+            f"({column_count})"
+        )
 
 
 class TableBlock(BlockBase):

@@ -34,7 +34,7 @@ class TableRenderer:
             return
 
         title_row_offset = 1 if block.caption else 0
-        group_header_row_offset = 1 if getattr(block, "header_groups", None) else 0
+        group_header_row_offset = 1 if block.header_groups else 0
         header_row_offset = 1 if block.headers else 0
         row_count = (
             len(block.rows)
