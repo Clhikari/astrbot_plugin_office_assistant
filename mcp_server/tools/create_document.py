@@ -21,6 +21,7 @@ def register_create_document_tool(server: FastMCP, store: DocumentSessionStore) 
         table_template: str = "report_grid",
         density: str = "comfortable",
         accent_color: str = "",
+        document_style: dict | None = None,
     ) -> ToolResult:
         request = CreateDocumentRequest(
             session_id=session_id,
@@ -30,6 +31,7 @@ def register_create_document_tool(server: FastMCP, store: DocumentSessionStore) 
             table_template=table_template,
             density=density,
             accent_color=accent_color,
+            document_style=document_style or {},
         )
         document = store.create_document(request)
         return ToolResult(

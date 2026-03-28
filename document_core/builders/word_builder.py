@@ -176,6 +176,38 @@ class WordDocumentBuilder:
             theme["accent_soft"] = self._blend_hex(accent_color, "FFFFFF", 0.84)
             theme["summary_fill"] = self._blend_hex(accent_color, "FFFFFF", 0.92)
 
+        document_style = getattr(document_model.metadata, "document_style", None)
+        if document_style is not None:
+            if getattr(document_style, "heading_color", None):
+                theme["heading_color"] = document_style.heading_color
+            if getattr(document_style, "body_font_size", None) is not None:
+                theme["body_size"] = document_style.body_font_size
+            if getattr(document_style, "body_line_spacing", None) is not None:
+                theme["body_line_spacing"] = document_style.body_line_spacing
+
+            table_defaults = getattr(document_style, "table_defaults", None)
+            if table_defaults is not None:
+                if getattr(table_defaults, "preset", None):
+                    theme["table_style"] = table_defaults.preset
+                if getattr(table_defaults, "header_fill", None):
+                    theme["table_header_fill"] = table_defaults.header_fill
+                if getattr(table_defaults, "header_text_color", None):
+                    theme["table_header_text_color"] = table_defaults.header_text_color
+                if getattr(table_defaults, "banded_rows", None) is not None:
+                    theme["table_banded_rows"] = table_defaults.banded_rows
+                if getattr(table_defaults, "banded_row_fill", None):
+                    theme["table_banded_row_fill"] = table_defaults.banded_row_fill
+                if getattr(table_defaults, "first_column_bold", None) is not None:
+                    theme["table_first_column_bold"] = table_defaults.first_column_bold
+                if getattr(table_defaults, "table_align", None):
+                    theme["table_align"] = table_defaults.table_align
+                if getattr(table_defaults, "border_style", None):
+                    theme["table_border_style"] = table_defaults.border_style
+                if getattr(table_defaults, "caption_emphasis", None):
+                    theme["table_caption_emphasis"] = table_defaults.caption_emphasis
+                if getattr(table_defaults, "cell_align", None):
+                    theme["table_cell_align"] = table_defaults.cell_align
+
         return theme
 
     def _add_title(self, doc: WordDocument, text: str, theme: dict) -> None:
@@ -231,7 +263,7 @@ class WordDocumentBuilder:
             color=self._resolve_text_color(
                 theme=theme,
                 emphasis=getattr(block.style, "emphasis", None),
-                default_color=rgb(theme["accent"]),
+                default_color=rgb(theme.get("heading_color", theme["accent"])),
             ),
         )
 
