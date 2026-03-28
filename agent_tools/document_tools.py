@@ -207,6 +207,24 @@ class AddBlocksTool(DocumentToolBase):
                                     "items": {"type": "string"},
                                 },
                             },
+                            "header_groups": {
+                                "type": "array",
+                                "description": "Optional grouped header definitions. Each item defines a title and horizontal span.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                        },
+                                        "span": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                        },
+                                    },
+                                    "required": ["title", "span"],
+                                },
+                            },
                             "table_style": {"type": "string"},
                             "caption": {
                                 "type": "string",

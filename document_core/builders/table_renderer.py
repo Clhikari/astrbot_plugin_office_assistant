@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..models.blocks import resolve_table_column_count
 from .docx_utils import (
     _DEFAULT_FONT_NAME,
     clear_paragraph,
@@ -28,18 +29,19 @@ class TableRenderer:
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.shared import Cm, Pt
 
-        column_count = 0
-        if block.headers:
-            column_count = len(block.headers)
-        elif block.rows:
-            column_count = max(len(row) for row in block.rows)
-
+        column_count = resolve_table_column_count(block.headers, block.rows)
         if column_count <= 0:
             return
 
         title_row_offset = 1 if block.caption else 0
+        group_header_row_offset = 1 if block.header_groups else 0
         header_row_offset = 1 if block.headers else 0
-        row_count = len(block.rows) + title_row_offset + header_row_offset
+        row_count = (
+            len(block.rows)
+            + title_row_offset
+            + group_header_row_offset
+            + header_row_offset
+        )
         table = doc.add_table(rows=row_count, cols=column_count)
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         style_name = (
@@ -88,6 +90,15 @@ class TableRenderer:
             )
             row_index = 1
 
+        if block.header_groups:
+            self._render_group_header_row(
+                table.rows[row_index],
+                block.header_groups,
+                style_name=style_name,
+                theme=theme,
+            )
+            row_index += 1
+
         if block.headers:
             header_row = table.rows[row_index]
             for col_index, value in enumerate(block.headers):
@@ -127,6 +138,35 @@ class TableRenderer:
                     font_name=theme["font_name"],
                     background=self._table_row_fill(style_name, data_row_index + 1),
                 )
+
+    def _render_group_header_row(
+        self,
+        row,
+        header_groups,
+        *,
+        style_name: str,
+        theme: dict,
+    ) -> None:
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
+
+        current_col = 0
+        for group in header_groups:
+            merged_cell = row.cells[current_col]
+            span_end = current_col + group.span
+            for merge_col in range(current_col + 1, span_end):
+                merged_cell = merged_cell.merge(row.cells[merge_col])
+            self._set_cell_text(
+                merged_cell,
+                group.title,
+                bold=True,
+                alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                font_size=Pt(self._table_font_size(style_name, theme, header=True)),
+                font_name=theme["font_name"],
+                color=self._table_header_color(style_name, theme),
+                background=self._header_fill(style_name, theme),
+            )
+            current_col = span_end
 
     @staticmethod
     def resolve_docx_table_style(style_name: str) -> str | None:

@@ -36,6 +36,7 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+pytest.ini
 
 # 日志
 *.log
