@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+try:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+except ImportError:  # pragma: no cover
+    OxmlElement = None
+    qn = None
+
 from ..models.blocks import resolve_table_column_count
 from .docx_utils import (
     _DEFAULT_FONT_NAME,
@@ -69,6 +76,8 @@ class TableRenderer:
             accent_color=theme["accent"],
         )
 
+        # Table styling precedence stays consistent across helper methods:
+        # block-level fields > document_style.table_defaults in theme > preset/theme fallbacks.
         body_alignment = getattr(block.style, "cell_align", None) or theme.get(
             "table_cell_align"
         )
@@ -281,9 +290,6 @@ class TableRenderer:
 
     @staticmethod
     def _set_cell_background(cell, fill: str) -> None:
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
-
         tc_pr = cell._tc.get_or_add_tcPr()
         shd = tc_pr.find(qn("w:shd"))
         if shd is None:
@@ -341,9 +347,6 @@ class TableRenderer:
             "strong": {"size": "16", "color": accent_color},
         }
         border_spec = border_map[border_style]
-
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
 
         tbl_pr = table._tbl.tblPr
         tbl_borders = tbl_pr.find(qn("w:tblBorders"))

@@ -9,6 +9,40 @@ from ..models.blocks import (
     SummaryCardBlock,
 )
 
+_SUMMARY_CARD_DEFAULT_FIELDS = (
+    "title_align",
+    "title_emphasis",
+    "title_font_scale",
+    "title_space_before",
+    "title_space_after",
+    "list_space_after",
+)
+
+
+def _summary_card_default_kwargs(values: dict[str, object | None]) -> dict[str, object | None]:
+    return {field: values.get(field) for field in _SUMMARY_CARD_DEFAULT_FIELDS}
+
+
+def summary_card_defaults_from_config(config) -> dict[str, object | None]:
+    if config is None:
+        return _summary_card_default_kwargs({})
+    return _summary_card_default_kwargs(
+        {field: getattr(config, field, None) for field in _SUMMARY_CARD_DEFAULT_FIELDS}
+    )
+
+
+def summary_card_defaults_from_theme(theme: dict) -> dict[str, object | None]:
+    return _summary_card_default_kwargs(
+        {
+            "title_align": theme.get("summary_card_title_align"),
+            "title_emphasis": theme.get("summary_card_title_emphasis"),
+            "title_font_scale": theme.get("summary_card_title_font_scale"),
+            "title_space_before": theme.get("summary_card_title_space_before"),
+            "title_space_after": theme.get("summary_card_title_space_after"),
+            "list_space_after": theme.get("summary_card_list_space_after"),
+        }
+    )
+
 
 def _merge_style(
     base: BlockStyle | None,
