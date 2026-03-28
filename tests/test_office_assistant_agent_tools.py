@@ -389,6 +389,63 @@ def test_create_document_request_rejects_invalid_table_defaults_header_fill():
         )
 
 
+def test_create_document_request_defaults_nested_document_style_sections():
+    request = CreateDocumentRequest(
+        title="Nested Defaults",
+        document_style={
+            "brief": "defaults only",
+        },
+    )
+
+    assert request.document_style.summary_card_defaults is not None
+    assert request.document_style.table_defaults is not None
+    assert request.document_style.summary_card_defaults.title_align is None
+    assert request.document_style.table_defaults.header_fill is None
+
+
+def test_create_document_request_normalizes_blank_document_style_colors_to_none():
+    request = CreateDocumentRequest(
+        title="Blank Colors",
+        document_style={
+            "brief": "blank colors",
+            "heading_color": "   ",
+            "table_defaults": {
+                "header_fill": " ",
+                "header_text_color": "",
+                "banded_row_fill": "\t",
+            },
+        },
+    )
+
+    assert request.document_style.heading_color is None
+    assert request.document_style.table_defaults.header_fill is None
+    assert request.document_style.table_defaults.header_text_color is None
+    assert request.document_style.table_defaults.banded_row_fill is None
+
+
+def test_create_document_request_rejects_extra_document_style_keys():
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Unexpected document style key",
+            document_style={
+                "brief": "has extra key",
+                "unknown_field": "nope",
+            },
+        )
+
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Unexpected table default key",
+            document_style={
+                "brief": "has nested extra key",
+                "table_defaults": {
+                    "header_fill": "#FFFFFF",
+                    "bogus": "value",
+                },
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_document_toolset_smoke_export(workspace_root: Path):
     docx = pytest.importorskip("docx")
@@ -601,6 +658,155 @@ async def test_create_document_tool_applies_document_style_defaults(
     assert _run_bold(table.rows[2].cells[1]) is False
     assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert _table_border_size(table, "top") == "8"
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_prefers_table_block_over_document_style_defaults(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-document-style-precedence")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Table Precedence",
+            output_name="table-precedence.docx",
+            document_style={
+                "table_defaults": {
+                    "header_fill": "DCE6F1",
+                    "header_text_color": "123456",
+                    "banded_rows": True,
+                    "banded_row_fill": "EEF4FA",
+                    "first_column_bold": True,
+                    "table_align": "left",
+                    "border_style": "standard",
+                    "caption_emphasis": "normal",
+                    "cell_align": "center",
+                },
+            },
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "caption": "Override Table",
+                "headers": ["Metric", "Value"],
+                "rows": [["North", "100"], ["South", "200"]],
+                "header_fill": "1F4E79",
+                "header_text_color": "FFFFFF",
+                "banded_rows": False,
+                "first_column_bold": False,
+                "table_align": "center",
+                "border_style": "strong",
+                "caption_emphasis": "strong",
+                "style": {"cell_align": "right"},
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert table.alignment == WD_TABLE_ALIGNMENT.CENTER
+    assert _cell_fill(table.rows[0].cells[0]) == "1F4E79"
+    assert _run_rgb(table.rows[0].cells[0]) == "FFFFFF"
+    assert _cell_fill(table.rows[2].cells[0]) is None
+    assert _run_bold(table.rows[2].cells[0]) is False
+    assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert _table_border_size(table, "top") == "16"
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_prefers_summary_block_over_document_style_defaults(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-document-style-summary-precedence"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Summary Precedence",
+            output_name="summary-precedence.docx",
+            document_style={
+                "summary_card_defaults": {
+                    "title_align": "center",
+                    "title_emphasis": "strong",
+                    "title_font_scale": 1.2,
+                    "title_space_before": 12,
+                    "title_space_after": 4,
+                    "list_space_after": 8,
+                },
+            },
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "summary_card",
+                "title": "Summary Override",
+                "items": ["Item A", "Item B"],
+                "style": {
+                    "align": "right",
+                    "emphasis": "normal",
+                },
+                "layout": {
+                    "spacing_before": 20,
+                },
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    summary_title_paragraph = _find_paragraph(loaded_doc, "Summary Override")
+    summary_item_paragraph = _find_paragraph(loaded_doc, "• Item A")
+
+    assert summary_title_paragraph.alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert summary_title_paragraph.runs[0].bold is False
+    assert summary_title_paragraph.paragraph_format.space_before.pt == pytest.approx(
+        20, abs=0.5
+    )
+    assert summary_title_paragraph.paragraph_format.space_after.pt == pytest.approx(
+        4, abs=0.5
+    )
+    assert summary_item_paragraph.paragraph_format.space_after.pt == pytest.approx(
+        8, abs=0.5
+    )
 
 
 @pytest.mark.asyncio
