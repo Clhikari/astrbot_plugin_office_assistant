@@ -90,11 +90,10 @@ class TableRenderer:
             )
             row_index = 1
 
-        if getattr(block, "header_groups", None):
+        if block.header_groups:
             self._render_group_header_row(
                 table.rows[row_index],
                 block.header_groups,
-                column_count=column_count,
                 style_name=style_name,
                 theme=theme,
             )
@@ -145,7 +144,6 @@ class TableRenderer:
         row,
         header_groups,
         *,
-        column_count: int,
         style_name: str,
         theme: dict,
     ) -> None:
