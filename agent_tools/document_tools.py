@@ -213,8 +213,14 @@ class AddBlocksTool(DocumentToolBase):
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "title": {"type": "string"},
-                                        "span": {"type": "integer"},
+                                        "title": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                        },
+                                        "span": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                        },
                                     },
                                     "required": ["title", "span"],
                                 },

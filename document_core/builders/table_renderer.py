@@ -154,10 +154,8 @@ class TableRenderer:
 
         current_col = 0
         for group in header_groups:
-            if current_col >= column_count:
-                break
             merged_cell = row.cells[current_col]
-            span_end = min(current_col + group.span, column_count)
+            span_end = current_col + group.span
             for merge_col in range(current_col + 1, span_end):
                 merged_cell = merged_cell.merge(row.cells[merge_col])
             self._set_cell_text(

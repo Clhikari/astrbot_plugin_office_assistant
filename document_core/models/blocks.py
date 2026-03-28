@@ -98,7 +98,11 @@ def validate_table_structure(
 ) -> None:
     column_count = resolve_table_column_count(headers, rows)
     if column_count <= 0:
-        raise ValueError("table requires at least one column from headers or rows")
+        if header_groups:
+            raise ValueError(
+                "header_groups require at least one column from headers or rows"
+            )
+        return
     if not header_groups:
         return
     total_span = sum(group.span for group in header_groups)

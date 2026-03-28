@@ -25,6 +25,7 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     GroupBlock,
     ParagraphBlock,
     ParagraphRun,
+    TableBlock,
 )
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
@@ -165,8 +166,15 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         == "string"
     )
     assert (
+        block_properties["header_groups"]["items"]["properties"]["title"]["minLength"]
+        == 1
+    )
+    assert (
         block_properties["header_groups"]["items"]["properties"]["span"]["type"]
         == "integer"
+    )
+    assert (
+        block_properties["header_groups"]["items"]["properties"]["span"]["minimum"] == 1
     )
     assert block_properties["header_groups"]["items"]["required"] == [
         "title",
@@ -1442,6 +1450,24 @@ def test_table_schema_rejects_invalid_grouped_headers():
             rows=[["华东", "120"]],
             header_groups=[{"title": "经营数据", "span": 0}],
         )
+
+    with pytest.raises(
+        ValidationError, match="header_groups require at least one column"
+    ):
+        TableBlock(header_groups=[{"title": "经营数据", "span": 1}])
+
+
+def test_table_schema_allows_empty_placeholder_tables():
+    request = AddTableRequest(document_id="doc-1", headers=[], rows=[])
+    section = SectionTableInput(headers=[], rows=[])
+    block = TableBlock()
+
+    assert request.headers == []
+    assert request.rows == []
+    assert section.headers == []
+    assert section.rows == []
+    assert block.headers == []
+    assert block.rows == []
 
 
 def test_document_session_store_preserves_grouped_headers_for_table_blocks():
