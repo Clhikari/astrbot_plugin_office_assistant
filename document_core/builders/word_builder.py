@@ -200,63 +200,51 @@ class WordDocumentBuilder:
             if getattr(document_style, "list_space_after", None) is not None:
                 theme["list_space_after"] = document_style.list_space_after
 
-            summary_card_defaults = getattr(
-                document_style, "summary_card_defaults", None
-            )
-            if summary_card_defaults is not None:
-                if getattr(summary_card_defaults, "title_align", None):
-                    theme["summary_card_title_align"] = (
-                        summary_card_defaults.title_align
-                    )
-                if getattr(summary_card_defaults, "title_emphasis", None):
-                    theme["summary_card_title_emphasis"] = (
-                        summary_card_defaults.title_emphasis
-                    )
-                if getattr(summary_card_defaults, "title_font_scale", None) is not None:
-                    theme["summary_card_title_font_scale"] = (
-                        summary_card_defaults.title_font_scale
-                    )
-                if (
-                    getattr(summary_card_defaults, "title_space_before", None)
-                    is not None
-                ):
-                    theme["summary_card_title_space_before"] = (
-                        summary_card_defaults.title_space_before
-                    )
-                if (
-                    getattr(summary_card_defaults, "title_space_after", None)
-                    is not None
-                ):
-                    theme["summary_card_title_space_after"] = (
-                        summary_card_defaults.title_space_after
-                    )
-                if getattr(summary_card_defaults, "list_space_after", None) is not None:
-                    theme["summary_card_list_space_after"] = (
-                        summary_card_defaults.list_space_after
-                    )
+            summary_card_defaults = document_style.summary_card_defaults
+            if getattr(summary_card_defaults, "title_align", None):
+                theme["summary_card_title_align"] = summary_card_defaults.title_align
+            if getattr(summary_card_defaults, "title_emphasis", None):
+                theme["summary_card_title_emphasis"] = (
+                    summary_card_defaults.title_emphasis
+                )
+            if getattr(summary_card_defaults, "title_font_scale", None) is not None:
+                theme["summary_card_title_font_scale"] = (
+                    summary_card_defaults.title_font_scale
+                )
+            if getattr(summary_card_defaults, "title_space_before", None) is not None:
+                theme["summary_card_title_space_before"] = (
+                    summary_card_defaults.title_space_before
+                )
+            if getattr(summary_card_defaults, "title_space_after", None) is not None:
+                theme["summary_card_title_space_after"] = (
+                    summary_card_defaults.title_space_after
+                )
+            if getattr(summary_card_defaults, "list_space_after", None) is not None:
+                theme["summary_card_list_space_after"] = (
+                    summary_card_defaults.list_space_after
+                )
 
-            table_defaults = getattr(document_style, "table_defaults", None)
-            if table_defaults is not None:
-                if getattr(table_defaults, "preset", None):
-                    theme["table_style"] = table_defaults.preset
-                if getattr(table_defaults, "header_fill", None):
-                    theme["table_header_fill"] = table_defaults.header_fill
-                if getattr(table_defaults, "header_text_color", None):
-                    theme["table_header_text_color"] = table_defaults.header_text_color
-                if getattr(table_defaults, "banded_rows", None) is not None:
-                    theme["table_banded_rows"] = table_defaults.banded_rows
-                if getattr(table_defaults, "banded_row_fill", None):
-                    theme["table_banded_row_fill"] = table_defaults.banded_row_fill
-                if getattr(table_defaults, "first_column_bold", None) is not None:
-                    theme["table_first_column_bold"] = table_defaults.first_column_bold
-                if getattr(table_defaults, "table_align", None):
-                    theme["table_align"] = table_defaults.table_align
-                if getattr(table_defaults, "border_style", None):
-                    theme["table_border_style"] = table_defaults.border_style
-                if getattr(table_defaults, "caption_emphasis", None):
-                    theme["table_caption_emphasis"] = table_defaults.caption_emphasis
-                if getattr(table_defaults, "cell_align", None):
-                    theme["table_cell_align"] = table_defaults.cell_align
+            table_defaults = document_style.table_defaults
+            if getattr(table_defaults, "preset", None):
+                theme["table_style"] = table_defaults.preset
+            if getattr(table_defaults, "header_fill", None):
+                theme["table_header_fill"] = table_defaults.header_fill
+            if getattr(table_defaults, "header_text_color", None):
+                theme["table_header_text_color"] = table_defaults.header_text_color
+            if getattr(table_defaults, "banded_rows", None) is not None:
+                theme["table_banded_rows"] = table_defaults.banded_rows
+            if getattr(table_defaults, "banded_row_fill", None):
+                theme["table_banded_row_fill"] = table_defaults.banded_row_fill
+            if getattr(table_defaults, "first_column_bold", None) is not None:
+                theme["table_first_column_bold"] = table_defaults.first_column_bold
+            if getattr(table_defaults, "table_align", None):
+                theme["table_align"] = table_defaults.table_align
+            if getattr(table_defaults, "border_style", None):
+                theme["table_border_style"] = table_defaults.border_style
+            if getattr(table_defaults, "caption_emphasis", None):
+                theme["table_caption_emphasis"] = table_defaults.caption_emphasis
+            if getattr(table_defaults, "cell_align", None):
+                theme["table_cell_align"] = table_defaults.cell_align
 
         return theme
 
