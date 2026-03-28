@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..macros import build_summary_card_group, expand_summary_card_block
+from ..macros import (
+    build_summary_card_group,
+    expand_summary_card_block,
+    summary_card_defaults_from_theme,
+)
 from ..models import blocks as block_models
 from ..models.document import DocumentModel
 from .docx_utils import (
@@ -133,7 +137,7 @@ class WordDocumentBuilder:
                 doc,
                 expand_summary_card_block(
                     block,
-                    **self._summary_card_theme_defaults(theme),
+                    **summary_card_defaults_from_theme(theme),
                 ),
                 theme,
                 document_model,
@@ -337,7 +341,7 @@ class WordDocumentBuilder:
                     variant="summary",
                     style=block.style,
                     layout=block.layout,
-                    **self._summary_card_theme_defaults(theme),
+                    **summary_card_defaults_from_theme(theme),
                 ),
                 theme,
                 document_model,
@@ -561,13 +565,3 @@ class WordDocumentBuilder:
             return rgb(theme["accent"])
         return default_color
 
-    @staticmethod
-    def _summary_card_theme_defaults(theme: dict) -> dict:
-        return {
-            "title_align": theme.get("summary_card_title_align"),
-            "title_emphasis": theme.get("summary_card_title_emphasis"),
-            "title_font_scale": theme.get("summary_card_title_font_scale"),
-            "title_space_before": theme.get("summary_card_title_space_before"),
-            "title_space_after": theme.get("summary_card_title_space_after"),
-            "list_space_after": theme.get("summary_card_list_space_after"),
-        }
