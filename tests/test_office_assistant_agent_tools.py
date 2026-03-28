@@ -179,8 +179,23 @@ def test_create_document_tool_schema_exposes_document_style():
 
     assert document_style["brief"]["type"] == "string"
     assert document_style["heading_color"]["type"] == "string"
+    assert document_style["title_align"]["enum"] == [
+        "left",
+        "center",
+        "right",
+        "justify",
+    ]
     assert document_style["body_font_size"]["type"] == "number"
     assert document_style["body_line_spacing"]["type"] == "number"
+    assert document_style["paragraph_space_after"]["type"] == "number"
+    assert document_style["list_space_after"]["type"] == "number"
+    assert document_style["summary_card_defaults"]["type"] == "object"
+    assert document_style["summary_card_defaults"]["properties"]["title_align"][
+        "enum"
+    ] == ["left", "center", "right", "justify"]
+    assert document_style["summary_card_defaults"]["properties"]["title_emphasis"][
+        "enum"
+    ] == ["normal", "strong", "subtle"]
     assert table_defaults["preset"]["enum"] == [
         "report_grid",
         "metrics_compact",
@@ -297,8 +312,19 @@ def test_create_document_request_normalizes_document_style():
         document_style={
             "brief": "deep blue business report",
             "heading_color": "#1f4e79",
+            "title_align": "left",
             "body_font_size": 12,
             "body_line_spacing": 1.25,
+            "paragraph_space_after": 14,
+            "list_space_after": 11,
+            "summary_card_defaults": {
+                "title_align": "center",
+                "title_emphasis": "strong",
+                "title_font_scale": 1.2,
+                "title_space_before": 12,
+                "title_space_after": 4,
+                "list_space_after": 8,
+            },
             "table_defaults": {
                 "preset": "minimal",
                 "header_fill": "#dce6f1",
@@ -316,8 +342,17 @@ def test_create_document_request_normalizes_document_style():
 
     assert request.document_style.brief == "deep blue business report"
     assert request.document_style.heading_color == "1F4E79"
+    assert request.document_style.title_align == "left"
     assert request.document_style.body_font_size == 12
     assert request.document_style.body_line_spacing == 1.25
+    assert request.document_style.paragraph_space_after == 14
+    assert request.document_style.list_space_after == 11
+    assert request.document_style.summary_card_defaults.title_align == "center"
+    assert request.document_style.summary_card_defaults.title_emphasis == "strong"
+    assert request.document_style.summary_card_defaults.title_font_scale == 1.2
+    assert request.document_style.summary_card_defaults.title_space_before == 12
+    assert request.document_style.summary_card_defaults.title_space_after == 4
+    assert request.document_style.summary_card_defaults.list_space_after == 8
     assert request.document_style.table_defaults.preset == "minimal"
     assert request.document_style.table_defaults.header_fill == "DCE6F1"
     assert request.document_style.table_defaults.header_text_color == "FFFFFF"
@@ -431,6 +466,7 @@ async def test_create_document_tool_applies_document_style_defaults(
     workspace_root: Path,
 ):
     docx = pytest.importorskip("docx")
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     workspace_dir = _make_workspace(workspace_root, "pytest-document-style")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
@@ -445,8 +481,19 @@ async def test_create_document_tool_applies_document_style_defaults(
             document_style={
                 "brief": "deep blue business report",
                 "heading_color": "0F4C81",
+                "title_align": "left",
                 "body_font_size": 12,
                 "body_line_spacing": 1.25,
+                "paragraph_space_after": 14,
+                "list_space_after": 11,
+                "summary_card_defaults": {
+                    "title_align": "center",
+                    "title_emphasis": "strong",
+                    "title_font_scale": 1.2,
+                    "title_space_before": 12,
+                    "title_space_after": 4,
+                    "list_space_after": 8,
+                },
                 "table_defaults": {
                     "preset": "minimal",
                     "header_fill": "DCE6F1",
@@ -465,6 +512,7 @@ async def test_create_document_tool_applies_document_style_defaults(
     document_id = created["document"]["document_id"]
     assert created["document"]["document_style"]["brief"] == "deep blue business report"
     assert created["document"]["document_style"]["heading_color"] == "0F4C81"
+    assert created["document"]["document_style"]["title_align"] == "left"
 
     await tool_by_name["add_blocks"].call(
         None,
@@ -497,12 +545,31 @@ async def test_create_document_tool_applies_document_style_defaults(
 
     loaded_doc = docx.Document(exported["file_path"])
     heading_paragraph = _find_paragraph(loaded_doc, "Overview")
+    title_paragraph = _find_paragraph(loaded_doc, "Styled Report")
     body_paragraph = _find_paragraph(loaded_doc, "Styled body paragraph.")
+    list_paragraph = _find_paragraph(loaded_doc, "• Alpha")
+    summary_title_paragraph = _find_paragraph(loaded_doc, "Highlights")
+    summary_item_paragraph = _find_paragraph(loaded_doc, "• Stable revenue")
     table = loaded_doc.tables[0]
 
+    assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.LEFT
     assert _paragraph_run_rgb(heading_paragraph) == "0F4C81"
     assert _paragraph_run_size(body_paragraph) == 12
     assert float(body_paragraph.paragraph_format.line_spacing) == pytest.approx(1.25)
+    assert body_paragraph.paragraph_format.space_after.pt == pytest.approx(14, abs=0.5)
+    assert list_paragraph.paragraph_format.space_after.pt == pytest.approx(11, abs=0.5)
+    assert summary_title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert summary_title_paragraph.runs[0].bold is True
+    assert _paragraph_run_size(summary_title_paragraph) == pytest.approx(14.0, abs=0.5)
+    assert summary_title_paragraph.paragraph_format.space_before.pt == pytest.approx(
+        12, abs=0.5
+    )
+    assert summary_title_paragraph.paragraph_format.space_after.pt == pytest.approx(
+        4, abs=0.5
+    )
+    assert summary_item_paragraph.paragraph_format.space_after.pt == pytest.approx(
+        8, abs=0.5
+    )
     assert _cell_fill(table.rows[0].cells[0]) == "DCE6F1"
     assert _run_rgb(table.rows[0].cells[0]) == "123456"
     assert _cell_fill(table.rows[2].cells[0]) == "EEF4FA"

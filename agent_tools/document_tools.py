@@ -131,6 +131,11 @@ class CreateDocumentTool(DocumentToolBase):
                             "type": "string",
                             "description": "Optional 6-digit hex color for heading text, such as 1F4E79.",
                         },
+                        "title_align": {
+                            "type": "string",
+                            "enum": ["left", "center", "right", "justify"],
+                            "description": "Optional alignment for the document title.",
+                        },
                         "body_font_size": {
                             "type": "number",
                             "description": "Optional base font size for body paragraphs and lists.",
@@ -138,6 +143,32 @@ class CreateDocumentTool(DocumentToolBase):
                         "body_line_spacing": {
                             "type": "number",
                             "description": "Optional body paragraph line spacing multiplier.",
+                        },
+                        "paragraph_space_after": {
+                            "type": "number",
+                            "description": "Optional default spacing after body paragraphs.",
+                        },
+                        "list_space_after": {
+                            "type": "number",
+                            "description": "Optional default spacing after list items.",
+                        },
+                        "summary_card_defaults": {
+                            "type": "object",
+                            "description": "Optional defaults for summary_card, summary_box, and key_takeaway content.",
+                            "properties": {
+                                "title_align": {
+                                    "type": "string",
+                                    "enum": ["left", "center", "right", "justify"],
+                                },
+                                "title_emphasis": {
+                                    "type": "string",
+                                    "enum": ["normal", "strong", "subtle"],
+                                },
+                                "title_font_scale": {"type": "number"},
+                                "title_space_before": {"type": "number"},
+                                "title_space_after": {"type": "number"},
+                                "list_space_after": {"type": "number"},
+                            },
                         },
                         "table_defaults": {
                             "type": "object",
