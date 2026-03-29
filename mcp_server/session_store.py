@@ -5,6 +5,7 @@ from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
+from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from ..document_core.macros import summary_card_defaults_from_config
@@ -324,7 +325,18 @@ class DocumentSessionStore:
     ) -> list:
         try:
             from ..document_core.macros import build_summary_card_group
+        except ImportError:
+            return [
+                SummaryCardBlock(
+                    title=block.title,
+                    items=block.items,
+                    variant=block.variant,
+                    style=block.style,
+                    layout=block.layout,
+                )
+            ]
 
+        try:
             return [
                 build_summary_card_group(
                     title=block.title,
@@ -342,6 +354,10 @@ class DocumentSessionStore:
                 )
             ]
         except Exception:
+            logger.exception(
+                "Failed to expand summary card block for document %s",
+                document.document_id,
+            )
             return [
                 SummaryCardBlock(
                     title=block.title,

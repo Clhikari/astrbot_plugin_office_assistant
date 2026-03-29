@@ -65,6 +65,44 @@ THEMES = {
     },
 }
 
+_DOCUMENT_STYLE_THEME_FIELDS = {
+    "heading_color": "heading_color",
+    "title_align": "title_align",
+    "body_font_size": "body_size",
+    "body_line_spacing": "body_line_spacing",
+    "paragraph_space_after": "body_space_after",
+    "list_space_after": "list_space_after",
+}
+
+_SUMMARY_CARD_THEME_FIELDS = {
+    "title_align": "summary_card_title_align",
+    "title_emphasis": "summary_card_title_emphasis",
+    "title_font_scale": "summary_card_title_font_scale",
+    "title_space_before": "summary_card_title_space_before",
+    "title_space_after": "summary_card_title_space_after",
+    "list_space_after": "summary_card_list_space_after",
+}
+
+_TABLE_DEFAULT_THEME_FIELDS = {
+    "preset": "table_style",
+    "header_fill": "table_header_fill",
+    "header_text_color": "table_header_text_color",
+    "banded_rows": "table_banded_rows",
+    "banded_row_fill": "table_banded_row_fill",
+    "first_column_bold": "table_first_column_bold",
+    "table_align": "table_align",
+    "border_style": "table_border_style",
+    "caption_emphasis": "table_caption_emphasis",
+    "cell_align": "table_cell_align",
+}
+
+
+def _merge_style_attrs(source, theme: dict, attr_map: dict[str, str]) -> None:
+    for source_attr, theme_key in attr_map.items():
+        value = getattr(source, source_attr, None)
+        if value is not None:
+            theme[theme_key] = value
+
 
 class WordDocumentBuilder:
     def __init__(self, table_renderer: TableRenderer | None = None) -> None:
@@ -187,64 +225,17 @@ class WordDocumentBuilder:
 
         document_style = getattr(document_model.metadata, "document_style", None)
         if document_style is not None:
-            if getattr(document_style, "heading_color", None):
-                theme["heading_color"] = document_style.heading_color
-            if getattr(document_style, "title_align", None):
-                theme["title_align"] = document_style.title_align
-            if getattr(document_style, "body_font_size", None) is not None:
-                theme["body_size"] = document_style.body_font_size
-            if getattr(document_style, "body_line_spacing", None) is not None:
-                theme["body_line_spacing"] = document_style.body_line_spacing
-            if getattr(document_style, "paragraph_space_after", None) is not None:
-                theme["body_space_after"] = document_style.paragraph_space_after
-            if getattr(document_style, "list_space_after", None) is not None:
-                theme["list_space_after"] = document_style.list_space_after
-
-            summary_card_defaults = document_style.summary_card_defaults
-            if getattr(summary_card_defaults, "title_align", None):
-                theme["summary_card_title_align"] = summary_card_defaults.title_align
-            if getattr(summary_card_defaults, "title_emphasis", None):
-                theme["summary_card_title_emphasis"] = (
-                    summary_card_defaults.title_emphasis
-                )
-            if getattr(summary_card_defaults, "title_font_scale", None) is not None:
-                theme["summary_card_title_font_scale"] = (
-                    summary_card_defaults.title_font_scale
-                )
-            if getattr(summary_card_defaults, "title_space_before", None) is not None:
-                theme["summary_card_title_space_before"] = (
-                    summary_card_defaults.title_space_before
-                )
-            if getattr(summary_card_defaults, "title_space_after", None) is not None:
-                theme["summary_card_title_space_after"] = (
-                    summary_card_defaults.title_space_after
-                )
-            if getattr(summary_card_defaults, "list_space_after", None) is not None:
-                theme["summary_card_list_space_after"] = (
-                    summary_card_defaults.list_space_after
-                )
-
-            table_defaults = document_style.table_defaults
-            if getattr(table_defaults, "preset", None):
-                theme["table_style"] = table_defaults.preset
-            if getattr(table_defaults, "header_fill", None):
-                theme["table_header_fill"] = table_defaults.header_fill
-            if getattr(table_defaults, "header_text_color", None):
-                theme["table_header_text_color"] = table_defaults.header_text_color
-            if getattr(table_defaults, "banded_rows", None) is not None:
-                theme["table_banded_rows"] = table_defaults.banded_rows
-            if getattr(table_defaults, "banded_row_fill", None):
-                theme["table_banded_row_fill"] = table_defaults.banded_row_fill
-            if getattr(table_defaults, "first_column_bold", None) is not None:
-                theme["table_first_column_bold"] = table_defaults.first_column_bold
-            if getattr(table_defaults, "table_align", None):
-                theme["table_align"] = table_defaults.table_align
-            if getattr(table_defaults, "border_style", None):
-                theme["table_border_style"] = table_defaults.border_style
-            if getattr(table_defaults, "caption_emphasis", None):
-                theme["table_caption_emphasis"] = table_defaults.caption_emphasis
-            if getattr(table_defaults, "cell_align", None):
-                theme["table_cell_align"] = table_defaults.cell_align
+            _merge_style_attrs(document_style, theme, _DOCUMENT_STYLE_THEME_FIELDS)
+            _merge_style_attrs(
+                document_style.summary_card_defaults,
+                theme,
+                _SUMMARY_CARD_THEME_FIELDS,
+            )
+            _merge_style_attrs(
+                document_style.table_defaults,
+                theme,
+                _TABLE_DEFAULT_THEME_FIELDS,
+            )
 
         return theme
 
@@ -552,4 +543,3 @@ class WordDocumentBuilder:
         if emphasis == "subtle":
             return rgb(theme["accent"])
         return default_color
-

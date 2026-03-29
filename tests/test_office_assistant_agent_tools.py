@@ -118,6 +118,21 @@ def _table_border_size(table, edge_name: str) -> str | None:
     return edge.get(qn("w:sz"))
 
 
+def _table_border_color(table, edge_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    tbl_pr = table._tbl.tblPr
+    if tbl_pr is None:
+        return None
+    tbl_borders = tbl_pr.find(qn("w:tblBorders"))
+    if tbl_borders is None:
+        return None
+    edge = tbl_borders.find(qn(f"w:{edge_name}"))
+    if edge is None:
+        return None
+    return edge.get(qn("w:color"))
+
+
 def _make_workspace(workspace_root: Path, name: str) -> Path:
     workspace_dir = workspace_root / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -446,6 +461,96 @@ def test_create_document_request_rejects_extra_document_style_keys():
         )
 
 
+@pytest.mark.parametrize("body_font_size", [8, 17])
+def test_create_document_request_rejects_out_of_range_body_font_size(body_font_size):
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Styled",
+            document_style={
+                "brief": "deep blue business report",
+                "body_font_size": body_font_size,
+            },
+        )
+
+
+@pytest.mark.parametrize("body_line_spacing", [0.9, 2.6])
+def test_create_document_request_rejects_out_of_range_body_line_spacing(
+    body_line_spacing,
+):
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Styled",
+            document_style={
+                "brief": "deep blue business report",
+                "body_line_spacing": body_line_spacing,
+            },
+        )
+
+
+@pytest.mark.parametrize("title_font_scale", [0.5, 2.5])
+def test_create_document_request_rejects_out_of_range_title_font_scale(
+    title_font_scale,
+):
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Styled",
+            document_style={
+                "brief": "deep blue business report",
+                "summary_card_defaults": {
+                    "title_font_scale": title_font_scale,
+                },
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "field_name,value",
+    [
+        ("paragraph_space_after", -1),
+        ("paragraph_space_after", 73),
+        ("list_space_after", -5),
+        ("list_space_after", 100),
+    ],
+)
+def test_create_document_request_rejects_out_of_range_document_spacing_fields(
+    field_name, value
+):
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Styled",
+            document_style={
+                "brief": "deep blue business report",
+                field_name: value,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "field_name,value",
+    [
+        ("title_space_before", -10),
+        ("title_space_before", 100),
+        ("title_space_after", -2),
+        ("title_space_after", 80),
+        ("list_space_after", -5),
+        ("list_space_after", 100),
+    ],
+)
+def test_create_document_request_rejects_out_of_range_summary_card_spacing_fields(
+    field_name, value
+):
+    with pytest.raises(ValidationError):
+        CreateDocumentRequest(
+            title="Styled",
+            document_style={
+                "brief": "deep blue business report",
+                "summary_card_defaults": {
+                    field_name: value,
+                },
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_document_toolset_smoke_export(workspace_root: Path):
     docx = pytest.importorskip("docx")
@@ -658,6 +763,7 @@ async def test_create_document_tool_applies_document_style_defaults(
     assert _run_bold(table.rows[2].cells[1]) is False
     assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert _table_border_size(table, "top") == "8"
+    assert _table_border_color(table, "top") == "7A7A7A"
 
 
 @pytest.mark.asyncio
@@ -732,6 +838,72 @@ async def test_create_document_tool_prefers_table_block_over_document_style_defa
     assert _run_bold(table.rows[2].cells[0]) is False
     assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert _table_border_size(table, "top") == "16"
+    assert _table_border_color(table, "top") == "1F4E79"
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_applies_border_style_color_mapping(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-document-style-borders")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Border Mapping",
+            output_name="border-mapping.docx",
+            accent_color="#AA5500",
+        )
+    )
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=created["document"]["document_id"],
+        blocks=[
+            {
+                "type": "table",
+                "caption": "Minimal Table",
+                "headers": ["Metric", "Value"],
+                "rows": [["North", "100"]],
+                "border_style": "minimal",
+            },
+            {
+                "type": "table",
+                "caption": "Standard Table",
+                "headers": ["Metric", "Value"],
+                "rows": [["East", "120"]],
+                "border_style": "standard",
+            },
+            {
+                "type": "table",
+                "caption": "Strong Table",
+                "headers": ["Metric", "Value"],
+                "rows": [["West", "140"]],
+                "border_style": "strong",
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    minimal_table, standard_table, strong_table = loaded_doc.tables
+
+    assert _table_border_size(minimal_table, "top") == "4"
+    assert _table_border_color(minimal_table, "top") == "D0D7DE"
+    assert _table_border_size(standard_table, "top") == "8"
+    assert _table_border_color(standard_table, "top") == "7A7A7A"
+    assert _table_border_size(strong_table, "top") == "16"
+    assert _table_border_color(strong_table, "top") == "AA5500"
 
 
 @pytest.mark.asyncio
@@ -1949,6 +2121,50 @@ def test_document_session_store_expands_summary_card_blocks():
     assert isinstance(updated.blocks[0], GroupBlock)
     assert updated.blocks[0].blocks[0].text == "Conclusion"
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_document_session_store_applies_summary_card_defaults():
+    store = DocumentSessionStore()
+    document = store.create_document(
+        CreateDocumentRequest(
+            title="Summary Defaults",
+            document_style={
+                "summary_card_defaults": {
+                    "title_align": "center",
+                    "title_emphasis": "strong",
+                    "title_font_scale": 1.2,
+                    "title_space_before": 12,
+                    "title_space_after": 4,
+                    "list_space_after": 8,
+                }
+            },
+        )
+    )
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    title_block = updated.blocks[0].blocks[0]
+    list_block = updated.blocks[0].blocks[1]
+    assert title_block.style.align == "center"
+    assert title_block.style.emphasis == "strong"
+    assert title_block.style.font_scale == pytest.approx(1.2)
+    assert title_block.layout.spacing_before == pytest.approx(12)
+    assert title_block.layout.spacing_after == pytest.approx(4)
+    assert list_block.layout.spacing_after == pytest.approx(8)
 
 
 def test_document_session_store_runs_internal_normalize_hooks():
