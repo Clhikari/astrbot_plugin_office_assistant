@@ -2,140 +2,131 @@
   <img src="https://count.getloli.com/@Clhikariproject2?name=Clhikariproject2&theme=booru-touhoulat&padding=7&offset=0&align=center&scale=0.8&pixelated=1&darkmode=1" alt="Moe Counter">
 </p>
 
-# 📁 Office 助手（astrbot_plugin_office_assistant）
+# Office 助手（astrbot_plugin_office_assistant）
 
-一个给 AstrBot 用的「文件魔法工房」插件。目标很直接：让机器人更稳地读文件、做文档、跑转换。
-
-它主要做三件事：
-
-1. 让模型读取并分析文件内容（文本 / 代码 / Office / PDF）。
-2. 让模型按结构化内容生成 Word、Excel、PPT。
-3. 提供 Office 与 PDF 的双向转换，并在发送时可附带预览图。
+AstrBot 的文件处理插件。读文件、生成 Office 文档、做格式转换，发送时可带预览图。
 
 ---
 
 ## 目录
 
-- [🌟 快速了解](#快速了解)
-- [🚀 快速开始](#快速开始)
-- [⚙️ 配置说明](#配置说明)
-- [🛠️ 工具与命令](#工具与命令)
-- [🧭 复杂 Word 工作流](#复杂-word-工作流)
-- [🗺️ 未来规划](#未来规划)
-- [📚 支持的文件格式](#支持的文件格式)
-- [🧱 系统依赖安装](#系统依赖安装)
-- [🐳 Docker 使用建议](#docker-使用建议)
-- [🛡️ 安全与行为说明](#安全与行为说明)
-- [❓ 常见问题（Q/A）](#常见问题qa)
-- [💬 社群答疑与新想法](#社群答疑与新想法)
-- [🧭 升级与迁移说明](#升级与迁移说明)
-- [📄 许可证](#许可证)
-- [🤝 贡献](#贡献)
+- [快速了解](#快速了解)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [工具与命令](#工具与命令)
+- [复杂 Word 工作流](#复杂-word-工作流)
+- [后续规划](#后续规划)
+- [支持的文件格式](#支持的文件格式)
+- [系统依赖安装](#系统依赖安装)
+- [Docker 部署](#docker-部署)
+- [安全说明](#安全说明)
+- [常见问题](#常见问题)
+- [交流](#交流)
+- [升级与迁移](#升级与迁移)
+- [许可证](#许可证)
+- [贡献](#贡献)
 
 ---
 
 ## 快速了解
 
-当前版本的核心行为：
+当前版本的默认行为：
 
-- 群聊默认不启用插件能力（`enable_features_in_group=false`）。
-- 若群聊启用后，默认仍要求 `@` / 引用机器人才会暴露文件工具（`require_at_in_group=true`）。
-- 默认会在插件能力生效时隐藏执行类工具：
-  - `astrbot_execute_shell`
-  - `astrbot_execute_python`
-  - `astrbot_execute_ipython`
-- 默认禁止读取工作区外路径；可通过配置开启外部绝对路径读取（仅对 `read_file`/PDF 转换生效）。
-- 复杂 Word 走四步工具链：`create_document → add_blocks → finalize_document → export_document`，一个 `add_blocks` 搞定标题、正文、列表、表格、卡片、分页、分组、分栏。
-- `create_office_file` 还在，但已标记 deprecated；复杂 Word 走四步链更稳。
+- 群聊默认不启用插件（`enable_features_in_group=false`）。
+- 群聊启用后，需要 `@` 或引用机器人才暴露文件工具（`require_at_in_group=true`）。
+- 插件生效时自动隐藏 `astrbot_execute_shell`、`astrbot_execute_python`、`astrbot_execute_ipython`。
+- 默认禁止访问工作区外路径，可配置放开（仅对 `read_file` 和 PDF 转换生效）。
+- 复杂 Word 走四步工具链：`create_document → add_blocks → finalize_document → export_document`。`add_blocks` 支持标题、正文、列表、表格、卡片、分页、分组、分栏。
+- `create_office_file` 仍可用但已 deprecated，复杂 Word 建议走四步链。
 
 ---
 
 ## 快速开始
 
-### 1 📦 安装插件（开箱）
+### 1. 安装
 
-通过 AstrBot 插件管理器安装即可。Python 依赖会随插件自动安装。
+通过 AstrBot 插件管理器安装。Python 依赖会自动装好。
 
-### 2 ✅ 启动后先做两条检查（验机）
+### 2. 检查状态
 
-- `/fileinfo`：查看插件当前运行状态与配置生效情况。
-- `/pdf_status`（或 `/pdf状态`）：查看 PDF 转换可用性与缺失依赖。
+- `/fileinfo`：看插件运行状态和配置。
+- `/pdf_status`（或 `/pdf状态`）：看 PDF 转换是否可用、缺哪些依赖。
 
-### 3 🧪 最小可用验证（跑一遍就安心）
+### 3. 试一下
 
-- 发一个 `.txt` 或 `.md` 给机器人，要求它读取并总结。
+- 发一个 `.txt` 或 `.md` 给机器人，让它读取并总结。
 - 让机器人生成一个 `.xlsx`。
-- 如果安装了转换依赖，再试一次 Office -> PDF。
+- 装了转换依赖的话，试一次 Office → PDF。
 
 ---
 
 ## 配置说明
 
-以下配置均在 AstrBot 管理面板中设置。
+在 AstrBot 管理面板中设置。
 
-先看这几个最常改、最影响体验的项：
+常用的几项：
 
-| 配置项 | 默认值 | 什么时候改 |
+| 配置项 | 默认值 | 什么情况下改 |
 | --- | --- | --- |
-| `enable_features_in_group` | `false` | 需要在群聊里启用插件时改。 |
-| `require_at_in_group` | `true` | 群聊里不想强制 `@` / 引用机器人时改。 |
-| `enable_docx_image_review` | `true` | 不希望模型读取 Word 里的嵌入图片，改成纯文本读取时改。 |
-| `auto_block_execution_tools` | `true` | 不希望插件自动隐藏执行类工具时改。 |
-| `allow_external_input_files` | `false` | 需要读取或转换工作区外绝对路径文件时改。 |
-| `enable_pdf_conversion` | `true` | 不需要 Office/PDF 转换能力时改。 |
-| `auto_delete_files` | `true` | 想保留生成文件而不是发送后删除时改。 |
+| `enable_features_in_group` | `false` | 要在群聊里用插件 |
+| `require_at_in_group` | `true` | 群聊里不想强制 `@` |
+| `enable_docx_image_review` | `true` | 不需要模型读 Word 里的图片 |
+| `auto_block_execution_tools` | `true` | 不想自动隐藏执行类工具 |
+| `allow_external_input_files` | `false` | 要读工作区外的文件 |
+| `enable_pdf_conversion` | `true` | 不需要 Office/PDF 转换 |
+| `auto_delete_files` | `true` | 想保留生成的文件 |
 
 > [!TIP]
-> 如果只是先把插件跑起来，通常优先关注 `enable_features_in_group`、`require_at_in_group`、`allow_external_input_files` 和 `enable_docx_image_review` 这 4 项。
+> 刚装好的话，一般只需要看 `enable_features_in_group`、`require_at_in_group`、`allow_external_input_files`、`enable_docx_image_review` 这四个。
 
 <details>
-<summary>查看完整配置表</summary>
+<summary>完整配置表</summary>
 
-### 🔔 触发设置（`trigger_settings`）
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| 群聊需要@/引用机器人 (`require_at_in_group`) | bool | true | 群聊中仅在 `@` / 引用机器人时暴露文件工具。 |
-| 群聊启用插件功能 (`enable_features_in_group`) | bool | false | 关闭时，群聊里本插件完全不生效（工具/命令/文件拦截全部关闭）。 |
-| 自动屏蔽 shell/python 工具 (`auto_block_execution_tools`) | bool | true | 开启后，在插件功能生效时自动隐藏 `astrbot_execute_*` 三个执行工具。 |
-| 发送文件时@用户 (`reply_to_user`) | bool | true | 机器人发送文件时是否 `@` 发起人。 |
-
-### 🔐 权限管理（`permission_settings`）
+### 触发设置（`trigger_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 用户白名单 (`whitelist_users`) | list | [] | 允许使用插件的用户 ID；留空时仅管理员可用。 |
+| 群聊需要@/引用机器人 (`require_at_in_group`) | bool | true | 群聊中 `@` 或引用机器人时才暴露文件工具 |
+| 群聊启用插件功能 (`enable_features_in_group`) | bool | false | 关了的话群聊里插件完全不生效 |
+| 自动屏蔽 shell/python 工具 (`auto_block_execution_tools`) | bool | true | 插件生效时隐藏 `astrbot_execute_*` 系列工具 |
+| 发送文件时@用户 (`reply_to_user`) | bool | true | 发文件时是否 `@` 发起人 |
 
-### 🧩 功能开关（`feature_settings`）
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| 启用 Office 文件生成 (`enable_office_files`) | bool | true | 是否允许 `create_office_file`。 |
-| 启用 PDF 转换 (`enable_pdf_conversion`) | bool | true | 是否允许 Office <-> PDF 转换（仍需系统依赖）。 |
-
-### 📏 文件限制（`file_settings`）
+### 权限管理（`permission_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 最大文件大小MB (`max_file_size_mb`) | int | 20 | 读取/发送文件大小上限。 |
-| 启用 Word 图片理解 (`enable_docx_image_review`) | bool | true | `read_file` 读取 `.docx` 时，是否把嵌入图片注入模型上下文。关闭后按纯文本读取，不再输出 `[插图N]`。 |
-| Word图片注入大小上限MB (`max_inline_docx_image_mb`) | int | 2 | `read_file` 读取 `.docx` 时，单张嵌入图片超过该大小就不注入多模态上下文。 |
-| Word图片最多注入张数 (`max_inline_docx_image_count`) | int | 3 | `read_file` 读取 `.docx` 时，最多向多模态上下文注入多少张嵌入图片。 |
-| 发送后自动删除文件 (`auto_delete_files`) | bool | true | 发送后删除生成文件；关闭则持久化到插件工作区。 |
-| 文件消息缓冲时间秒 (`message_buffer_seconds`) | float | 4 | 用于聚合“先发文件后发文本”的场景。 |
+| 用户白名单 (`whitelist_users`) | list | [] | 允许使用插件的用户 ID，留空则仅管理员可用 |
 
-### 🛣️ 路径访问（`path_settings`）
+### 功能开关（`feature_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 允许外部绝对路径 (`allow_external_input_files`) | bool | false | 开启后，`read_file` / `convert_to_pdf` / `convert_from_pdf` 可访问工作区外绝对路径；`delete_file` 仍只允许工作区内删除。 |
+| 启用 Office 文件生成 (`enable_office_files`) | bool | true | 是否允许 `create_office_file` |
+| 启用 PDF 转换 (`enable_pdf_conversion`) | bool | true | 是否允许 Office ↔ PDF 转换（需系统依赖） |
 
-### 🖼️ 预览图（`preview_settings`）
+### 文件限制（`file_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 启用预览图 (`enable`) | bool | true | 发送 Office/PDF 时尝试发送第一页预览图。 |
-| 预览图分辨率 (`dpi`) | int | 150 | 推荐 100~200。 |
+| 最大文件大小MB (`max_file_size_mb`) | int | 20 | 读取和发送的大小上限 |
+| 启用 Word 图片理解 (`enable_docx_image_review`) | bool | true | 读 `.docx` 时把嵌入图片注入上下文，关了就按纯文本读 |
+| Word图片注入大小上限MB (`max_inline_docx_image_mb`) | int | 2 | 单张图超过这个大小就跳过 |
+| Word图片最多注入张数 (`max_inline_docx_image_count`) | int | 3 | 最多注入几张图到上下文 |
+| 发送后自动删除文件 (`auto_delete_files`) | bool | true | 发完就删，关了就留在工作区 |
+| 文件消息缓冲时间秒 (`message_buffer_seconds`) | float | 4 | 等用户"先发文件再发指令"的缓冲时间 |
+
+### 路径访问（`path_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 允许外部绝对路径 (`allow_external_input_files`) | bool | false | 放开后 `read_file` 和转换工具可以访问工作区外路径，`delete_file` 不受影响 |
+
+### 预览图（`preview_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 启用预览图 (`enable`) | bool | true | 发 Office/PDF 时带首页预览图 |
+| 预览图分辨率 (`dpi`) | int | 150 | 推荐 100~200 |
 
 </details>
 
@@ -143,51 +134,46 @@
 
 ## 工具与命令
 
-### 🤖 LLM 工具
+### LLM 工具
 
-| 工具名 | 作用 |
+| 工具名 | 干什么 |
 | --- | --- |
-| `read_file` | 读取文本、代码、Office、PDF 内容。 |
-| `create_office_file` | 生成 Word / Excel / PPT（已 deprecated，Word 建议走四步链）。 |
-| `create_document` | 建 Word 草稿会话，定主题、表格模板、密度和强调色。 |
-| `add_blocks` | 往草稿里追加内容块：heading / paragraph / list / table / summary_card / page_break / group / columns。 |
-| `finalize_document` | 草稿定稿。 |
-| `export_document` | 导出 .docx，插件自动发给用户。 |
-| `convert_to_pdf` | Office → PDF。 |
-| `convert_from_pdf` | PDF → Word 或 Excel。 |
+| `read_file` | 读文本、代码、Office、PDF 的内容 |
+| `create_office_file` | 生成 Word / Excel / PPT（deprecated，Word 建议走四步链） |
+| `create_document` | 新建 Word 草稿，定主题、表格模板、密度、强调色 |
+| `add_blocks` | 往草稿里加内容块（标题、正文、列表、表格、卡片、分页、分组、分栏） |
+| `finalize_document` | 锁定草稿 |
+| `export_document` | 导出 .docx，自动发给用户 |
+| `convert_to_pdf` | Office → PDF |
+| `convert_from_pdf` | PDF → Word 或 Excel |
 
-### ⌨️ 插件命令
+### 插件命令
 
-| 命令 | 别名 | 作用 |
+| 命令 | 别名 | 干什么 |
 | --- | --- | --- |
-| `/list_files` | 兼容别名：`/file_ls`, `/文件列表`（建议优先主命令） | 查看工作区中的 Office 文件。 |
-| `/delete_file <文件名>` | 兼容别名：`/file_rm`, `/删除文件`（建议优先主命令） | 删除工作区内文件。 |
-| `/fileinfo` | 无 | 查看运行状态、开关状态、工作目录等信息。 |
-| `/pdf_status` | `/pdf状态` | 查看 PDF 转换可用性与缺失依赖。 |
+| `/list_files` | `/file_ls`, `/文件列表` | 看工作区里的 Office 文件 |
+| `/delete_file <文件名>` | `/file_rm`, `/删除文件` | 删工作区里的文件 |
+| `/fileinfo` | 无 | 看运行状态和配置 |
+| `/pdf_status` | `/pdf状态` | 看 PDF 转换是否可用 |
 
 ---
 
 ## 复杂 Word 工作流
 
-复杂 Word 这条链路，现在已经不是“让模型一次性吐完整篇文档”了。更接近真实使用方式的是：先建一个草稿，再把标题、正文、表格和卡片一点点补进去，最后再导出。
+不是让模型一口气吐完整篇文档。现在的做法是分步来：建草稿 → 逐块填内容 → 锁定 → 导出。
 
-简单说，它更像是在搭一份报告，而不是赌一次大 prompt。
+适合做这些东西：
 
-适合拿来做这些东西：
+- 管理层汇报、经营复盘
+- 周报、月报
+- 带标题、表格、列表、摘要卡片的报告
 
-- 管理层汇报材料
-- 经营复盘
-- 周报 / 月报
-- 带标题、正文、表格、列表、摘要卡片的报告型 Word
+### 流程
 
-推荐顺序也很直接：
-
-1. `create_document`：建草稿，把 `theme_name`、`table_template`、`density`、`accent_color` 定好
-2. `add_blocks`：往里塞内容，heading / paragraph / list / table / summary_card / page_break / group / columns 都行，一次调用可以传多个块
-3. `finalize_document`：内容没问题就定稿
-4. `export_document`：导出 `.docx`，插件直接把文件和预览图发出去
-
-流程图：
+1. `create_document` — 建草稿，定 `theme_name`、`table_template`、`density`、`accent_color`
+2. `add_blocks` — 塞内容块进去，可以调多次
+3. `finalize_document` — 锁定
+4. `export_document` — 导出 `.docx`，自动发文件和预览图
 
 ```
 ┌───────────────────────────┐
@@ -224,164 +210,147 @@
 └───────────────────────────┘
 ```
 
-能用的：
+### 可用的选项
 
-- 八种块类型：heading、paragraph、list、table、summary_card、page_break、group、columns
-- 三套主题：`business_report`、`project_review`、`executive_brief`
-- 三套表格样式：`report_grid`、`metrics_compact`、`minimal`
-- 两种密度：`comfortable`、`compact`
-- 强调色覆盖：`accent_color=RRGGBB`
-- 卡片变体：`summary`、`conclusion`
+块类型有 8 种：heading、paragraph、list、table、summary_card、page_break、group、columns
 
-用的时候注意：
+主题 3 套：`business_report`、`project_review`、`executive_brief`
 
-- 中途炸了别硬补旧草稿，直接重新来一份更稳
-- 想参考旧版内容，重新上传旧文档，先提取再生成
+表格样式 3 套：`report_grid`、`metrics_compact`、`minimal`
+
+排版密度：`comfortable`（宽松）或 `compact`（紧凑）
+
+强调色：`accent_color=RRGGBB`
+
+卡片变体：`summary` 或 `conclusion`
+
+### 注意
+
+- 中途出错别续旧草稿，重新来一份更稳
+- 想参考旧版内容，先上传旧文档让模型提取，再基于提取结果生成
 
 > [!WARNING]
-> 已知在Gemini预览模型下，复杂 Word 工具链偶尔会遇到 AstrBot core/provider 抛出的空响应异常，例如 `gemini-3-flash-preview` 返回 `candidate.content.parts` 为空，日志里会看到 `API 返回的 candidate.content.parts 为空。`
+> Gemini 预览模型（如 `gemini-3-flash-preview`）在这条工具链上偶尔会返回空响应（`candidate.content.parts` 为空）。这是模型侧的问题，不是插件 bug。
 >
-> 这不是 Office Assistant 自己的文档状态机逻辑报错，而是底层模型/Provider 的已知不稳定响应。
->
-> 如果你在复杂 Word 场景里频繁遇到这类报错，建议优先：
->
-> - 换用更稳定的非gemini模型
-> - 减少一次请求里要求模型完成的内容量
-> - 中断后直接重新生成新文档，而不是硬续旧草稿
->
-> 当前插件不会在 README 中把它视为“已支持能力的一部分”，它属于底层模型兼容性问题。
+> 如果频繁遇到，换个稳定的非 Gemini 模型，或者减少单次请求的量。
 
 > [!TIP]
-> 复杂 Word 工作流提升的主要是“上限”和“可控性”，不是无条件抬高“下限”。
+> 这套工作流能让模型按步骤构建文档，减少一次硬生成整篇的失控概率。但提示写得太模糊的话，结果照样一般。
 >
-> 它能让模型在合适的工具链里按步骤构建报告，减少一次性长文本硬生成的失控概率，但如果你的提示本身很模糊，或者模型本身不稳定，最终结果仍然可能一般，甚至继续乱发挥。
->
-> 想让复杂 Word 的效果更稳，最好把需求说具体，至少明确这些信息：
->
-> - 文档用途和目标读者
-> - 需要哪些章节
-> - 哪些内容必须用表格、列表或结论卡片表达
-> - 语气是正式汇报、复盘，还是简洁摘要
-> - 是否要求 `business_report`、`project_review`、`executive_brief` 这类风格，以及排版偏紧凑还是偏宽松
->
-> 这套能力解决的是“模型有能力时能做得更好、更稳”，不是“任何模型、任何随口一句话都能稳定产出高质量复杂 Word”。
+> 写提示的时候把这些说清楚会好很多：文档给谁看、要哪些章节、哪些内容用表格或卡片、语气偏正式还是简洁、排版偏宽松还是紧凑。
 
-⚠️ 当前限制
-以下能力尚未覆盖，后续会逐步评估推进：
+### 暂不支持
+
 - 目录自动生成、页眉页脚、分节符
-- 图片块和图文混排
+- 图片块、图文混排
 - 合并单元格、复杂跨列布局
-- 任意局部字体、颜色、边框的自由编辑
+- 局部字体/颜色/边框自由编辑
 
 ---
 
-## 未来规划
+## 后续规划
 
-后续不会一次性铺开 Word、Excel、PPT 全线，而是按实际价值分阶段推进
+分阶段推进，Word 先做稳，再做 Excel 和 PPT。
 
-### 📝 Word 下一步
+### Word
 
-- [ ] 先补“导入已有 Word，再转 Markdown / 结构化文本”的能力。这样中途失败时，不用死磕旧草稿，可以直接重新生成新版
-- [ ] 继续把报告型场景做扎实，比如图片、说明文字、二级 / 三级标题、多表混排
-- [ ] 目录、分页控制、页眉页脚这些版式能力会评估，但不会抢在核心报告能力前面做
+- [ ] 导入已有 Word 并转为结构化文本，失败时可以基于旧内容重新生成
+- [ ] 完善报告场景——图片、说明文字、多级标题、多表混排
+- [ ] 评估目录、分页控制、页眉页脚
 
-### 📊 Excel 规划
+### Excel
 
-- [ ] 不会沿用 Word 的块模型，会单独抽象 Workbook / Worksheet / Range / Table / Chart 层级
-- [ ] 目标能力：多工作表、仪表盘视图、图表、列宽控制、数字格式、条件格式
-- [ ] 主要面向经营复盘、预算表、指标追踪、区域与行业分析等结构化表格场景
+- [ ] 独立的 Workbook / Worksheet / Range / Table / Chart 抽象（不复用 Word 的块模型）
+- [ ] 多工作表、图表、列宽、数字格式、条件格式
+- [ ] 面向经营复盘、预算表、指标追踪等场景
 
-### 🖼️ PPT 规划
+### PPT
 
-- [ ] 同样单独抽象 Presentation / Slide / Layout / SlideBlock 模型，不复用文档流逻辑
-- [ ] 重点在于版式与层级表达，而非连续正文排版
-- [ ] 目标能力涵盖标题页、目录页、结论页、图表页、图文混排页及主题套版
+- [ ] 独立的 Presentation / Slide / Layout / SlideBlock 模型
+- [ ] 侧重版式和层级表达
+- [ ] 标题页、目录页、结论页、图表页、图文混排页、主题套版
 
-### 🚦 推进顺序
+### 先后顺序
 
-- [ ] Word 的报告型文档能力做稳
-- [ ] 推进 Excel 的报表和图表能力
-- [ ] 做 PPT 的版式化生成能力
+1. Word 报告型文档
+2. Excel 报表和图表
+3. PPT 版式化生成
 
 ---
 
 ## 支持的文件格式
 
-### 📖 可读取分析
+### 可读取
 
 - Office：`.docx` `.xlsx` `.pptx` `.doc` `.xls` `.ppt`
 - PDF：`.pdf`
-- 文本/代码：
+- 文本和代码：
   - `.txt` `.md` `.log` `.rst`
   - `.json` `.yaml` `.yml` `.toml` `.xml` `.csv`
   - `.html` `.css` `.sql` `.sh` `.bat`
   - `.py` `.js` `.ts` `.jsx` `.tsx` `.c` `.cpp` `.h` `.java` `.go` `.rs`
 
-### 📝 可生成
+### 可生成
 
 - Word：`.docx`
 - Excel：`.xlsx`
-- PowerPoint：`.pptx`
+- PPT：`.pptx`
 
-说明：当前只支持基础内容生成，不覆盖复杂排版、图表、动画等高级能力。
+目前只做基础内容生成，复杂排版、图表、动画还没覆盖。
 
-### 🔄 PDF 转换
+### PDF 转换
 
-| 转换方向 | 依赖 | 说明 |
+| 方向 | 依赖 | 说明 |
 | --- | --- | --- |
-| Office -> PDF | Windows: `docx2pdf`/`pywin32`（需 Office）；或 LibreOffice | 支持 Word/Excel/PPT 转 PDF |
-| PDF -> Word | `pdf2docx` | 文本型 PDF 效果更好 |
-| PDF -> Excel | `tabula-py`（需 Java）或 `pdfplumber` | 以表格提取为主，复杂版面会有损失 |
+| Office → PDF | Windows: `docx2pdf` / `pywin32`（要装 Office）；或 LibreOffice | Word / Excel / PPT 都能转 |
+| PDF → Word | `pdf2docx` | 文本型 PDF 效果好一些 |
+| PDF → Excel | `tabula-py`（要 Java）或 `pdfplumber` | 抽表格为主，复杂版面会丢东西 |
 
 ---
 
 ## 系统依赖安装
 
 > [!NOTE]
-> Python 包大多会自动安装。这里列的是系统层依赖，需要你自己准备。
+> Python 包基本自动装。下面说的是系统层面需要你自己装的东西。
 
-默认先看这张简洁对照表就够了：
-
-| 平台 | 读取旧 `.doc` | Office -> PDF | 推荐方案 |
+| 平台 | 读旧 `.doc` | Office → PDF | 怎么选 |
 | --- | --- | --- | --- |
-| Windows | `pywin32` | Word 可用 `docx2pdf`，Excel/PPT 用 `pywin32` 或 LibreOffice | 有 Office 时，Word 优先 `docx2pdf`，Excel/PPT 优先 `pywin32`；没有 Office 就用 LibreOffice。 |
-| Linux | `antiword` | LibreOffice | 最稳的是 LibreOffice。 |
-| macOS | `antiword` | LibreOffice | Homebrew 安装最省事。 |
+| Windows | `pywin32` | Word 用 `docx2pdf`，Excel/PPT 用 `pywin32` 或 LibreOffice | 有 Office 就用 `docx2pdf` + `pywin32`，没有就装 LibreOffice |
+| Linux | `antiword` | LibreOffice | 装 LibreOffice 就行 |
+| macOS | `antiword` | LibreOffice | `brew install` |
 
 > [!TIP]
-> 如果你只关心 PDF 转换是否可用，先执行 `/pdf_status`，缺什么依赖它会直接告诉你。
+> 不确定缺什么，跑一下 `/pdf_status` 就知道了。
 
 <details>
-<summary>展开查看各平台安装命令</summary>
+<summary>各平台安装命令</summary>
 
-### 🪟 Windows
+### Windows
 
 ```bash
 # 旧格式读取 + win32com 转换
 pip install pywin32
 
-# Word 优先的 Office->PDF
+# Word 转 PDF
 pip install docx2pdf
 ```
 
-也可以安装 LibreOffice 作为跨平台转换后端：
+也可以装 LibreOffice 当跨平台转换后端：<https://www.libreoffice.org/download/>
 
-- <https://www.libreoffice.org/download/>
-
-### 🐧 Linux（Debian/Ubuntu）
+### Linux（Debian/Ubuntu）
 
 ```bash
-# 读取 .doc
+# 读 .doc
 apt install antiword
 
 # Office -> PDF
 apt install libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
-### 🍎 macOS
+### macOS
 
 ```bash
-# 读取 .doc
+# 读 .doc
 brew install antiword
 
 # Office -> PDF
@@ -391,13 +360,13 @@ brew install --cask libreoffice
 </details>
 
 > [!TIP]
-> 安装系统依赖后，请重启 AstrBot。
+> 装完记得重启 AstrBot。
 
 ---
 
-## Docker 使用建议
+## Docker 部署
 
-默认推荐直接写进 Dockerfile，镜像重建后也不会丢：
+写进 Dockerfile，镜像重建也不丢：
 
 ```dockerfile
 RUN apt-get update && apt-get install -y \
@@ -407,10 +376,10 @@ RUN apt-get update && apt-get install -y \
 ```
 
 > [!TIP]
-> 如果你只是临时排查环境问题，再用“进容器安装”会更方便；正式部署还是建议写进镜像。
+> 只是临时排查环境可以进容器手装，正式部署还是写进镜像。
 
 <details>
-<summary>展开查看临时方案：进容器安装（快，但不持久）</summary>
+<summary>进容器手装（临时）</summary>
 
 ```bash
 docker exec -it <容器名> bash
@@ -419,81 +388,68 @@ apt-get install -y antiword
 apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
-容器删除重建后需要重装。
+容器删了重建得重装。
 
 </details>
 
 ---
 
-## 安全与行为说明
+## 安全说明
 
-1. 默认只允许访问插件工作区。
-2. 即使开启“允许外部绝对路径”，也只放开读取/转换输入文件，不放开删除。
-3. 群聊默认关闭插件；建议按需启用，避免误触发。
-4. 若白名单为空，默认只有管理员可用。
-5. 纯文本文件会按块读取，在超出读取上限时会截断内容并提示；文件整体大小超过限制时会直接拒绝。
-
----
-
-## 常见问题（Q/A）
-
-### Q1：为什么在群聊里插件完全没反应？
-
-A：先检查 `enable_features_in_group`。默认是 `false`，群聊里会直接禁用插件能力。
-
-### Q2：我已经在群里开启插件，为什么还要 `@` 才能用？
-
-A：`require_at_in_group` 默认是 `true`。如果不想强制 `@`，把它关掉。
-
-### Q3：为什么我在私聊看不到文件工具？
-
-A：检查白名单。白名单为空时，默认只有管理员可用。
-
-### Q4：为什么 `/rm`、`/lsf` 不能用了？
-
-A：这两个命令名容易和平台或其他插件冲突。当前统一使用：
-
-- `/delete_file`
-- `/list_files`
-
-### Q5：为什么没有预览图？
-
-A：常见原因有三类：
-
-- 关闭了 `preview_settings.enable`
-- 缺少 `pymupdf`
-- Office 预览目前仅支持 Windows 上的 Word（`.doc/.docx`）
-
-### Q6：为什么 PDF->Excel 结果是空表或结构很乱？
-
-A：PDF->Excel 本质是“表格提取”，对扫描件、跨页表格、复杂版面不稳定。可先尝试：
-
-- 更干净的原始 PDF
-- 安装 Java + `tabula-py`
-- 或改走 PDF->Word 再人工整理
-
-### Q7：为什么 Office->PDF 失败？
-
-A：先看 `/pdf_status` 输出。Windows 上，Word 建议安装 Office + `docx2pdf`，Excel/PPT 建议安装 Office + `pywin32`；Linux/macOS 建议安装 LibreOffice。
-
-### Q8：开启“允许外部绝对路径”后，为什么还是删不了工作区外文件？
-
-A：这是刻意限制。外部路径只允许读取和转换输入，不允许删除。
-
-### Q9：这个插件现在还有哪些不足？
-
-A：有，而且是已知问题，先说清楚：
-
-- Office 文件生成目前偏基础，复杂排版、图表、动画不是强项。
-- PDF -> Excel 是表格提取路线，扫描件/跨页/复杂版式容易失真。
-- Office 预览图对平台有差异：目前 Word 预览在 Windows 上更稳。
-- 环境依赖对转换能力影响很大，尤其是 LibreOffice / Java / Office 组件是否齐全。
+- 默认只能访问插件工作区。
+- 开了外部路径也只放开读取和转换，删除不受影响。
+- 群聊默认插件关闭，按需开。
+- 白名单留空 = 仅管理员可用。
+- 大文件超限直接拒绝；纯文本超出分块上限会截断并提示。
 
 ---
 
-## 社群答疑与新想法
+## 常见问题
 
-如果你在群聊里遇到奇怪行为、想提新点子，欢迎直接来群里聊：
+### 群聊里插件没反应？
+
+`enable_features_in_group` 默认 `false`，打开它。
+
+### 群聊开了，为什么还得 `@`？
+
+`require_at_in_group` 默认 `true`，不想每次都 `@` 就关掉。
+
+### 私聊看不到文件工具？
+
+查白名单。留空的话只有管理员能用。
+
+### `/rm`、`/lsf` 不能用了？
+
+换名了：`/delete_file` 和 `/list_files`。
+
+### 没有预览图？
+
+三种可能：`preview_settings.enable` 关了；缺 `pymupdf`；Office 预览目前只支持 Windows 上的 Word。
+
+### PDF → Excel 出来是空表或者乱的？
+
+PDF → Excel 是抽表格，扫描件、跨页表格、复杂版面都容易出问题。可以试试换一份更干净的 PDF 源文件，装 Java + `tabula-py`，或者先转 Word 再手动整理。
+
+### Office → PDF 失败？
+
+跑 `/pdf_status` 看缺什么。Windows 上 Word 要 Office + `docx2pdf`，Excel/PPT 要 Office + `pywin32`；Linux/macOS 装 LibreOffice。
+
+### 开了外部路径还是删不了工作区外的文件？
+
+这是故意的。外部路径只开放读取和转换，不开放删除。
+
+### 目前有哪些不足？
+
+- 文件生成偏基础，复杂排版、图表、动画还没做
+- PDF → Excel 走表格提取，扫描件和复杂版式容易失真
+- 预览图各平台表现不一样，Windows 上 Word 预览最稳
+- 转换能力很依赖系统环境（LibreOffice / Java / Office 装没装齐）
+
+---
+
+## 交流
+
+遇到问题或者有想法，来群里聊：
 
 - QQ 群：`1072198212`
 
@@ -505,12 +461,12 @@ A：有，而且是已知问题，先说清楚：
 
 ---
 
-## 升级与迁移说明
+## 升级与迁移
 
-如果你从旧版本迁移，优先检查两件事：
+从旧版本过来的话，看两件事：
 
-1. 命令名是否已改为 `/list_files`、`/delete_file`。
-2. 群聊默认行为是否符合预期（默认关闭插件能力）。
+1. 命令名改成 `/list_files` 和 `/delete_file` 了没。
+2. 群聊默认行为——现在默认是关的。
 
 ---
 
@@ -524,4 +480,4 @@ MIT License
 | --- | --- |
 | ![Project architecture diagram](./.github/images/architecture-flow.jpg) | ![Contribution flow diagram](./.github/images/contribution-flow.jpg) |
 
-欢迎提交 Issue 和 Pull Request。若是行为变更，请附上复现步骤和预期结果，便于快速定位。
+欢迎提 Issue 和 PR。涉及行为变更的话附上复现步骤和预期结果。
