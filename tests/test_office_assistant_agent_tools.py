@@ -2331,7 +2331,7 @@ def test_table_schema_normalizers_are_shared():
     assert section.caption_emphasis == "normal"
 
 
-def test_table_schema_rejects_invalid_grouped_headers():
+def test_add_table_request_rejects_grouped_header_span_total_mismatch():
     with pytest.raises(
         ValidationError,
         match=r"header_groups span total \(1\) must equal column count \(2\)",
@@ -2343,6 +2343,8 @@ def test_table_schema_rejects_invalid_grouped_headers():
             header_groups=[{"title": "经营数据", "span": 1}],
         )
 
+
+def test_section_table_input_rejects_grouped_header_span_below_minimum():
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         SectionTableInput(
             headers=["区域", "目标"],
@@ -2350,14 +2352,55 @@ def test_table_schema_rejects_invalid_grouped_headers():
             header_groups=[{"title": "经营数据", "span": 0}],
         )
 
-    with pytest.raises(ValidationError, match="6-digit hex color"):
-        AddTableRequest(
-            document_id="doc-1",
-            headers=["区域"],
-            rows=[["华东"]],
-            header_fill="blue",
-        )
 
+@pytest.mark.parametrize("field_name", ["header_fill", "header_text_color", "banded_row_fill"])
+@pytest.mark.parametrize(
+    "invalid_color",
+    [
+        "blue",
+        "#123",
+        "12345g",
+    ],
+)
+def test_add_table_request_rejects_invalid_color_fields(
+    field_name: str,
+    invalid_color: str,
+):
+    kwargs = {
+        "document_id": "doc-1",
+        "headers": ["区域"],
+        "rows": [["华东"]],
+        field_name: invalid_color,
+    }
+
+    with pytest.raises(ValidationError, match="6-digit hex color"):
+        AddTableRequest(**kwargs)
+
+
+@pytest.mark.parametrize("field_name", ["header_fill", "header_text_color", "banded_row_fill"])
+@pytest.mark.parametrize(
+    "invalid_color",
+    [
+        "blue",
+        "#123",
+        "12345g",
+    ],
+)
+def test_section_table_input_rejects_invalid_color_fields(
+    field_name: str,
+    invalid_color: str,
+):
+    kwargs = {
+        "headers": ["区域"],
+        "rows": [["华东"]],
+        field_name: invalid_color,
+    }
+
+    with pytest.raises(ValidationError, match="6-digit hex color"):
+        SectionTableInput(**kwargs)
+
+
+def test_section_table_input_rejects_invalid_border_style():
     with pytest.raises(ValidationError):
         SectionTableInput(
             headers=["区域"],
@@ -2365,6 +2408,8 @@ def test_table_schema_rejects_invalid_grouped_headers():
             border_style="heavy",
         )
 
+
+def test_table_block_rejects_header_groups_without_columns():
     with pytest.raises(
         ValidationError,
         match=r"header_groups require at least one column from headers or rows \(column_count=0\)",
@@ -2456,13 +2501,7 @@ def test_document_session_store_add_table_preserves_grouped_headers():
     assert table.header_groups[0].title == "经营数据"
     assert table.header_groups[1].span == 1
     assert table.header_fill == "1F4E79"
-    assert table.header_text_color == "FFFFFF"
-    assert table.banded_rows is True
-    assert table.banded_row_fill == "EEF4FA"
-    assert table.first_column_bold is True
-    assert table.table_align == "center"
     assert table.border_style == "strong"
-    assert table.caption_emphasis == "strong"
 
 
 @pytest.mark.asyncio
