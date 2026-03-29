@@ -371,7 +371,16 @@ async def test_before_llm_chat_does_not_restrict_for_question_style_tool_mention
 
 
 @pytest.mark.asyncio
-async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "不要调用 create_office_file，先告诉我可用工具。",
+        "请问 create_office_file 怎么用？先告诉我可用工具。",
+    ],
+)
+async def test_before_llm_chat_does_not_restrict_for_non_explicit_tool_mentions(
+    prompt: str,
+):
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
@@ -380,7 +389,7 @@ async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
             sender_id="user-1",
         )
         req = ProviderRequest(
-            prompt="不要调用 create_office_file，先告诉我可用工具。",
+            prompt=prompt,
             system_prompt="base",
             func_tool=ToolSet(
                 [
@@ -401,7 +410,6 @@ async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
         assert "read_file" in tool_names
     finally:
         await plugin.terminate()
-
 @pytest.mark.asyncio
 async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_call():
     context = MagicMock()
