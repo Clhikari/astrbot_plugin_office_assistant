@@ -411,7 +411,6 @@ async def test_before_llm_chat_does_not_restrict_for_non_explicit_tool_mentions(
     finally:
         await plugin.terminate()
 
-
 @pytest.mark.asyncio
 async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_call():
     context = MagicMock()
