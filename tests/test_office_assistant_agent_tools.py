@@ -1405,6 +1405,58 @@ async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_spl
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_marks_caption_only_table_as_non_split_without_tbl_header(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-caption-only-table-cantsplit"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="只有标题的表",
+            output_name="caption-only-table.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "caption": "仅标题（无表头行）的表",
+                "rows": [["数据 1"], ["数据 2"]],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert table.rows[0].cells[0].text == "仅标题（无表头行）的表"
+    assert _row_has_cant_split(table.rows[0]) is True
+    assert _row_is_repeated_header(table.rows[0]) is False
+    assert _row_has_cant_split(table.rows[1]) is True
+    assert _row_is_repeated_header(table.rows[1]) is False
+    assert _row_has_cant_split(table.rows[2]) is True
+    assert _row_is_repeated_header(table.rows[2]) is False
+
+
+@pytest.mark.asyncio
 async def test_add_blocks_tool_applies_custom_table_style_overrides(
     workspace_root: Path,
 ):
