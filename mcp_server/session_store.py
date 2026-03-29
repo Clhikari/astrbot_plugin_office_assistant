@@ -333,6 +333,13 @@ class DocumentSessionStore:
                     variant=block.variant,
                     style=block.style,
                     layout=block.layout,
+                    **summary_card_defaults_from_config(
+                        getattr(
+                            getattr(document.metadata, "document_style", None),
+                            "summary_card_defaults",
+                            None,
+                        )
+                    ),
                 )
             ]
 

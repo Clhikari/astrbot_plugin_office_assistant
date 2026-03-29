@@ -403,6 +403,39 @@ async def test_before_llm_chat_does_not_restrict_for_negated_tool_mention():
         await plugin.terminate()
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_does_not_restrict_for_question_style_tool_mention():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        req = ProviderRequest(
+            prompt="请问 create_office_file 怎么用？先告诉我可用工具。",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("create_office_file"),
+                    _tool("create_document"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_office_file" in tool_names
+        assert "create_document" in tool_names
+        assert "read_file" in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_call():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
