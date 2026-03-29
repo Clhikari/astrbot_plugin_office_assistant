@@ -315,21 +315,23 @@ class TableRenderer:
         shd.set(qn("w:fill"), fill)
 
     @staticmethod
+    def _get_or_add_tr_property(tr_pr, tag_name: str):
+        element = tr_pr.find(qn(tag_name))
+        if element is None:
+            element = OxmlElement(tag_name)
+            tr_pr.append(element)
+        return element
+
+    @staticmethod
     def _set_row_as_header(row) -> None:
         tr_pr = row._tr.get_or_add_trPr()
-        tbl_header = tr_pr.find(qn("w:tblHeader"))
-        if tbl_header is None:
-            tbl_header = OxmlElement("w:tblHeader")
-            tr_pr.append(tbl_header)
+        tbl_header = TableRenderer._get_or_add_tr_property(tr_pr, "w:tblHeader")
         tbl_header.set(qn("w:val"), "true")
 
     @staticmethod
     def _set_row_cant_split(row) -> None:
         tr_pr = row._tr.get_or_add_trPr()
-        cant_split = tr_pr.find(qn("w:cantSplit"))
-        if cant_split is None:
-            cant_split = OxmlElement("w:cantSplit")
-            tr_pr.append(cant_split)
+        TableRenderer._get_or_add_tr_property(tr_pr, "w:cantSplit")
 
     @staticmethod
     def _table_alignment(table_align: str | None, alignment_enum):
