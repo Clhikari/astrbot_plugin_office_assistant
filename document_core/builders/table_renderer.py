@@ -331,7 +331,8 @@ class TableRenderer:
     @staticmethod
     def _set_row_cant_split(row) -> None:
         tr_pr = row._tr.get_or_add_trPr()
-        TableRenderer._get_or_add_tr_property(tr_pr, "w:cantSplit")
+        cant_split = TableRenderer._get_or_add_tr_property(tr_pr, "w:cantSplit")
+        cant_split.set(qn("w:val"), "true")
 
     @staticmethod
     def _table_alignment(table_align: str | None, alignment_enum):

@@ -146,6 +146,18 @@ def _row_has_cant_split(row) -> bool:
     return tr_pr.find(qn("w:cantSplit")) is not None
 
 
+def _row_cant_split_value(row) -> str | None:
+    from docx.oxml.ns import qn
+
+    tr_pr = row._tr.trPr
+    if tr_pr is None:
+        return None
+    cant_split = tr_pr.find(qn("w:cantSplit"))
+    if cant_split is None:
+        return None
+    return cant_split.get(qn("w:val"))
+
+
 def _row_is_repeated_header(row) -> bool:
     from docx.oxml.ns import qn
 
@@ -1402,6 +1414,24 @@ async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_spl
     assert _row_has_cant_split(table.rows[0]) is True
     assert _row_has_cant_split(table.rows[1]) is True
     assert _row_has_cant_split(table.rows[2]) is True
+
+
+def test_table_renderer_sets_cant_split_value_to_true_even_when_row_had_false():
+    docx = pytest.importorskip("docx")
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    document = docx.Document()
+    row = document.add_table(rows=1, cols=1).rows[0]
+    tr_pr = row._tr.get_or_add_trPr()
+    cant_split = OxmlElement("w:cantSplit")
+    cant_split.set(qn("w:val"), "false")
+    tr_pr.append(cant_split)
+
+    TableRenderer._set_row_cant_split(row)
+
+    assert _row_has_cant_split(row) is True
+    assert _row_cant_split_value(row) == "true"
 
 
 @pytest.mark.asyncio
