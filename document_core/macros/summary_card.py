@@ -19,7 +19,9 @@ _SUMMARY_CARD_DEFAULT_FIELDS = (
 )
 
 
-def _summary_card_default_kwargs(values: dict[str, object | None]) -> dict[str, object | None]:
+def _summary_card_default_kwargs(
+    values: dict[str, object | None],
+) -> dict[str, object | None]:
     return {field: values.get(field) for field in _SUMMARY_CARD_DEFAULT_FIELDS}
 
 
@@ -51,16 +53,13 @@ def _merge_style(
     emphasis: str | None = None,
     font_scale: float | None = None,
 ) -> BlockStyle:
+    base_align = getattr(base, "align", None)
+    base_emphasis = getattr(base, "emphasis", None)
+    base_font_scale = getattr(base, "font_scale", None)
     return BlockStyle(
-        align=getattr(base, "align", None)
-        if getattr(base, "align", None) is not None
-        else align,
-        emphasis=getattr(base, "emphasis", None)
-        if getattr(base, "emphasis", None) is not None
-        else emphasis,
-        font_scale=getattr(base, "font_scale", None)
-        if getattr(base, "font_scale", None) is not None
-        else font_scale,
+        align=base_align if base_align is not None else align,
+        emphasis=base_emphasis if base_emphasis is not None else emphasis,
+        font_scale=base_font_scale if base_font_scale is not None else font_scale,
         table_grid=getattr(base, "table_grid", None),
         cell_align=getattr(base, "cell_align", None),
     )
@@ -72,13 +71,15 @@ def _merge_layout(
     spacing_before: float | None = None,
     spacing_after: float | None = None,
 ) -> BlockLayout:
+    base_spacing_before = getattr(base, "spacing_before", None)
+    base_spacing_after = getattr(base, "spacing_after", None)
     return BlockLayout(
-        spacing_before=getattr(base, "spacing_before", None)
-        if getattr(base, "spacing_before", None) is not None
-        else spacing_before,
-        spacing_after=getattr(base, "spacing_after", None)
-        if getattr(base, "spacing_after", None) is not None
-        else spacing_after,
+        spacing_before=(
+            base_spacing_before if base_spacing_before is not None else spacing_before
+        ),
+        spacing_after=(
+            base_spacing_after if base_spacing_after is not None else spacing_after
+        ),
     )
 
 

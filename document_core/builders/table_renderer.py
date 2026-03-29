@@ -21,6 +21,7 @@ DOCX_TABLE_STYLES = {
     "metrics_compact": "Light List Accent 1",
     "minimal": "Table Grid",
 }
+_DEFAULT_BANDED_ROW_FILL = "F7FBFF"
 
 
 class TableRenderer:
@@ -236,20 +237,24 @@ class TableRenderer:
 
     @staticmethod
     def _header_fill(block, style_name: str, theme: dict) -> str | None:
-        if block.header_fill:
-            return block.header_fill
-        if theme.get("table_header_fill"):
-            return theme["table_header_fill"]
+        if fill := TableRenderer._resolved_table_style_value(
+            block.header_fill,
+            theme,
+            "table_header_fill",
+        ):
+            return fill
         if style_name == "minimal":
             return theme["accent_soft"]
         return theme["accent"]
 
     @staticmethod
     def _table_header_color(block, style_name: str, theme: dict):
-        if block.header_text_color:
-            return rgb(block.header_text_color)
-        if theme.get("table_header_text_color"):
-            return rgb(theme["table_header_text_color"])
+        if color := TableRenderer._resolved_table_style_value(
+            block.header_text_color,
+            theme,
+            "table_header_text_color",
+        ):
+            return rgb(color)
         if style_name == "minimal":
             return rgb(theme["accent"])
         return rgb("FFFFFF")
@@ -264,13 +269,13 @@ class TableRenderer:
         if block.banded_rows is False:
             return None
         if block.banded_rows is True and row_index % 2 == 1:
-            return block.banded_row_fill or "F7FBFF"
+            return block.banded_row_fill or _DEFAULT_BANDED_ROW_FILL
         if theme.get("table_banded_rows") is True:
             if row_index % 2 == 1:
-                return theme.get("table_banded_row_fill") or "F7FBFF"
+                return theme.get("table_banded_row_fill") or _DEFAULT_BANDED_ROW_FILL
             return None
         if style_name == "report_grid" and row_index % 2 == 1:
-            return "F7FBFF"
+            return _DEFAULT_BANDED_ROW_FILL
         return None
 
     @staticmethod
@@ -305,24 +310,36 @@ class TableRenderer:
 
     @staticmethod
     def _caption_fill(block, theme: dict) -> str:
-        resolved_emphasis = block.caption_emphasis or theme.get(
-            "table_caption_emphasis"
+        resolved_emphasis = TableRenderer._resolved_table_style_value(
+            block.caption_emphasis,
+            theme,
+            "table_caption_emphasis",
         )
         if resolved_emphasis == "strong":
             return (
-                block.header_fill or theme.get("table_header_fill") or theme["accent"]
+                TableRenderer._resolved_table_style_value(
+                    block.header_fill,
+                    theme,
+                    "table_header_fill",
+                )
+                or theme["accent"]
             )
         return theme["accent_soft"]
 
     @staticmethod
     def _caption_color(block, theme: dict):
-        resolved_emphasis = block.caption_emphasis or theme.get(
-            "table_caption_emphasis"
+        resolved_emphasis = TableRenderer._resolved_table_style_value(
+            block.caption_emphasis,
+            theme,
+            "table_caption_emphasis",
         )
         if resolved_emphasis == "strong":
             return rgb(
-                block.header_text_color
-                or theme.get("table_header_text_color")
+                TableRenderer._resolved_table_style_value(
+                    block.header_text_color,
+                    theme,
+                    "table_header_text_color",
+                )
                 or "FFFFFF"
             )
         return rgb(theme["accent"])
@@ -333,6 +350,14 @@ class TableRenderer:
         if caption_emphasis == "strong":
             return base_size + 1
         return base_size
+
+    @staticmethod
+    def _resolved_table_style_value(
+        block_value,
+        theme: dict,
+        theme_key: str,
+    ):
+        return block_value if block_value is not None else theme.get(theme_key)
 
     @staticmethod
     def _apply_table_borders(
