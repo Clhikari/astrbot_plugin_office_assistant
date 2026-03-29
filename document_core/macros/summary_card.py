@@ -56,6 +56,8 @@ def _merge_style(
     base_align = getattr(base, "align", None)
     base_emphasis = getattr(base, "emphasis", None)
     base_font_scale = getattr(base, "font_scale", None)
+    # Summary card block styles stay at the top of the precedence chain.
+    # Document defaults and variant defaults only fill missing values.
     return BlockStyle(
         align=base_align if base_align is not None else align,
         emphasis=base_emphasis if base_emphasis is not None else emphasis,

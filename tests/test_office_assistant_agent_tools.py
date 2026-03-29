@@ -19,7 +19,11 @@ from astrbot_plugin_office_assistant.document_core.builders.table_renderer impor
 from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
     WordDocumentBuilder,
 )
+from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
+    build_summary_card_group,
+)
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
+    BlockStyle,
     GroupBlock,
     ParagraphBlock,
     ParagraphRun,
@@ -839,6 +843,83 @@ async def test_create_document_tool_prefers_table_block_over_document_style_defa
     assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert _table_border_size(table, "top") == "16"
     assert _table_border_color(table, "top") == "1F4E79"
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_uses_theme_banded_fill_when_block_enables_banding(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-document-style-banded-fill-fallback"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Banded Fill Fallback",
+            output_name="banded-fill-fallback.docx",
+            document_style={
+                "table_defaults": {
+                    "banded_rows": True,
+                    "banded_row_fill": "EEF4FA",
+                },
+            },
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "headers": ["Metric", "Value"],
+                "rows": [["North", "100"], ["South", "200"]],
+                "banded_rows": True,
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert _cell_fill(table.rows[1].cells[0]) == "EEF4FA"
+    assert _cell_fill(table.rows[2].cells[0]) is None
+
+
+def test_build_summary_card_group_prefers_block_style_over_defaults():
+    group = build_summary_card_group(
+        title="Summary Override",
+        items=["Item A"],
+        style=BlockStyle(
+            align="right",
+            emphasis="normal",
+            font_scale=1.3,
+        ),
+        title_align="center",
+        title_emphasis="strong",
+        title_font_scale=1.05,
+    )
+
+    title_block = group.blocks[0]
+    list_block = group.blocks[1]
+
+    assert title_block.style.align == "right"
+    assert title_block.style.emphasis == "normal"
+    assert title_block.style.font_scale == pytest.approx(1.3)
+    assert list_block.style.emphasis == "normal"
 
 
 @pytest.mark.asyncio

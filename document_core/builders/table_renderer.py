@@ -268,8 +268,14 @@ class TableRenderer:
     ) -> str | None:
         if block.banded_rows is False:
             return None
-        if block.banded_rows is True and row_index % 2 == 1:
-            return block.banded_row_fill or _DEFAULT_BANDED_ROW_FILL
+        if block.banded_rows is True:
+            if row_index % 2 == 1:
+                return (
+                    block.banded_row_fill
+                    or theme.get("table_banded_row_fill")
+                    or _DEFAULT_BANDED_ROW_FILL
+                )
+            return None
         if theme.get("table_banded_rows") is True:
             if row_index % 2 == 1:
                 return theme.get("table_banded_row_fill") or _DEFAULT_BANDED_ROW_FILL
@@ -371,7 +377,9 @@ class TableRenderer:
             "standard": {"size": "8", "color": "7A7A7A"},
             "strong": {"size": "16", "color": accent_color},
         }
-        border_spec = border_map[border_style]
+        border_spec = border_map.get(border_style)
+        if border_spec is None:
+            return
 
         tbl_pr = table._tbl.tblPr
         tbl_borders = tbl_pr.find(qn("w:tblBorders"))
