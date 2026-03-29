@@ -113,6 +113,7 @@ class TableRenderer:
                 color=self._caption_color(block, theme),
                 background=self._caption_fill(block, theme),
             )
+            self._set_row_cant_split(table.rows[0])
             row_index = 1
 
         if block.header_groups:
@@ -123,6 +124,8 @@ class TableRenderer:
                 style_name=style_name,
                 theme=theme,
             )
+            self._set_row_as_header(table.rows[row_index])
+            self._set_row_cant_split(table.rows[row_index])
             row_index += 1
 
         if block.headers:
@@ -138,6 +141,8 @@ class TableRenderer:
                     color=self._table_header_color(block, style_name, theme),
                     background=self._header_fill(block, style_name, theme),
                 )
+            self._set_row_as_header(header_row)
+            self._set_row_cant_split(header_row)
             row_index += 1
 
         for data_row_index, values in enumerate(block.rows):
@@ -169,6 +174,7 @@ class TableRenderer:
                         theme,
                     ),
                 )
+            self._set_row_cant_split(table.rows[current_row])
 
     def _render_group_header_row(
         self,
@@ -307,6 +313,23 @@ class TableRenderer:
             shd = OxmlElement("w:shd")
             tc_pr.append(shd)
         shd.set(qn("w:fill"), fill)
+
+    @staticmethod
+    def _set_row_as_header(row) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        tbl_header = tr_pr.find(qn("w:tblHeader"))
+        if tbl_header is None:
+            tbl_header = OxmlElement("w:tblHeader")
+            tr_pr.append(tbl_header)
+        tbl_header.set(qn("w:val"), "true")
+
+    @staticmethod
+    def _set_row_cant_split(row) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        cant_split = tr_pr.find(qn("w:cantSplit"))
+        if cant_split is None:
+            cant_split = OxmlElement("w:cantSplit")
+            tr_pr.append(cant_split)
 
     @staticmethod
     def _table_alignment(table_align: str | None, alignment_enum):

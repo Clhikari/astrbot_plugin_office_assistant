@@ -137,6 +137,28 @@ def _table_border_color(table, edge_name: str) -> str | None:
     return edge.get(qn("w:color"))
 
 
+def _row_has_cant_split(row) -> bool:
+    from docx.oxml.ns import qn
+
+    tr_pr = row._tr.trPr
+    if tr_pr is None:
+        return False
+    return tr_pr.find(qn("w:cantSplit")) is not None
+
+
+def _row_is_repeated_header(row) -> bool:
+    from docx.oxml.ns import qn
+
+    tr_pr = row._tr.trPr
+    if tr_pr is None:
+        return False
+    tbl_header = tr_pr.find(qn("w:tblHeader"))
+    if tbl_header is None:
+        return False
+    value = tbl_header.get(qn("w:val"))
+    return value in {None, "1", "true", "on"}
+
+
 def _make_workspace(workspace_root: Path, name: str) -> Path:
     workspace_dir = workspace_root / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -1317,10 +1339,63 @@ async def test_add_blocks_tool_supports_grouped_table_headers(
     assert _grid_span(table.rows[1].cells[0]) == 2
     assert table.rows[1].cells[2].text == "结果"
     assert _grid_span(table.rows[1].cells[2]) == 2
+    assert _row_is_repeated_header(table.rows[1]) is True
+    assert _row_has_cant_split(table.rows[1]) is True
     assert table.rows[2].cells[0].text == "区域"
+    assert _row_is_repeated_header(table.rows[2]) is True
+    assert _row_has_cant_split(table.rows[2]) is True
+    assert _row_has_cant_split(table.rows[3]) is True
+    assert _row_has_cant_split(table.rows[4]) is True
     assert table.rows[3].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert table.rows[4].cells[3].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert abs(table.rows[2].cells[0].width - Cm(3.2)) < 20000
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_split(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-header-repeat")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="表头重复",
+            output_name="table-header-repeat.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "headers": ["区域", "营收（万元）"],
+                "rows": [["华东", "1280"], ["华南", "980"]],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert _row_is_repeated_header(table.rows[0]) is True
+    assert _row_has_cant_split(table.rows[0]) is True
+    assert _row_has_cant_split(table.rows[1]) is True
+    assert _row_has_cant_split(table.rows[2]) is True
 
 
 @pytest.mark.asyncio
