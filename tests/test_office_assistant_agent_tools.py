@@ -1344,7 +1344,9 @@ async def test_add_blocks_tool_supports_grouped_table_headers(
     assert table.rows[2].cells[0].text == "区域"
     assert _row_is_repeated_header(table.rows[2]) is True
     assert _row_has_cant_split(table.rows[2]) is True
+    assert _row_is_repeated_header(table.rows[3]) is False
     assert _row_has_cant_split(table.rows[3]) is True
+    assert _row_is_repeated_header(table.rows[4]) is False
     assert _row_has_cant_split(table.rows[4]) is True
     assert table.rows[3].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert table.rows[4].cells[3].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
