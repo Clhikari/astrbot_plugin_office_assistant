@@ -323,6 +323,13 @@ class DocumentSessionStore:
     def _expand_summary_card_block(
         self, block: SectionCardInput, document: DocumentModel
     ) -> list:
+        summary_card_defaults = summary_card_defaults_from_config(
+            getattr(
+                getattr(document.metadata, "document_style", None),
+                "summary_card_defaults",
+                None,
+            )
+        )
         try:
             from ..document_core.macros import build_summary_card_group
         except ImportError:
@@ -333,13 +340,7 @@ class DocumentSessionStore:
                     variant=block.variant,
                     style=block.style,
                     layout=block.layout,
-                    **summary_card_defaults_from_config(
-                        getattr(
-                            getattr(document.metadata, "document_style", None),
-                            "summary_card_defaults",
-                            None,
-                        )
-                    ),
+                    **summary_card_defaults,
                 )
             ]
 
@@ -351,13 +352,7 @@ class DocumentSessionStore:
                     variant=block.variant,
                     style=block.style,
                     layout=block.layout,
-                    **summary_card_defaults_from_config(
-                        getattr(
-                            getattr(document.metadata, "document_style", None),
-                            "summary_card_defaults",
-                            None,
-                        )
-                    ),
+                    **summary_card_defaults,
                 )
             ]
         except Exception:
