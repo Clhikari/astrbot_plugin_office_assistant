@@ -323,13 +323,18 @@ class DocumentSessionStore:
     def _expand_summary_card_block(
         self, block: SectionCardInput, document: DocumentModel
     ) -> list:
-        summary_card_defaults = summary_card_defaults_from_config(
-            getattr(
-                getattr(document.metadata, "document_style", None),
-                "summary_card_defaults",
-                None,
+        document_style = getattr(document.metadata, "document_style", None)
+        summary_card_config = getattr(document_style, "summary_card_defaults", None)
+        try:
+            summary_card_defaults = summary_card_defaults_from_config(
+                summary_card_config
             )
-        )
+        except Exception:
+            logger.exception(
+                "Failed to resolve summary card defaults for document %s",
+                document.document_id,
+            )
+            summary_card_defaults = {}
         try:
             from ..document_core.macros import build_summary_card_group
         except ImportError:

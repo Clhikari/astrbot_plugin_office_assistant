@@ -2248,6 +2248,40 @@ def test_document_session_store_applies_summary_card_defaults():
     assert list_block.layout.spacing_after == pytest.approx(8)
 
 
+def test_document_session_store_tolerates_summary_card_default_resolution_errors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Summary Fallback"))
+
+    def _raise_defaults_error(_config):
+        raise RuntimeError("bad defaults")
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.session_store.summary_card_defaults_from_config",
+        _raise_defaults_error,
+    )
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    assert updated.blocks[0].blocks[0].text == "Conclusion"
+    assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
 def test_document_session_store_runs_internal_normalize_hooks():
     def _inject_heading(_context):
         return [
