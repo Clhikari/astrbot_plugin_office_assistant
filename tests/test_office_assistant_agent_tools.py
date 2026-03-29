@@ -1394,6 +1394,10 @@ async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_spl
     loaded_doc = docx.Document(exported["file_path"])
     table = loaded_doc.tables[0]
 
+    # Data rows should not be marked as repeated headers
+    assert _row_is_repeated_header(table.rows[1]) is False
+    assert _row_is_repeated_header(table.rows[2]) is False
+
     assert _row_is_repeated_header(table.rows[0]) is True
     assert _row_has_cant_split(table.rows[0]) is True
     assert _row_has_cant_split(table.rows[1]) is True
