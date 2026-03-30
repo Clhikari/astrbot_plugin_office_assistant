@@ -145,6 +145,7 @@ class LLMRequestPolicy:
             return
 
         has_permission = self._check_permission(event)
+        can_process_upload = has_permission or event.is_admin()
         meets_group_trigger = (
             not is_group
             or not self._require_at_in_group
@@ -177,7 +178,7 @@ class LLMRequestPolicy:
                 event=event,
                 request=req,
                 should_expose=should_expose,
-                can_process_upload=(has_permission or event.is_admin()),
+                can_process_upload=can_process_upload,
                 explicit_tool_name=explicit_tool_name,
             )
         )
@@ -187,7 +188,7 @@ class LLMRequestPolicy:
                 event=event,
                 request=req,
                 should_expose=should_expose,
-                can_process_upload=(has_permission or event.is_admin()),
+                can_process_upload=can_process_upload,
                 explicit_tool_name=explicit_tool_name,
             )
         )
