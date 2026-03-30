@@ -14,8 +14,8 @@ class AccessPolicyService:
         get_admin_users: Callable[[], list[str] | None] | None = None,
         enable_features_in_group: bool,
     ) -> None:
-        self._whitelist_users = [str(user_id) for user_id in whitelist_users or []]
-        self._admin_users = [str(user_id) for user_id in admin_users or []]
+        self._whitelist_users = {str(user_id) for user_id in whitelist_users or []}
+        self._admin_users = {str(user_id) for user_id in admin_users or []}
         self._get_admin_users = get_admin_users
         self._enable_features_in_group = bool(enable_features_in_group)
 
@@ -27,9 +27,9 @@ class AccessPolicyService:
         admin_users = self._admin_users
         if self._get_admin_users is not None:
             try:
-                admin_users = [
+                admin_users = {
                     str(admin_id) for admin_id in (self._get_admin_users() or [])
-                ]
+                }
             except Exception as exc:
                 logger.warning(f"读取框架管理员配置失败: {exc}")
         if user_id in admin_users:
