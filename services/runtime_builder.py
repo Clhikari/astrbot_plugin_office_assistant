@@ -30,8 +30,8 @@ from .llm_request_policy import LLMRequestPolicy
 from .post_export_hook_service import PostExportHookService
 from .request_hook_service import RequestHookService
 from .upload_session_service import UploadSessionService
-from .workspace_service import WorkspaceService
 from .word_read_service import WordReadService
+from .workspace_service import WorkspaceService
 
 
 @dataclass(slots=True)
@@ -90,6 +90,12 @@ def build_plugin_runtime(
     store_uploaded_file,
 ) -> PluginRuntimeBundle:
     settings = _load_settings(config)
+    root_config = _resolve_root_config(context)
+    admin_users = _extract_admin_users(root_config)
+    get_admin_users = _build_admin_users_resolver(
+        context,
+        initial_admin_users=admin_users,
+    )
     temp_dir, plugin_data_path = _prepare_workspace(
         settings.auto_delete, plugin_name=plugin_name
     )
@@ -110,6 +116,8 @@ def build_plugin_runtime(
         whitelist_users=config.get("permission_settings", {}).get(
             "whitelist_users", []
         ),
+        admin_users=list(admin_users),
+        get_admin_users=get_admin_users,
         enable_features_in_group=settings.enable_features_in_group,
     )
     upload_session_service = UploadSessionService(
@@ -227,6 +235,40 @@ def build_plugin_runtime(
         message_buffer=message_buffer,
         incoming_message_service=incoming_message_service,
     )
+
+
+def _resolve_root_config(context) -> dict:
+    get_config = getattr(context, "get_config", None)
+    if callable(get_config):
+        config = get_config()
+        if isinstance(config, dict):
+            return config
+
+    legacy_config = getattr(context, "astrbot_config", None)
+    if isinstance(legacy_config, dict):
+        return legacy_config
+
+    return {}
+
+
+def _extract_admin_users(root_config: dict) -> set[str]:
+    if not isinstance(root_config, dict):
+        return set()
+    return {str(admin_id) for admin_id in root_config.get("admins_id", [])}
+
+
+def _build_admin_users_resolver(context, *, initial_admin_users: set[str]):
+    cache = {"admin_users": set(initial_admin_users)}
+
+    def get_admin_users() -> set[str]:
+        return set(cache["admin_users"])
+
+    def refresh() -> set[str]:
+        cache["admin_users"] = _extract_admin_users(_resolve_root_config(context))
+        return get_admin_users()
+
+    get_admin_users.refresh = refresh
+    return get_admin_users
 
 
 def _load_settings(config) -> PluginSettings:

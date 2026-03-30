@@ -146,19 +146,24 @@ class LLMRequestPolicy:
 
         has_permission = self._check_permission(event)
         can_process_upload = has_permission or event.is_admin()
+        meets_group_trigger = (
+            not is_group
+            or not self._require_at_in_group
+            or self._is_bot_mentioned(event)
+        )
         should_expose = (is_friend and event.is_admin()) or (
-            has_permission
-            and (
-                not is_group
-                or not self._require_at_in_group
-                or self._is_bot_mentioned(event)
-            )
+            has_permission and meets_group_trigger
         )
 
         if not should_expose:
-            logger.debug(
-                f"[文件管理] 用户 {event.get_sender_id()} 权限不足，已隐藏文件工具"
-            )
+            if not has_permission:
+                logger.debug(
+                    f"[文件管理] 用户 {event.get_sender_id()} 无文件权限，已隐藏文件工具"
+                )
+            else:
+                logger.debug(
+                    f"[文件管理] 用户 {event.get_sender_id()} 未满足群聊触发条件，已隐藏文件工具"
+                )
             if req.func_tool:
                 for tool_name in FILE_TOOLS:
                     req.func_tool.remove_tool(tool_name)
