@@ -203,7 +203,7 @@ def test_access_policy_service_allows_framework_admin_sender_id():
 
 
 def test_access_policy_service_reads_framework_admins_dynamically():
-    admin_state = {"admins_id": []}
+    admin_state = {"admins_id": set()}
     service = AccessPolicyService(
         whitelist_users=[],
         admin_users=[],
@@ -215,7 +215,7 @@ def test_access_policy_service_reads_framework_admins_dynamically():
 
     assert service.check_permission(event) is False
 
-    admin_state["admins_id"] = ["1474436119298048127"]
+    admin_state["admins_id"] = {"1474436119298048127"}
 
     assert service.check_permission(event) is True
 

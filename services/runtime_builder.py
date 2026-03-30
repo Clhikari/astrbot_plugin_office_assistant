@@ -91,7 +91,11 @@ def build_plugin_runtime(
 ) -> PluginRuntimeBundle:
     settings = _load_settings(config)
     root_config = _resolve_root_config(context)
-    get_admin_users = _build_admin_users_resolver(context, initial_root_config=root_config)
+    admin_users = _extract_admin_users(root_config)
+    get_admin_users = _build_admin_users_resolver(
+        context,
+        initial_admin_users=admin_users,
+    )
     temp_dir, plugin_data_path = _prepare_workspace(
         settings.auto_delete, plugin_name=plugin_name
     )
@@ -112,7 +116,7 @@ def build_plugin_runtime(
         whitelist_users=config.get("permission_settings", {}).get(
             "whitelist_users", []
         ),
-        admin_users=root_config.get("admins_id", []),
+        admin_users=list(admin_users),
         get_admin_users=get_admin_users,
         enable_features_in_group=settings.enable_features_in_group,
     )
@@ -247,18 +251,20 @@ def _resolve_root_config(context) -> dict:
     return {}
 
 
-def _build_admin_users_resolver(context, *, initial_root_config: dict):
-    cache = {"root_config": initial_root_config}
+def _extract_admin_users(root_config: dict) -> set[str]:
+    if not isinstance(root_config, dict):
+        return set()
+    return {str(admin_id) for admin_id in root_config.get("admins_id", [])}
 
-    def get_admin_users() -> list[str]:
-        root_config = cache["root_config"]
-        if not isinstance(root_config, dict):
-            root_config = _resolve_root_config(context)
-            cache["root_config"] = root_config
-        return list(root_config.get("admins_id", []))
 
-    def refresh() -> list[str]:
-        cache["root_config"] = _resolve_root_config(context)
+def _build_admin_users_resolver(context, *, initial_admin_users: set[str]):
+    cache = {"admin_users": set(initial_admin_users)}
+
+    def get_admin_users() -> set[str]:
+        return set(cache["admin_users"])
+
+    def refresh() -> set[str]:
+        cache["admin_users"] = _extract_admin_users(_resolve_root_config(context))
         return get_admin_users()
 
     get_admin_users.refresh = refresh

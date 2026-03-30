@@ -11,7 +11,7 @@ class AccessPolicyService:
         *,
         whitelist_users: list[str] | None = None,
         admin_users: list[str] | None = None,
-        get_admin_users: Callable[[], list[str] | None] | None = None,
+        get_admin_users: Callable[[], set[str] | list[str] | None] | None = None,
         enable_features_in_group: bool,
     ) -> None:
         self._whitelist_users = {str(user_id) for user_id in whitelist_users or []}
@@ -27,9 +27,13 @@ class AccessPolicyService:
         admin_users = self._admin_users
         if self._get_admin_users is not None:
             try:
-                admin_users = {
-                    str(admin_id) for admin_id in (self._get_admin_users() or [])
-                }
+                dynamic_admin_users = self._get_admin_users() or set()
+                if isinstance(dynamic_admin_users, (set, frozenset)):
+                    admin_users = dynamic_admin_users
+                else:
+                    admin_users = {
+                        str(admin_id) for admin_id in dynamic_admin_users
+                    }
             except Exception as exc:
                 logger.warning(f"读取框架管理员配置失败: {exc}")
         if user_id in admin_users:
