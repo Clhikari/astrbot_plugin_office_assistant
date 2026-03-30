@@ -81,6 +81,19 @@ class PluginRuntimeBundle:
     incoming_message_service: IncomingMessageService
 
 
+@dataclass(slots=True)
+class AdminUsersResolver:
+    context: object
+    admin_users: set[str]
+
+    def __call__(self) -> set[str]:
+        return set(self.admin_users)
+
+    def refresh(self) -> set[str]:
+        self.admin_users = _extract_admin_users(_resolve_root_config(self.context))
+        return self()
+
+
 def build_plugin_runtime(
     *,
     context,
@@ -267,17 +280,10 @@ def _extract_admin_users(root_config: dict) -> set[str]:
 
 
 def _build_admin_users_resolver(context, *, initial_admin_users: set[str]):
-    cache = {"admin_users": set(initial_admin_users)}
-
-    def get_admin_users() -> set[str]:
-        return set(cache["admin_users"])
-
-    def refresh() -> set[str]:
-        cache["admin_users"] = _extract_admin_users(_resolve_root_config(context))
-        return get_admin_users()
-
-    get_admin_users.refresh = refresh
-    return get_admin_users
+    return AdminUsersResolver(
+        context=context,
+        admin_users=set(initial_admin_users),
+    )
 
 
 def _load_settings(config) -> PluginSettings:
