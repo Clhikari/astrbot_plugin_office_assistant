@@ -30,8 +30,8 @@ from .llm_request_policy import LLMRequestPolicy
 from .post_export_hook_service import PostExportHookService
 from .request_hook_service import RequestHookService
 from .upload_session_service import UploadSessionService
-from .workspace_service import WorkspaceService
 from .word_read_service import WordReadService
+from .workspace_service import WorkspaceService
 
 
 @dataclass(slots=True)
@@ -90,6 +90,7 @@ def build_plugin_runtime(
     store_uploaded_file,
 ) -> PluginRuntimeBundle:
     settings = _load_settings(config)
+    root_config = _resolve_root_config(context)
     temp_dir, plugin_data_path = _prepare_workspace(
         settings.auto_delete, plugin_name=plugin_name
     )
@@ -110,6 +111,8 @@ def build_plugin_runtime(
         whitelist_users=config.get("permission_settings", {}).get(
             "whitelist_users", []
         ),
+        admin_users=root_config.get("admins_id", []),
+        get_admin_users=lambda: _resolve_root_config(context).get("admins_id", []),
         enable_features_in_group=settings.enable_features_in_group,
     )
     upload_session_service = UploadSessionService(
@@ -227,6 +230,20 @@ def build_plugin_runtime(
         message_buffer=message_buffer,
         incoming_message_service=incoming_message_service,
     )
+
+
+def _resolve_root_config(context) -> dict:
+    get_config = getattr(context, "get_config", None)
+    if callable(get_config):
+        config = get_config()
+        if isinstance(config, dict):
+            return config
+
+    legacy_config = getattr(context, "astrbot_config", None)
+    if isinstance(legacy_config, dict):
+        return legacy_config
+
+    return {}
 
 
 def _load_settings(config) -> PluginSettings:

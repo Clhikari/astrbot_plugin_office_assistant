@@ -770,6 +770,64 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
 
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_exposes_file_tools_for_buffered_group_upload_when_mentioned():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    config = _build_config()
+    config["trigger_settings"]["enable_features_in_group"] = True
+    plugin = FileOperationPlugin(context=context, config=config)
+    try:
+        source_path = Path(__file__).resolve()
+        event = _build_event(
+            message_type=MessageType.GROUP_MESSAGE,
+            sender_id="user-1",
+        )
+        raw_message = SimpleNamespace(mentions=[SimpleNamespace(id="bot-1")])
+        event.message_obj.raw_message = raw_message
+        event.is_mentioned.side_effect = (
+            lambda: hasattr(event.message_obj.raw_message, "mentions")
+            and any(
+                str(mention.id) == str(event.message_obj.self_id)
+                for mention in event.message_obj.raw_message.mentions
+            )
+        )
+        upload = Comp.File(name="source.docx", file=str(source_path))
+        buf = BufferedMessage(
+            event=event,
+            files=[upload],
+            texts=["请根据上传文档整理成正式汇报"],
+        )
+
+        async def _fake_extract_upload_source(_component):
+            return source_path, "source.docx"
+
+        plugin._extract_upload_source = _fake_extract_upload_source
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source_1.docx")
+
+        await plugin._on_buffer_complete(buf)
+
+        req = ProviderRequest(
+            prompt=event.message_str,
+            system_prompt="base",
+            func_tool=ToolSet([_tool("existing_tool")]),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert event.message_obj.raw_message is raw_message
+        assert event.is_mentioned() is True
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "export_document" in tool_names
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
+        assert "工作区文件名：source_1.docx" in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_does_not_inject_upload_notice_when_file_tools_hidden():
     context = MagicMock()
     config = _build_config()
@@ -781,6 +839,7 @@ async def test_before_llm_chat_does_not_inject_upload_notice_when_file_tools_hid
             message_type=MessageType.GROUP_MESSAGE,
             sender_id="user-1",
         )
+        event.is_mentioned.return_value = False
         event.message_obj.message = [
             Comp.File(name="source.docx", file=str(source_path)),
         ]
