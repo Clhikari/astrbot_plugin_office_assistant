@@ -1,5 +1,6 @@
 import importlib
 import tempfile
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,7 +255,15 @@ def _resolve_root_config(context) -> dict:
 def _extract_admin_users(root_config: dict) -> set[str]:
     if not isinstance(root_config, dict):
         return set()
-    return {str(admin_id) for admin_id in root_config.get("admins_id", [])}
+
+    raw_admins = root_config.get("admins_id", [])
+    if raw_admins is None:
+        return set()
+    if isinstance(raw_admins, (str, bytes)):
+        return {str(raw_admins)}
+    if not isinstance(raw_admins, Iterable):
+        return {str(raw_admins)}
+    return {str(admin_id) for admin_id in raw_admins}
 
 
 def _build_admin_users_resolver(context, *, initial_admin_users: set[str]):
