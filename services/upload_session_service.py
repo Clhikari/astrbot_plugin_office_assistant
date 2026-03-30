@@ -244,8 +244,6 @@ class UploadSessionService:
             new_chain.append(file_component)
 
         event.message_obj.message = new_chain
-        if hasattr(event.message_obj, "raw_message"):
-            event.message_obj.raw_message = prompt_text
         event.message_str = prompt_text.strip()
 
         logger.info(f"[消息缓冲] 已合并消息，提示: {prompt_text[:50]}...")

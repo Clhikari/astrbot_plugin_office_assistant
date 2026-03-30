@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import astrbot_plugin_office_assistant.utils as office_utils
 import mcp
 import pytest
-import astrbot_plugin_office_assistant.utils as office_utils
 from astrbot_plugin_office_assistant.constants import (
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
@@ -26,12 +26,13 @@ from astrbot_plugin_office_assistant.services import (
     FileToolService,
     GeneratedFileDeliveryService,
     IncomingMessageService,
+    LLMRequestPolicy,
     PostExportHookService,
     RequestHookService,
     UploadPromptService,
     UploadSessionService,
-    WorkspaceService,
     WordReadService,
+    WorkspaceService,
     build_plugin_runtime,
 )
 from astrbot_plugin_office_assistant.utils import (
@@ -40,6 +41,7 @@ from astrbot_plugin_office_assistant.utils import (
     extract_word_text,
     format_extracted_word_content,
 )
+
 import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
@@ -152,6 +154,7 @@ def _rewrite_docx_document_xml(path: Path, transform) -> None:
 def test_access_policy_service_handles_whitelist_and_group_flags():
     service = AccessPolicyService(
         whitelist_users=["user-1"],
+        admin_users=[],
         enable_features_in_group=False,
     )
     friend_event = _build_event(message_type=MessageType.FRIEND_MESSAGE)
@@ -165,6 +168,7 @@ def test_access_policy_service_handles_whitelist_and_group_flags():
 def test_access_policy_service_detects_bot_mention():
     service = AccessPolicyService(
         whitelist_users=["user-1"],
+        admin_users=[],
         enable_features_in_group=True,
     )
     event = _build_event()
@@ -173,8 +177,116 @@ def test_access_policy_service_detects_bot_mention():
     assert service.is_bot_mentioned(event) is True
 
 
+def test_access_policy_service_detects_platform_level_bot_mention():
+    service = AccessPolicyService(
+        whitelist_users=["user-1"],
+        admin_users=[],
+        enable_features_in_group=True,
+    )
+    event = _build_event()
+    event.message_obj.message = []
+    event.is_mentioned.return_value = True
+
+    assert service.is_bot_mentioned(event) is True
+
+
+def test_access_policy_service_allows_framework_admin_sender_id():
+    service = AccessPolicyService(
+        whitelist_users=[],
+        admin_users=["1474436119298048127"],
+        enable_features_in_group=True,
+    )
+    event = _build_event(sender_id="1474436119298048127")
+    event.is_admin.return_value = False
+
+    assert service.check_permission(event) is True
+
+
+def test_access_policy_service_reads_framework_admins_dynamically():
+    admin_state = {"admins_id": []}
+    service = AccessPolicyService(
+        whitelist_users=[],
+        admin_users=[],
+        get_admin_users=lambda: admin_state["admins_id"],
+        enable_features_in_group=True,
+    )
+    event = _build_event(sender_id="1474436119298048127")
+    event.is_admin.return_value = False
+
+    assert service.check_permission(event) is False
+
+    admin_state["admins_id"] = ["1474436119298048127"]
+
+    assert service.check_permission(event) is True
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_logs_missing_permission():
+    event = _build_event(
+        sender_id="1474436119298048127",
+        message_type=MessageType.GROUP_MESSAGE,
+    )
+    request = ProviderRequest(
+        prompt="请读取 report.docx",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=ToolSet([_tool("read_file")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: False,
+        is_bot_mentioned=lambda _event: True,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.llm_request_policy.logger.debug"
+    ) as logger_debug:
+        await policy.apply(event, request)
+
+    assert "read_file" not in set(request.func_tool.names())
+    logger_debug.assert_any_call(
+        "[文件管理] 用户 1474436119298048127 无文件权限，已隐藏文件工具"
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_logs_missing_group_trigger():
+    event = _build_event(
+        sender_id="1474436119298048127",
+        message_type=MessageType.GROUP_MESSAGE,
+    )
+    request = ProviderRequest(
+        prompt="请读取 report.docx",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=ToolSet([_tool("read_file")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.llm_request_policy.logger.debug"
+    ) as logger_debug:
+        await policy.apply(event, request)
+
+    assert "read_file" not in set(request.func_tool.names())
+    logger_debug.assert_any_call(
+        "[文件管理] 用户 1474436119298048127 未满足群聊触发条件，已隐藏文件工具"
+    )
+
+
 def test_build_plugin_runtime_returns_temp_workspace_and_services():
     context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
     config = {
         "file_settings": {
             "auto_delete_files": True,
@@ -238,6 +350,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
     data_root = _make_workspace("runtime-builder-data-root")
     called: dict[str, str | None] = {}
     context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-2"]}
     config = {
         "file_settings": {
             "auto_delete_files": False,
@@ -311,6 +424,40 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         runtime.office_gen.cleanup()
         runtime.pdf_converter.cleanup()
         shutil.rmtree(data_root, ignore_errors=True)
+
+
+def test_build_plugin_runtime_reads_admin_ids_from_context_get_config():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["1474436119298048127"]}
+    config = {
+        "file_settings": {
+            "auto_delete_files": True,
+        },
+        "trigger_settings": {},
+        "permission_settings": {},
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id="1474436119298048127")
+        event.is_admin.return_value = False
+        assert runtime.access_policy_service.check_permission(event) is True
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
 
 
 @pytest.mark.asyncio
@@ -765,6 +912,41 @@ async def test_upload_session_service_builds_read_first_prompt_for_buffered_uplo
     assert "若使用相对路径，请使用上面的工作区文件名" in prompt_text
     assert "NEVER 创建新文档" not in prompt_text
     assert event.message_str == prompt_text.strip()
+    event_queue.put.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_preserves_raw_message_for_platform_mentions():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=False,
+    )
+    event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+    raw_message = SimpleNamespace(mentions=[SimpleNamespace(id="bot-1")])
+    event.message_obj.raw_message = raw_message
+    event.is_mentioned.side_effect = (
+        lambda: hasattr(event.message_obj.raw_message, "mentions")
+        and any(
+            str(mention.id) == str(event.message_obj.self_id)
+            for mention in event.message_obj.raw_message.mentions
+        )
+    )
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+    await service.on_buffer_complete(buf)
+
+    assert event.message_obj.raw_message is raw_message
+    assert event.is_mentioned() is True
     event_queue.put.assert_awaited_once_with(event)
 
 
