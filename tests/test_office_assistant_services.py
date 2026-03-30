@@ -460,6 +460,41 @@ def test_build_plugin_runtime_reads_admin_ids_from_context_get_config():
                 pass
 
 
+def test_build_plugin_runtime_reads_admin_ids_from_legacy_astrbot_config():
+    context = MagicMock()
+    context.get_config.return_value = None
+    context.astrbot_config = {"admins_id": ["admin-x"]}
+    config = {
+        "file_settings": {
+            "auto_delete_files": True,
+        },
+        "trigger_settings": {},
+        "permission_settings": {},
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id="admin-x")
+        event.is_admin.return_value = False
+        assert runtime.access_policy_service.check_permission(event) is True
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
 @pytest.mark.asyncio
 async def test_post_export_hook_service_handles_exported_document_tool():
     event = _build_event()
