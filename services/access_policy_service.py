@@ -32,7 +32,10 @@ class AccessPolicyService:
                     str(admin_id) for admin_id in dynamic_admin_users
                 }
             except Exception as exc:
-                logger.warning(f"读取框架管理员配置失败: {exc}")
+                logger.warning(
+                    f"读取框架管理员配置失败: {exc}",
+                    exc_info=True,
+                )
         if user_id in admin_users:
             return True
         if not self._whitelist_users:
