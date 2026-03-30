@@ -28,12 +28,9 @@ class AccessPolicyService:
         if self._get_admin_users is not None:
             try:
                 dynamic_admin_users = self._get_admin_users() or set()
-                if isinstance(dynamic_admin_users, (set, frozenset)):
-                    admin_users = dynamic_admin_users
-                else:
-                    admin_users = {
-                        str(admin_id) for admin_id in dynamic_admin_users
-                    }
+                admin_users = {
+                    str(admin_id) for admin_id in dynamic_admin_users
+                }
             except Exception as exc:
                 logger.warning(f"读取框架管理员配置失败: {exc}")
         if user_id in admin_users:

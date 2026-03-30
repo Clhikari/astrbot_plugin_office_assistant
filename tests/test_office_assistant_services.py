@@ -449,6 +449,16 @@ def test_build_plugin_runtime_reads_admin_ids_from_context_get_config():
         event = _build_event(sender_id="1474436119298048127")
         event.is_admin.return_value = False
         assert runtime.access_policy_service.check_permission(event) is True
+
+        context.get_config.return_value = {"admins_id": ["new-admin-id"]}
+        runtime.access_policy_service._get_admin_users.refresh()
+
+        previous_event = _build_event(sender_id="1474436119298048127")
+        previous_event.is_admin.return_value = False
+        refreshed_event = _build_event(sender_id="new-admin-id")
+        refreshed_event.is_admin.return_value = False
+        assert runtime.access_policy_service.check_permission(previous_event) is False
+        assert runtime.access_policy_service.check_permission(refreshed_event) is True
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()
@@ -482,6 +492,40 @@ def test_build_plugin_runtime_reads_admin_ids_from_legacy_astrbot_config():
 
     try:
         event = _build_event(sender_id="admin-x")
+        event.is_admin.return_value = False
+        assert runtime.access_policy_service.check_permission(event) is True
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_handles_scalar_admin_id_config():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": 1474436119298048127}
+    config = {
+        "file_settings": {
+            "auto_delete_files": True,
+        },
+        "trigger_settings": {},
+        "permission_settings": {},
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id="1474436119298048127")
         event.is_admin.return_value = False
         assert runtime.access_policy_service.check_permission(event) is True
     finally:
