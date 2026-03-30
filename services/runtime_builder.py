@@ -91,6 +91,7 @@ def build_plugin_runtime(
 ) -> PluginRuntimeBundle:
     settings = _load_settings(config)
     root_config = _resolve_root_config(context)
+    get_admin_users = _build_admin_users_resolver(context, initial_root_config=root_config)
     temp_dir, plugin_data_path = _prepare_workspace(
         settings.auto_delete, plugin_name=plugin_name
     )
@@ -112,7 +113,7 @@ def build_plugin_runtime(
             "whitelist_users", []
         ),
         admin_users=root_config.get("admins_id", []),
-        get_admin_users=lambda: _resolve_root_config(context).get("admins_id", []),
+        get_admin_users=get_admin_users,
         enable_features_in_group=settings.enable_features_in_group,
     )
     upload_session_service = UploadSessionService(
@@ -244,6 +245,24 @@ def _resolve_root_config(context) -> dict:
         return legacy_config
 
     return {}
+
+
+def _build_admin_users_resolver(context, *, initial_root_config: dict):
+    cache = {"root_config": initial_root_config}
+
+    def get_admin_users() -> list[str]:
+        root_config = cache["root_config"]
+        if not isinstance(root_config, dict):
+            root_config = _resolve_root_config(context)
+            cache["root_config"] = root_config
+        return list(root_config.get("admins_id", []))
+
+    def refresh() -> list[str]:
+        cache["root_config"] = _resolve_root_config(context)
+        return get_admin_users()
+
+    get_admin_users.refresh = refresh
+    return get_admin_users
 
 
 def _load_settings(config) -> PluginSettings:
