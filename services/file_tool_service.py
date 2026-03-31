@@ -377,7 +377,7 @@ class FileToolService:
 
             return "错误：PDF 转换失败，请检查文件格式是否正确"
         except Exception as exc:
-            logger.error(f"[PDF转换] 转换失败: {exc}", exc_info=True)
+            logger.exception(f"[PDF转换] 转换失败: {exc}")
             return f"错误：{safe_error_message(exc, '转换失败')}"
 
     async def convert_from_pdf(
@@ -448,5 +448,5 @@ class FileToolService:
 
             return f"错误：PDF→{target_desc} 转换失败"
         except Exception as exc:
-            logger.error(f"[PDF转换] 转换失败: {exc}", exc_info=True)
+            logger.exception(f"[PDF转换] 转换失败: {exc}")
             return f"错误：{safe_error_message(exc, '转换失败')}"

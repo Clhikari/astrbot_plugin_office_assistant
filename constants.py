@@ -63,16 +63,11 @@ TEXT_SUFFIXES = frozenset(
 
 # 默认值
 OFFICE_SUFFIXES = frozenset(OFFICE_EXTENSIONS.values())
-SUFFIX_TO_OFFICE_TYPE = {v: k for k, v in OFFICE_EXTENSIONS.items()}
-
-# 旧版 Office 格式也映射到对应类型（用于读取）
-LEGACY_OFFICE_SUFFIXES = {
+SUFFIX_TO_OFFICE_TYPE = {v: k for k, v in OFFICE_EXTENSIONS.items()} | {
     ".doc": OfficeType.WORD,
     ".xls": OfficeType.EXCEL,
     ".ppt": OfficeType.POWERPOINT,
 }
-# 合并新旧格式映射
-SUFFIX_TO_OFFICE_TYPE.update(LEGACY_OFFICE_SUFFIXES)
 
 # 所有可读取的 Office 格式（新旧）
 ALL_OFFICE_SUFFIXES = frozenset(SUFFIX_TO_OFFICE_TYPE.keys())
@@ -88,7 +83,7 @@ DOCUMENT_BLOCK_SPACING_MAX = 72.0
 # 所有文件类工具名称，用于 before_llm_chat 中的可见性控制。
 # 同步点：@llm_tool(name=...) 定义在 main.py，
 #         document tool 名称定义在 agent_tools/document_tools.py 的 name 字段。
-FILE_TOOLS = [
+FILE_TOOLS = (
     "read_file",
     "create_office_file",
     "create_document",
@@ -97,15 +92,15 @@ FILE_TOOLS = [
     "export_document",
     "convert_to_pdf",
     "convert_from_pdf",
-]
+)
 
 EXPLICIT_FILE_TOOL_EVENT_KEY = "office_assistant_explicit_file_tool_name"
 
-EXECUTION_TOOLS = [
+EXECUTION_TOOLS = (
     "astrbot_execute_shell",
     "astrbot_execute_python",
     "astrbot_execute_ipython",
-]
+)
 
 NOTICE_TOOLS_DENIED = (
     "\n[System Notice] 当前聊天不可使用文件/Office/PDF 相关功能。\n"
