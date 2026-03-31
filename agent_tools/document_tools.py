@@ -133,7 +133,7 @@ class CreateDocumentTool(DocumentToolBase):
                         },
                         "different_first_page": {
                             "type": "boolean",
-                            "description": "Whether the first page should use a different blank header and footer.",
+                            "description": "Whether the first page should use different header and footer content.",
                         },
                         "first_page_header_text": {
                             "type": "string",
@@ -493,6 +493,7 @@ class AddBlocksTool(DocumentToolBase):
                             "page_number_start": {
                                 "type": "integer",
                                 "minimum": 1,
+                                "description": "Optional starting page number. Use only when restart_page_numbering is true.",
                             },
                             "header_footer": {
                                 "type": "object",

@@ -399,6 +399,14 @@ class SectionBreakInput(BaseModel):
     page_number_start: int | None = Field(default=None, ge=1, le=9999)
     header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
 
+    @model_validator(mode="after")
+    def validate_page_numbering(self) -> SectionBreakInput:
+        if self.page_number_start is not None and not self.restart_page_numbering:
+            raise ValueError(
+                "page_number_start requires restart_page_numbering=True"
+            )
+        return self
+
 
 class TocInput(BaseModel):
     model_config = ConfigDict(extra="forbid")

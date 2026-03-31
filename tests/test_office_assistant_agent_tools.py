@@ -454,6 +454,32 @@ def test_create_document_request_accepts_header_footer_defaults():
     assert request.header_footer.page_number_align == "center"
 
 
+def test_section_break_block_rejects_page_number_start_without_restart():
+    with pytest.raises(
+        ValidationError,
+        match="page_number_start requires restart_page_numbering=True",
+    ):
+        SectionBreakBlock(
+            page_number_start=2,
+        )
+
+
+def test_add_blocks_request_rejects_section_page_number_start_without_restart():
+    with pytest.raises(
+        ValidationError,
+        match="page_number_start requires restart_page_numbering=True",
+    ):
+        AddBlocksRequest(
+            document_id="doc-1",
+            blocks=[
+                {
+                    "type": "section_break",
+                    "page_number_start": 2,
+                }
+            ],
+        )
+
+
 def test_paragraph_schema_requires_text_or_runs():
     with pytest.raises(ValidationError, match="paragraph requires text or runs"):
         SectionParagraphInput.model_validate(
@@ -2559,6 +2585,128 @@ def test_word_document_builder_section_break_creates_new_section_with_override(
     assert loaded_doc.sections[1].bottom_margin.cm == pytest.approx(1.8, abs=0.01)
     assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.2, abs=0.01)
     assert loaded_doc.sections[1].right_margin.cm == pytest.approx(1.4, abs=0.01)
+
+
+def test_word_document_builder_section_break_inherits_header_footer_without_override(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-section-inherit"
+    )
+    output_path = workspace_dir / "section-inherit.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="section-inherit-test",
+        metadata=DocumentMetadata(
+            title="分节继承测试",
+            header_footer=HeaderFooterConfig(
+                header_text="默认页眉",
+                footer_text="默认页脚",
+                show_page_number=True,
+            ),
+        ),
+        blocks=[
+            ParagraphBlock(text="第一节"),
+            SectionBreakBlock(start_type="new_page"),
+            ParagraphBlock(text="第二节"),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.sections) == 2
+    assert loaded_doc.sections[1].header.is_linked_to_previous is True
+    assert loaded_doc.sections[1].footer.is_linked_to_previous is True
+    assert _section_page_number_start(loaded_doc.sections[1]) is None
+
+
+def test_word_document_builder_section_break_can_disable_page_numbers_while_inheriting_text(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-section-page-number-override"
+    )
+    output_path = workspace_dir / "section-page-number-override.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="section-page-number-override-test",
+        metadata=DocumentMetadata(
+            title="页码覆盖测试",
+            header_footer=HeaderFooterConfig(
+                header_text="默认页眉",
+                footer_text="默认页脚",
+                show_page_number=True,
+                page_number_align="center",
+            ),
+        ),
+        blocks=[
+            ParagraphBlock(text="第一节"),
+            SectionBreakBlock(
+                start_type="new_page",
+                header_footer=HeaderFooterConfig(show_page_number=False),
+            ),
+            ParagraphBlock(text="第二节"),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.sections) == 2
+    assert loaded_doc.sections[1].footer.is_linked_to_previous is False
+    assert "默认页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert "默认页脚" in _story_texts(loaded_doc.sections[1].footer)
+    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is False
+
+
+def test_word_document_builder_section_break_restarts_page_numbering_from_one_by_default(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-section-page-number-default"
+    )
+    output_path = workspace_dir / "section-page-number-default.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="section-page-number-default-test",
+        metadata=DocumentMetadata(title="页码默认起始测试"),
+        blocks=[
+            ParagraphBlock(text="第一节"),
+            SectionBreakBlock(
+                start_type="new_page",
+                restart_page_numbering=True,
+            ),
+            ParagraphBlock(text="第二节"),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.sections) == 2
+    assert _section_page_number_start(loaded_doc.sections[1]) == 1
 
 
 @pytest.mark.asyncio

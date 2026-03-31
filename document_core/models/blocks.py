@@ -49,7 +49,7 @@ class HeaderFooterConfig(BaseModel):
     even_page_header_text: str = ""
     even_page_footer_text: str = ""
     even_page_show_page_number: bool | None = None
-    show_page_number: bool = False
+    show_page_number: bool | None = None
     page_number_align: PageNumberAlignment = "right"
 
 
@@ -253,6 +253,14 @@ class SectionBreakBlock(BlockBase):
     restart_page_numbering: bool = False
     page_number_start: int | None = Field(default=None, ge=1, le=9999)
     header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
+
+    @model_validator(mode="after")
+    def validate_page_numbering(self) -> SectionBreakBlock:
+        if self.page_number_start is not None and not self.restart_page_numbering:
+            raise ValueError(
+                "page_number_start requires restart_page_numbering=True"
+            )
+        return self
 
 
 class TocBlock(BlockBase):
