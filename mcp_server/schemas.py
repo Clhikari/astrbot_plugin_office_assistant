@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 from pathlib import Path
 from typing import Annotated, Literal
@@ -28,6 +29,66 @@ SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
 SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
+
+_HEADER_FOOTER_SCHEMA_PROPERTIES = {
+    "header_text": {
+        "type": "string",
+        "description": "Optional repeated header text for the document.",
+    },
+    "footer_text": {
+        "type": "string",
+        "description": "Optional repeated footer text for the document.",
+    },
+    "different_first_page": {
+        "type": "boolean",
+        "description": "Whether the first page should use different header and footer content.",
+    },
+    "first_page_header_text": {
+        "type": "string",
+        "description": "Optional first-page-only header text.",
+    },
+    "first_page_footer_text": {
+        "type": "string",
+        "description": "Optional first-page-only footer text.",
+    },
+    "first_page_show_page_number": {
+        "type": "boolean",
+        "description": "Optional override for whether the first page footer should include a page number.",
+    },
+    "different_odd_even": {
+        "type": "boolean",
+        "description": "Whether odd and even pages should use different headers and footers.",
+    },
+    "even_page_header_text": {
+        "type": "string",
+        "description": "Optional even-page-only header text.",
+    },
+    "even_page_footer_text": {
+        "type": "string",
+        "description": "Optional even-page-only footer text.",
+    },
+    "even_page_show_page_number": {
+        "type": "boolean",
+        "description": "Optional override for whether even-page footers should include a page number.",
+    },
+    "show_page_number": {
+        "type": "boolean",
+        "description": "Whether to append a PAGE field in the footer.",
+    },
+    "page_number_align": {
+        "type": "string",
+        "enum": ["left", "center", "right"],
+        "description": "Paragraph alignment used for the footer page number field.",
+    },
+}
+
+
+def build_header_footer_schema(*, description: str) -> dict:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": copy.deepcopy(_HEADER_FOOTER_SCHEMA_PROPERTIES),
+    }
 
 
 def _split_path_parts(value: str) -> list[str]:
@@ -573,4 +634,3 @@ def build_document_summary(document_model: DocumentModel) -> DocumentSummary:
 BlockGroupInput.model_rebuild()
 BlockColumnInput.model_rebuild()
 BlockColumnsInput.model_rebuild()
-

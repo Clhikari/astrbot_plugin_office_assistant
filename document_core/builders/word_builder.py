@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,12 @@ from .docx_utils import (
     format_run,
     resolve_alignment,
     rgb,
+)
+from .docx_xml_helpers import (
+    append_field_code,
+    append_page_number_field,
+    enable_update_fields_on_open,
+    reset_story,
 )
 from .table_renderer import TableRenderer
 
@@ -100,6 +107,14 @@ _TABLE_DEFAULT_THEME_FIELDS = {
 }
 
 
+@dataclass
+class _WordBuildContext:
+    theme: dict
+    document_model: DocumentModel
+    workspace_dir: Path
+    current_header_footer: HeaderFooterConfig
+
+
 def _merge_style_attrs(source, theme: dict, attr_map: dict[str, str]) -> None:
     for source_attr, theme_key in attr_map.items():
         value = getattr(source, source_attr, None)
@@ -126,55 +141,51 @@ class WordDocumentBuilder:
         section = doc.sections[0]
         section.start_type = WD_SECTION.NEW_PAGE
         theme = self._resolve_theme(document_model)
-        self._enable_update_fields_on_open(doc)
+        enable_update_fields_on_open(doc)
         self._configure_document_header_footer_modes(doc, document_model)
         self._apply_section_layout(section, margins=theme["margins"])
-        current_header_footer = getattr(
-            document_model.metadata, "header_footer", HeaderFooterConfig()
+        context = _WordBuildContext(
+            theme=theme,
+            document_model=document_model,
+            workspace_dir=output_path.parent.resolve(),
+            current_header_footer=getattr(
+                document_model.metadata, "header_footer", HeaderFooterConfig()
+            ),
         )
         self._apply_section_header_footer(
             section,
-            current_header_footer,
+            context.current_header_footer,
             theme,
         )
 
         if document_model.metadata.title:
             self._add_title(doc, document_model.metadata.title, theme)
 
-        workspace_dir = output_path.parent.resolve()
-        for block in document_model.blocks:
-            current_header_footer = self._append_block(
-                doc,
-                block,
-                theme,
-                document_model,
-                workspace_dir,
-                current_header_footer,
-            )
+        self._render_blocks(doc, document_model.blocks, context)
 
         doc.save(str(output_path))
         return output_path
+
+    def _render_blocks(
+        self,
+        doc: WordDocument,
+        blocks,
+        context: _WordBuildContext,
+    ) -> None:
+        for block in blocks:
+            self._append_block(doc, block, context)
 
     def _append_block(
         self,
         doc: WordDocument,
         block,
-        theme: dict,
-        document_model: DocumentModel,
-        workspace_dir: Path,
-        current_header_footer: HeaderFooterConfig,
-    ) -> HeaderFooterConfig:
+        context: _WordBuildContext,
+    ) -> None:
+        theme = context.theme
         if isinstance(block, HeadingBlock):
             self._add_heading(doc, block, theme)
         elif isinstance(block, ParagraphBlock):
-            self._add_paragraph(
-                doc,
-                block,
-                theme,
-                document_model,
-                workspace_dir,
-                current_header_footer,
-            )
+            self._add_paragraph(doc, block, context)
         elif isinstance(block, ListBlock):
             self._add_list(doc, block, theme)
         elif isinstance(block, TableBlock):
@@ -183,50 +194,30 @@ class WordDocumentBuilder:
                 block,
                 theme,
                 default_table_style=getattr(
-                    document_model.metadata, "table_template", ""
+                    context.document_model.metadata, "table_template", ""
                 ),
             )
         elif isinstance(block, ImageBlock):
-            self._add_image(doc, block, workspace_dir)
+            self._add_image(doc, block, context.workspace_dir)
         elif isinstance(block, GroupBlock):
-            current_header_footer = self._add_group(
-                doc,
-                block,
-                theme,
-                document_model,
-                workspace_dir,
-                current_header_footer,
-            )
+            self._add_group(doc, block, context)
         elif isinstance(block, ColumnsBlock):
-            current_header_footer = self._add_columns(
-                doc,
-                block,
-                theme,
-                document_model,
-                workspace_dir,
-                current_header_footer,
-            )
+            self._add_columns(doc, block, context)
         elif isinstance(block, PageBreakBlock):
             self._add_page_break(doc)
         elif isinstance(block, SectionBreakBlock):
-            current_header_footer = self._add_section_break(
-                doc, block, theme, current_header_footer
-            )
+            self._add_section_break(doc, block, context)
         elif isinstance(block, TocBlock):
             self._add_toc(doc, block, theme)
         elif SummaryCardBlock is not None and isinstance(block, SummaryCardBlock):
-            current_header_footer = self._add_group(
+            self._add_group(
                 doc,
                 expand_summary_card_block(
                     block,
                     **summary_card_defaults_from_theme(theme),
                 ),
-                theme,
-                document_model,
-                workspace_dir,
-                current_header_footer,
+                context,
             )
-        return current_header_footer
 
     def _resolve_theme(self, document_model: DocumentModel) -> dict:
         theme_name = getattr(document_model.metadata, "theme_name", "business_report")
@@ -345,11 +336,9 @@ class WordDocumentBuilder:
         self,
         doc: WordDocument,
         block: ParagraphBlock,
-        theme: dict,
-        document_model: DocumentModel,
-        workspace_dir: Path,
-        current_header_footer: HeaderFooterConfig,
+        context: _WordBuildContext,
     ) -> None:
+        theme = context.theme
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
         from docx.shared import Pt
 
@@ -369,10 +358,7 @@ class WordDocumentBuilder:
                     layout=block.layout,
                     **summary_card_defaults_from_theme(theme),
                 ),
-                theme,
-                document_model,
-                workspace_dir=workspace_dir,
-                current_header_footer=current_header_footer,
+                context,
             )
             return
 
@@ -442,47 +428,23 @@ class WordDocumentBuilder:
         self,
         doc: WordDocument,
         block: GroupBlock,
-        theme: dict,
-        document_model: DocumentModel,
-        workspace_dir: Path,
-        current_header_footer: HeaderFooterConfig,
-    ) -> HeaderFooterConfig:
-        for child in block.blocks:
-            current_header_footer = self._append_block(
-                doc,
-                child,
-                theme,
-                document_model,
-                workspace_dir,
-                current_header_footer,
-            )
-        return current_header_footer
+        context: _WordBuildContext,
+    ) -> None:
+        self._render_blocks(doc, block.blocks, context)
 
     def _add_columns(
         self,
         doc: WordDocument,
         block: ColumnsBlock,
-        theme: dict,
-        document_model: DocumentModel,
-        workspace_dir: Path,
-        current_header_footer: HeaderFooterConfig,
-    ) -> HeaderFooterConfig:
+        context: _WordBuildContext,
+    ) -> None:
         # Word multi-column layout requires section-level changes. For now we
         # keep the primitive in the model and render it sequentially as a safe
         # fallback instead of introducing layout-specific template branches.
         for column_index, column in enumerate(block.columns):
             if column_index > 0:
                 doc.add_paragraph("")
-            for child in column.blocks:
-                current_header_footer = self._append_block(
-                    doc,
-                    child,
-                    theme,
-                    document_model,
-                    workspace_dir,
-                    current_header_footer,
-                )
-        return current_header_footer
+            self._render_blocks(doc, column.blocks, context)
 
     @staticmethod
     def _add_page_break(doc: WordDocument) -> None:
@@ -492,9 +454,10 @@ class WordDocumentBuilder:
         self,
         doc: WordDocument,
         block: SectionBreakBlock,
-        theme: dict,
-        current_header_footer: HeaderFooterConfig,
-    ) -> HeaderFooterConfig:
+        context: _WordBuildContext,
+    ) -> None:
+        theme = context.theme
+        current_header_footer = context.current_header_footer
         from docx.enum.section import WD_SECTION
 
         start_type_map = {
@@ -515,7 +478,7 @@ class WordDocumentBuilder:
         if block.inherit_header_footer and not self._has_header_footer_override(
             block.header_footer
         ):
-            return current_header_footer
+            return
         effective_header_footer = (
             block.header_footer.merged_over(current_header_footer)
             if block.inherit_header_footer
@@ -528,7 +491,7 @@ class WordDocumentBuilder:
         section.even_page_header.is_linked_to_previous = False
         section.even_page_footer.is_linked_to_previous = False
         self._apply_section_header_footer(section, effective_header_footer, theme)
-        return effective_header_footer
+        context.current_header_footer = effective_header_footer
 
     def _add_toc(self, doc: WordDocument, block: TocBlock, theme: dict) -> None:
         from docx.shared import Pt
@@ -555,7 +518,7 @@ class WordDocumentBuilder:
 
         toc_paragraph = doc.add_paragraph()
         toc_paragraph.paragraph_format.space_after = Pt(theme["body_space_after"])
-        self._append_field_code(
+        append_field_code(
             toc_paragraph,
             f'TOC \\o "1-{block.levels}" \\h \\z \\u',
         )
@@ -628,9 +591,7 @@ class WordDocumentBuilder:
                 yield from self._iter_nested_header_footer_configs(block.blocks)
             elif isinstance(block, ColumnsBlock):
                 for column in block.columns:
-                    yield from self._iter_nested_header_footer_configs(
-                        column.blocks
-                    )
+                    yield from self._iter_nested_header_footer_configs(column.blocks)
 
     def _apply_section_layout(
         self,
@@ -665,7 +626,9 @@ class WordDocumentBuilder:
         section.right_margin = Cm(margins["right"])
 
     @staticmethod
-    def _resolve_section_margins(block: SectionBreakBlock, theme: dict) -> dict[str, float] | None:
+    def _resolve_section_margins(
+        block: SectionBreakBlock, theme: dict
+    ) -> dict[str, float] | None:
         overrides = block.margins
         if not any(
             value is not None
@@ -679,13 +642,17 @@ class WordDocumentBuilder:
             return None
         base_margins = theme["margins"]
         return {
-            "top": overrides.top_cm if overrides.top_cm is not None else base_margins["top"],
+            "top": overrides.top_cm
+            if overrides.top_cm is not None
+            else base_margins["top"],
             "bottom": (
                 overrides.bottom_cm
                 if overrides.bottom_cm is not None
                 else base_margins["bottom"]
             ),
-            "left": overrides.left_cm if overrides.left_cm is not None else base_margins["left"],
+            "left": overrides.left_cm
+            if overrides.left_cm is not None
+            else base_margins["left"],
             "right": (
                 overrides.right_cm
                 if overrides.right_cm is not None
@@ -693,9 +660,7 @@ class WordDocumentBuilder:
             ),
         }
 
-    def _apply_section_page_numbering(
-        self, section, block: SectionBreakBlock
-    ) -> None:
+    def _apply_section_page_numbering(self, section, block: SectionBreakBlock) -> None:
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
 
@@ -794,7 +759,7 @@ class WordDocumentBuilder:
         theme: dict,
     ) -> None:
         paragraph_count = 2 if text.strip() and show_page_number else 1
-        paragraphs = self._reset_story(story, paragraph_count=paragraph_count)
+        paragraphs = reset_story(story, paragraph_count=paragraph_count)
         if text.strip():
             text_paragraph = paragraphs[0]
             text_paragraph.alignment = resolve_alignment("left", default=None)
@@ -811,10 +776,10 @@ class WordDocumentBuilder:
                 page_number_align,
                 default=None,
             )
-            self._append_page_number_field(page_paragraph)
+            append_page_number_field(page_paragraph)
 
     def _set_story_text(self, story, text: str, theme: dict) -> None:
-        paragraphs = self._reset_story(story)
+        paragraphs = reset_story(story)
         if not text.strip():
             return
         run = paragraphs[0].add_run(text)
@@ -824,64 +789,6 @@ class WordDocumentBuilder:
             font_size=None,
             bold=False,
         )
-
-    def _reset_story(self, story, *, paragraph_count: int = 1):
-        paragraphs = list(story.paragraphs)
-        if not paragraphs:
-            paragraphs = [story.add_paragraph()]
-        for paragraph in paragraphs[1:]:
-            paragraph._element.getparent().remove(paragraph._element)
-        base_paragraph = story.paragraphs[0]
-        self._clear_paragraph(base_paragraph)
-        paragraphs = [base_paragraph]
-        while len(paragraphs) < paragraph_count:
-            new_paragraph = story.add_paragraph()
-            self._clear_paragraph(new_paragraph)
-            paragraphs.append(new_paragraph)
-        return paragraphs
-
-    def _append_page_number_field(self, paragraph) -> None:
-        self._append_field_code(paragraph, "PAGE")
-
-    def _append_field_code(self, paragraph, instruction: str) -> None:
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
-
-        begin = OxmlElement("w:fldChar")
-        begin.set(qn("w:fldCharType"), "begin")
-        paragraph._p.append(begin)
-
-        instr = OxmlElement("w:instrText")
-        instr.set(qn("xml:space"), "preserve")
-        instr.text = instruction
-        paragraph._p.append(instr)
-
-        separate = OxmlElement("w:fldChar")
-        separate.set(qn("w:fldCharType"), "separate")
-        paragraph._p.append(separate)
-
-        end = OxmlElement("w:fldChar")
-        end.set(qn("w:fldCharType"), "end")
-        paragraph._p.append(end)
-
-    def _enable_update_fields_on_open(self, doc: WordDocument) -> None:
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
-
-        settings = doc.settings.element
-        update_fields = settings.find(qn("w:updateFields"))
-        if update_fields is None:
-            update_fields = OxmlElement("w:updateFields")
-            settings.append(update_fields)
-        update_fields.set(qn("w:val"), "true")
-
-    @staticmethod
-    def _clear_paragraph(paragraph) -> None:
-        from docx.oxml.ns import qn
-
-        for child in list(paragraph._p):
-            if child.tag != qn("w:pPr"):
-                paragraph._p.remove(child)
 
     @staticmethod
     def _has_header_footer_override(config: HeaderFooterConfig) -> bool:
@@ -908,8 +815,6 @@ class WordDocumentBuilder:
                 config.even_page_show_page_number is not None,
             ]
         )
-
-
 
     @staticmethod
     def _resolved_spacing(value: float | None, default: float) -> float:
@@ -984,4 +889,3 @@ class WordDocumentBuilder:
         if emphasis == "subtle":
             return rgb(theme["accent"])
         return default_color
-
