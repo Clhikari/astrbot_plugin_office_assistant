@@ -19,6 +19,7 @@ from ..mcp_server.schemas import (
     FinalizeDocumentRequest,
     ToolResult,
     build_document_summary,
+    build_header_footer_schema,
 )
 from ..mcp_server.session_store import DocumentSessionStore
 
@@ -119,61 +120,9 @@ class CreateDocumentTool(DocumentToolBase):
                     "type": "string",
                     "description": "Optional 6-digit hex accent override such as 1F4E79.",
                 },
-                "header_footer": {
-                    "type": "object",
-                    "description": "Optional whole-document header and footer settings.",
-                    "properties": {
-                        "header_text": {
-                            "type": "string",
-                            "description": "Optional repeated header text for the document.",
-                        },
-                        "footer_text": {
-                            "type": "string",
-                            "description": "Optional repeated footer text for the document.",
-                        },
-                        "different_first_page": {
-                            "type": "boolean",
-                            "description": "Whether the first page should use different header and footer content.",
-                        },
-                        "first_page_header_text": {
-                            "type": "string",
-                            "description": "Optional first-page-only header text.",
-                        },
-                        "first_page_footer_text": {
-                            "type": "string",
-                            "description": "Optional first-page-only footer text.",
-                        },
-                        "first_page_show_page_number": {
-                            "type": "boolean",
-                            "description": "Optional override for whether the first page footer should include a page number.",
-                        },
-                        "different_odd_even": {
-                            "type": "boolean",
-                            "description": "Whether odd and even pages should use different headers and footers.",
-                        },
-                        "even_page_header_text": {
-                            "type": "string",
-                            "description": "Optional even-page-only header text.",
-                        },
-                        "even_page_footer_text": {
-                            "type": "string",
-                            "description": "Optional even-page-only footer text.",
-                        },
-                        "even_page_show_page_number": {
-                            "type": "boolean",
-                            "description": "Optional override for whether even-page footers should include a page number.",
-                        },
-                        "show_page_number": {
-                            "type": "boolean",
-                            "description": "Whether to append a PAGE field in the footer.",
-                        },
-                        "page_number_align": {
-                            "type": "string",
-                            "enum": ["left", "center", "right"],
-                            "description": "Paragraph alignment used for the footer page number field.",
-                        },
-                    },
-                },
+                "header_footer": build_header_footer_schema(
+                    description="Optional whole-document header and footer settings."
+                ),
                 "document_style": {
                     "type": "object",
                     "description": "Optional whole-document style defaults, including high-level visual intent and table defaults.",
@@ -495,38 +444,9 @@ class AddBlocksTool(DocumentToolBase):
                                 "minimum": 1,
                                 "description": "Optional starting page number. Use only when restart_page_numbering is true.",
                             },
-                            "header_footer": {
-                                "type": "object",
-                                "properties": {
-                                    "header_text": {"type": "string"},
-                                    "footer_text": {"type": "string"},
-                                    "different_first_page": {"type": "boolean"},
-                                    "first_page_header_text": {
-                                        "type": "string"
-                                    },
-                                    "first_page_footer_text": {
-                                        "type": "string"
-                                    },
-                                    "first_page_show_page_number": {
-                                        "type": "boolean"
-                                    },
-                                    "different_odd_even": {"type": "boolean"},
-                                    "even_page_header_text": {
-                                        "type": "string"
-                                    },
-                                    "even_page_footer_text": {
-                                        "type": "string"
-                                    },
-                                    "even_page_show_page_number": {
-                                        "type": "boolean"
-                                    },
-                                    "show_page_number": {"type": "boolean"},
-                                    "page_number_align": {
-                                        "type": "string",
-                                        "enum": ["left", "center", "right"],
-                                    },
-                                },
-                            },
+                            "header_footer": build_header_footer_schema(
+                                description="Optional section-level header and footer overrides."
+                            ),
                             "levels": {
                                 "type": "integer",
                                 "minimum": 1,

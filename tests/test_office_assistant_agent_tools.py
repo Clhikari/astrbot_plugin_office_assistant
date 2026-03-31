@@ -167,8 +167,7 @@ def _paragraph_has_page_break(paragraph) -> bool:
     from docx.oxml.ns import qn
 
     return any(
-        node.get(qn("w:type")) == "page"
-        for node in paragraph._p.iter(qn("w:br"))
+        node.get(qn("w:type")) == "page" for node in paragraph._p.iter(qn("w:br"))
     )
 
 
@@ -414,12 +413,22 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["restart_page_numbering"]["type"] == "boolean"
     assert block_properties["page_number_start"]["type"] == "integer"
     assert block_properties["header_footer"]["type"] == "object"
-    assert block_properties["header_footer"]["properties"]["different_odd_even"][
-        "type"
-    ] == "boolean"
-    assert block_properties["header_footer"]["properties"]["show_page_number"][
-        "type"
-    ] == "boolean"
+    assert (
+        block_properties["header_footer"]["properties"]["different_odd_even"]["type"]
+        == "boolean"
+    )
+    create_header_footer_properties = next(
+        tool for tool in toolset.tools if tool.name == "create_document"
+    ).parameters["properties"]["header_footer"]["properties"]
+    assert (
+        block_properties["header_footer"]["properties"]
+        == create_header_footer_properties
+    )
+
+    assert (
+        block_properties["header_footer"]["properties"]["show_page_number"]["type"]
+        == "boolean"
+    )
     assert block_properties["levels"]["type"] == "integer"
     assert block_properties["start_on_new_page"]["type"] == "boolean"
 
@@ -2543,13 +2552,19 @@ def test_word_document_builder_writes_toc_and_document_header_footer(
     assert "内部使用" in _story_texts(loaded_doc.sections[0].footer)
     assert "封面页眉" in _story_texts(loaded_doc.sections[0].first_page_header)
     assert "封面页脚" in _story_texts(loaded_doc.sections[0].first_page_footer)
-    assert _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is True
+    assert (
+        _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is True
+    )
     assert "偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
     assert "偶数页页脚" in _story_texts(loaded_doc.sections[0].even_page_footer)
-    assert _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
+    assert (
+        _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
+    )
     assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is True
     assert loaded_doc.sections[0].orientation == WD_ORIENT.PORTRAIT
-    assert any(_paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs)
+    assert any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
     toc_index = next(
         index
         for index, paragraph in enumerate(loaded_doc.paragraphs)
@@ -2559,7 +2574,6 @@ def test_word_document_builder_writes_toc_and_document_header_footer(
         'TOC \\o "1-2"' in field_code
         for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
     )
-
 
 
 def test_word_document_builder_uses_default_header_footer_baseline(
@@ -2589,8 +2603,13 @@ def test_word_document_builder_uses_default_header_footer_baseline(
     assert _document_updates_fields_on_open(loaded_doc) is True
     assert _document_uses_odd_even_headers(loaded_doc) is False
     assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is False
-    assert _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is False
-    assert _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
+    assert (
+        _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is False
+    )
+    assert (
+        _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
+    )
+
 
 def test_word_document_builder_section_break_creates_new_section_with_override(
     workspace_root: Path,
@@ -2856,40 +2875,40 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
 
     add_blocks_result = json.loads(
         await tool_by_name["add_blocks"].call(
-        None,
-        document_id=created["document"]["document_id"],
-        blocks=[
-            {
-                "type": "toc",
-                "title": "目录",
-                "levels": 2,
-                "start_on_new_page": True,
-            },
-            {"type": "heading", "text": "经营总览", "level": 2},
-            {"type": "paragraph", "text": "第一节正文"},
-            {
-                "type": "section_break",
-                "start_type": "new_page",
-                "inherit_header_footer": False,
-                "page_orientation": "landscape",
-                "margins": {
-                    "top_cm": 1.6,
-                    "bottom_cm": 1.7,
-                    "left_cm": 1.8,
-                    "right_cm": 1.9,
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[
+                {
+                    "type": "toc",
+                    "title": "目录",
+                    "levels": 2,
+                    "start_on_new_page": True,
                 },
-                "restart_page_numbering": True,
-                "page_number_start": 5,
-                "header_footer": {
-                    "header_text": "第二节页眉",
-                    "footer_text": "第二节页脚",
-                    "different_first_page": True,
-                    "first_page_header_text": "第二节首页页眉",
-                    "show_page_number": True,
+                {"type": "heading", "text": "经营总览", "level": 2},
+                {"type": "paragraph", "text": "第一节正文"},
+                {
+                    "type": "section_break",
+                    "start_type": "new_page",
+                    "inherit_header_footer": False,
+                    "page_orientation": "landscape",
+                    "margins": {
+                        "top_cm": 1.6,
+                        "bottom_cm": 1.7,
+                        "left_cm": 1.8,
+                        "right_cm": 1.9,
+                    },
+                    "restart_page_numbering": True,
+                    "page_number_start": 5,
+                    "header_footer": {
+                        "header_text": "第二节页眉",
+                        "footer_text": "第二节页脚",
+                        "different_first_page": True,
+                        "first_page_header_text": "第二节首页页眉",
+                        "show_page_number": True,
+                    },
                 },
-            },
-            {"type": "heading", "text": "行动计划", "level": 2},
-        ],
+                {"type": "heading", "text": "行动计划", "level": 2},
+            ],
         )
     )
     assert add_blocks_result["success"] is True
@@ -2911,7 +2930,9 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
     assert _section_page_number_start(loaded_doc.sections[1]) == 5
     assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
     assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.8, abs=0.01)
-    assert any(_paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs)
+    assert any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
     toc_index = next(
         index
         for index, paragraph in enumerate(loaded_doc.paragraphs)
@@ -3177,7 +3198,9 @@ def test_section_table_input_rejects_grouped_header_span_below_minimum():
         )
 
 
-@pytest.mark.parametrize("field_name", ["header_fill", "header_text_color", "banded_row_fill"])
+@pytest.mark.parametrize(
+    "field_name", ["header_fill", "header_text_color", "banded_row_fill"]
+)
 @pytest.mark.parametrize(
     "invalid_color",
     [
@@ -3201,7 +3224,9 @@ def test_add_table_request_rejects_invalid_color_fields(
         AddTableRequest(**kwargs)
 
 
-@pytest.mark.parametrize("field_name", ["header_fill", "header_text_color", "banded_row_fill"])
+@pytest.mark.parametrize(
+    "field_name", ["header_fill", "header_text_color", "banded_row_fill"]
+)
 @pytest.mark.parametrize(
     "invalid_color",
     [
