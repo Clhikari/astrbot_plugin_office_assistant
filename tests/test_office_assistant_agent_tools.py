@@ -25,9 +25,12 @@ from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
     GroupBlock,
+    HeaderFooterConfig,
     ParagraphBlock,
     ParagraphRun,
+    SectionBreakBlock,
     TableBlock,
+    TocBlock,
 )
 from astrbot_plugin_office_assistant.mcp_server.schemas import (
     AddBlocksRequest,
@@ -105,6 +108,65 @@ def _paragraph_run_size(paragraph) -> float | None:
 
 def _find_paragraph(doc, text: str):
     return next(paragraph for paragraph in doc.paragraphs if paragraph.text == text)
+
+
+def _paragraph_field_codes(paragraph) -> list[str]:
+    from docx.oxml.ns import qn
+
+    return [
+        node.text or ""
+        for node in paragraph._p.iter(qn("w:instrText"))
+        if node.text is not None
+    ]
+
+
+def _story_texts(story) -> list[str]:
+    return [paragraph.text for paragraph in story.paragraphs if paragraph.text]
+
+
+def _story_has_field_code(story, token: str) -> bool:
+    return any(
+        token in field_code
+        for paragraph in story.paragraphs
+        for field_code in _paragraph_field_codes(paragraph)
+    )
+
+
+def _document_updates_fields_on_open(doc) -> bool:
+    from docx.oxml.ns import qn
+
+    update_fields = doc.settings.element.find(qn("w:updateFields"))
+    if update_fields is None:
+        return False
+    return update_fields.get(qn("w:val")) in {None, "1", "true", "on"}
+
+
+def _document_uses_odd_even_headers(doc) -> bool:
+    from docx.oxml.ns import qn
+
+    even_headers = doc.settings.element.find(qn("w:evenAndOddHeaders"))
+    if even_headers is None:
+        return False
+    return even_headers.get(qn("w:val")) in {None, "1", "true", "on"}
+
+
+def _section_page_number_start(section) -> int | None:
+    from docx.oxml.ns import qn
+
+    page_number = section._sectPr.find(qn("w:pgNumType"))
+    if page_number is None:
+        return None
+    start = page_number.get(qn("w:start"))
+    return int(start) if start is not None else None
+
+
+def _paragraph_has_page_break(paragraph) -> bool:
+    from docx.oxml.ns import qn
+
+    return any(
+        node.get(qn("w:type")) == "page"
+        for node in paragraph._p.iter(qn("w:br"))
+    )
 
 
 def _table_border_size(table, edge_name: str) -> str | None:
@@ -227,9 +289,22 @@ def test_create_document_tool_schema_exposes_document_style():
     )
 
     properties = create_document_tool.parameters["properties"]
+    header_footer = properties["header_footer"]["properties"]
     document_style = properties["document_style"]["properties"]
     table_defaults = document_style["table_defaults"]["properties"]
 
+    assert header_footer["header_text"]["type"] == "string"
+    assert header_footer["footer_text"]["type"] == "string"
+    assert header_footer["different_first_page"]["type"] == "boolean"
+    assert header_footer["first_page_header_text"]["type"] == "string"
+    assert header_footer["first_page_footer_text"]["type"] == "string"
+    assert header_footer["first_page_show_page_number"]["type"] == "boolean"
+    assert header_footer["different_odd_even"]["type"] == "boolean"
+    assert header_footer["even_page_header_text"]["type"] == "string"
+    assert header_footer["even_page_footer_text"]["type"] == "string"
+    assert header_footer["even_page_show_page_number"]["type"] == "boolean"
+    assert header_footer["show_page_number"]["type"] == "boolean"
+    assert header_footer["page_number_align"]["enum"] == ["left", "center", "right"]
     assert document_style["brief"]["type"] == "string"
     assert document_style["heading_color"]["type"] == "string"
     assert document_style["title_align"]["enum"] == [
@@ -323,6 +398,60 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         "strong",
     ]
     assert block_properties["caption_emphasis"]["enum"] == ["normal", "strong"]
+    assert block_properties["start_type"]["enum"] == [
+        "new_page",
+        "continuous",
+        "odd_page",
+        "even_page",
+        "new_column",
+    ]
+    assert block_properties["inherit_header_footer"]["type"] == "boolean"
+    assert block_properties["page_orientation"]["enum"] == ["portrait", "landscape"]
+    assert block_properties["margins"]["type"] == "object"
+    assert block_properties["restart_page_numbering"]["type"] == "boolean"
+    assert block_properties["page_number_start"]["type"] == "integer"
+    assert block_properties["header_footer"]["type"] == "object"
+    assert block_properties["header_footer"]["properties"]["different_odd_even"][
+        "type"
+    ] == "boolean"
+    assert block_properties["header_footer"]["properties"]["show_page_number"][
+        "type"
+    ] == "boolean"
+    assert block_properties["levels"]["type"] == "integer"
+    assert block_properties["start_on_new_page"]["type"] == "boolean"
+
+
+def test_create_document_request_accepts_header_footer_defaults():
+    request = CreateDocumentRequest(
+        title="Paged Report",
+        header_footer={
+            "header_text": "季度经营复盘",
+            "footer_text": "内部使用",
+            "different_first_page": True,
+            "first_page_header_text": "封面页眉",
+            "first_page_footer_text": "封面页脚",
+            "first_page_show_page_number": True,
+            "different_odd_even": True,
+            "even_page_header_text": "双面页眉",
+            "even_page_footer_text": "双面页脚",
+            "even_page_show_page_number": False,
+            "show_page_number": True,
+            "page_number_align": "center",
+        },
+    )
+
+    assert request.header_footer.header_text == "季度经营复盘"
+    assert request.header_footer.footer_text == "内部使用"
+    assert request.header_footer.different_first_page is True
+    assert request.header_footer.first_page_header_text == "封面页眉"
+    assert request.header_footer.first_page_footer_text == "封面页脚"
+    assert request.header_footer.first_page_show_page_number is True
+    assert request.header_footer.different_odd_even is True
+    assert request.header_footer.even_page_header_text == "双面页眉"
+    assert request.header_footer.even_page_footer_text == "双面页脚"
+    assert request.header_footer.even_page_show_page_number is False
+    assert request.header_footer.show_page_number is True
+    assert request.header_footer.page_number_align == "center"
 
 
 def test_paragraph_schema_requires_text_or_runs():
@@ -2294,6 +2423,234 @@ def test_word_document_builder_skips_images_outside_workspace(
     assert "Should be skipped" not in [
         paragraph.text for paragraph in loaded_doc.paragraphs
     ]
+
+
+def test_word_document_builder_writes_toc_and_document_header_footer(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.section import WD_ORIENT
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-toc-header")
+    output_path = workspace_dir / "toc-header.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import (
+        HeadingBlock,
+        ParagraphBlock,
+    )
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="toc-header-test",
+        metadata=DocumentMetadata(
+            title="目录测试",
+            header_footer=HeaderFooterConfig(
+                header_text="季度经营复盘",
+                footer_text="内部使用",
+                different_first_page=True,
+                first_page_header_text="封面页眉",
+                first_page_footer_text="封面页脚",
+                first_page_show_page_number=True,
+                different_odd_even=True,
+                even_page_header_text="偶数页页眉",
+                even_page_footer_text="偶数页页脚",
+                even_page_show_page_number=False,
+                show_page_number=True,
+                page_number_align="center",
+            ),
+        ),
+        blocks=[
+            TocBlock(title="目录", levels=2, start_on_new_page=True),
+            HeadingBlock(text="经营总览", level=2),
+            ParagraphBlock(text="正文"),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert _document_updates_fields_on_open(loaded_doc) is True
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert loaded_doc.sections[0].different_first_page_header_footer is True
+    assert "季度经营复盘" in _story_texts(loaded_doc.sections[0].header)
+    assert "内部使用" in _story_texts(loaded_doc.sections[0].footer)
+    assert "封面页眉" in _story_texts(loaded_doc.sections[0].first_page_header)
+    assert "封面页脚" in _story_texts(loaded_doc.sections[0].first_page_footer)
+    assert _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is True
+    assert "偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
+    assert "偶数页页脚" in _story_texts(loaded_doc.sections[0].even_page_footer)
+    assert _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
+    assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is True
+    assert loaded_doc.sections[0].orientation == WD_ORIENT.PORTRAIT
+    assert any(_paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs)
+    toc_index = next(
+        index
+        for index, paragraph in enumerate(loaded_doc.paragraphs)
+        if paragraph.text == "目录"
+    )
+    assert any(
+        'TOC \\o "1-2"' in field_code
+        for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
+    )
+
+
+def test_word_document_builder_section_break_creates_new_section_with_override(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.section import WD_ORIENT
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-section-break")
+    output_path = workspace_dir / "section-break.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import ParagraphBlock
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="section-break-test",
+        metadata=DocumentMetadata(
+            title="分节测试",
+            header_footer=HeaderFooterConfig(header_text="默认页眉"),
+        ),
+        blocks=[
+            ParagraphBlock(text="第一节"),
+            SectionBreakBlock(
+                start_type="new_page",
+                inherit_header_footer=False,
+                page_orientation="landscape",
+                margins={
+                    "top_cm": 1.5,
+                    "bottom_cm": 1.8,
+                    "left_cm": 1.2,
+                    "right_cm": 1.4,
+                },
+                restart_page_numbering=True,
+                page_number_start=3,
+                header_footer=HeaderFooterConfig(
+                    header_text="第二节页眉",
+                    footer_text="第二节页脚",
+                    show_page_number=True,
+                    different_odd_even=True,
+                    even_page_header_text="第二节偶数页页眉",
+                ),
+            ),
+            ParagraphBlock(text="第二节"),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.sections) == 2
+    assert "默认页眉" in _story_texts(loaded_doc.sections[0].header)
+    assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert "第二节页脚" in _story_texts(loaded_doc.sections[1].footer)
+    assert "第二节偶数页页眉" in _story_texts(loaded_doc.sections[1].even_page_header)
+    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
+    assert _section_page_number_start(loaded_doc.sections[1]) == 3
+    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
+    assert loaded_doc.sections[1].top_margin.cm == pytest.approx(1.5, abs=0.01)
+    assert loaded_doc.sections[1].bottom_margin.cm == pytest.approx(1.8, abs=0.01)
+    assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.2, abs=0.01)
+    assert loaded_doc.sections[1].right_margin.cm == pytest.approx(1.4, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_document_toolset_exports_toc_and_section_break(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+    from docx.enum.section import WD_ORIENT
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-toc-section")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="目录与分节",
+            output_name="toc-section.docx",
+            header_footer={
+                "header_text": "默认页眉",
+                "different_odd_even": True,
+                "even_page_header_text": "默认偶数页页眉",
+                "show_page_number": True,
+            },
+        )
+    )
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+        None,
+        document_id=created["document"]["document_id"],
+        blocks=[
+            {
+                "type": "toc",
+                "title": "目录",
+                "levels": 2,
+                "start_on_new_page": True,
+            },
+            {"type": "heading", "text": "经营总览", "level": 2},
+            {"type": "paragraph", "text": "第一节正文"},
+            {
+                "type": "section_break",
+                "start_type": "new_page",
+                "inherit_header_footer": False,
+                "page_orientation": "landscape",
+                "margins": {
+                    "top_cm": 1.6,
+                    "bottom_cm": 1.7,
+                    "left_cm": 1.8,
+                    "right_cm": 1.9,
+                },
+                "restart_page_numbering": True,
+                "page_number_start": 5,
+                "header_footer": {
+                    "header_text": "第二节页眉",
+                    "footer_text": "第二节页脚",
+                    "different_first_page": True,
+                    "first_page_header_text": "第二节首页页眉",
+                    "show_page_number": True,
+                },
+            },
+            {"type": "heading", "text": "行动计划", "level": 2},
+        ],
+        )
+    )
+    assert add_blocks_result["success"] is True
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.sections) == 2
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert "默认偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
+    assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert "第二节首页页眉" in _story_texts(loaded_doc.sections[1].first_page_header)
+    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
+    assert _section_page_number_start(loaded_doc.sections[1]) == 5
+    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
+    assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.8, abs=0.01)
+    assert any(_paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs)
+    toc_index = next(
+        index
+        for index, paragraph in enumerate(loaded_doc.paragraphs)
+        if paragraph.text == "目录"
+    )
+    assert any(
+        'TOC \\o "1-2"' in field_code
+        for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
+    )
 
 
 @pytest.mark.asyncio

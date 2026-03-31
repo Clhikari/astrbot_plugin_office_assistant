@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .blocks import (
     DocumentBlock,
+    HeaderFooterConfig,
     TableAlignment,
     TableBorderStyle,
     TableCaptionEmphasis,
@@ -95,6 +96,7 @@ class DocumentMetadata(BaseModel):
     density: Literal["comfortable", "compact"] = "comfortable"
     accent_color: str = ""
     document_style: DocumentStyleConfig = Field(default_factory=DocumentStyleConfig)
+    header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

@@ -23,6 +23,36 @@ class BlockStyle(BaseModel):
     cell_align: Literal["left", "center", "right"] | None = None
 
 
+PageNumberAlignment = Literal["left", "center", "right"]
+PageOrientation = Literal["portrait", "landscape"]
+
+
+class SectionMarginsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    top_cm: float | None = Field(default=None, gt=0, le=10)
+    bottom_cm: float | None = Field(default=None, gt=0, le=10)
+    left_cm: float | None = Field(default=None, gt=0, le=10)
+    right_cm: float | None = Field(default=None, gt=0, le=10)
+
+
+class HeaderFooterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    header_text: str = ""
+    footer_text: str = ""
+    different_first_page: bool = False
+    first_page_header_text: str = ""
+    first_page_footer_text: str = ""
+    first_page_show_page_number: bool | None = None
+    different_odd_even: bool = False
+    even_page_header_text: str = ""
+    even_page_footer_text: str = ""
+    even_page_show_page_number: bool | None = None
+    show_page_number: bool = False
+    page_number_align: PageNumberAlignment = "right"
+
+
 class BlockBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -205,6 +235,33 @@ class PageBreakBlock(BlockBase):
     type: Literal["page_break"] = "page_break"
 
 
+SectionStartType = Literal[
+    "new_page",
+    "continuous",
+    "odd_page",
+    "even_page",
+    "new_column",
+]
+
+
+class SectionBreakBlock(BlockBase):
+    type: Literal["section_break"] = "section_break"
+    start_type: SectionStartType = "new_page"
+    inherit_header_footer: bool = True
+    page_orientation: PageOrientation | None = None
+    margins: SectionMarginsConfig = Field(default_factory=SectionMarginsConfig)
+    restart_page_numbering: bool = False
+    page_number_start: int | None = Field(default=None, ge=1, le=9999)
+    header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
+
+
+class TocBlock(BlockBase):
+    type: Literal["toc"] = "toc"
+    title: str = "目录"
+    levels: int = Field(default=3, ge=1, le=6)
+    start_on_new_page: bool = False
+
+
 DocumentBlock = Annotated[
     HeadingBlock
     | ParagraphBlock
@@ -214,7 +271,9 @@ DocumentBlock = Annotated[
     | ImageBlock
     | GroupBlock
     | ColumnsBlock
-    | PageBreakBlock,
+    | PageBreakBlock
+    | SectionBreakBlock
+    | TocBlock,
     Field(discriminator="type"),
 ]
 

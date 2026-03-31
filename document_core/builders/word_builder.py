@@ -24,13 +24,16 @@ if TYPE_CHECKING:
 
 ColumnsBlock = block_models.ColumnsBlock
 GroupBlock = block_models.GroupBlock
+HeaderFooterConfig = block_models.HeaderFooterConfig
 HeadingBlock = block_models.HeadingBlock
 ImageBlock = block_models.ImageBlock
 ListBlock = block_models.ListBlock
 PageBreakBlock = block_models.PageBreakBlock
 ParagraphBlock = block_models.ParagraphBlock
+SectionBreakBlock = block_models.SectionBreakBlock
 TableBlock = block_models.TableBlock
 SummaryCardBlock = getattr(block_models, "SummaryCardBlock", None)
+TocBlock = block_models.TocBlock
 
 THEMES = {
     "business_report": {
@@ -112,7 +115,6 @@ class WordDocumentBuilder:
         try:
             from docx import Document
             from docx.enum.section import WD_SECTION
-            from docx.shared import Cm
         except ImportError as exc:
             raise RuntimeError(
                 "python-docx is required to export Word documents."
@@ -124,10 +126,14 @@ class WordDocumentBuilder:
         section = doc.sections[0]
         section.start_type = WD_SECTION.NEW_PAGE
         theme = self._resolve_theme(document_model)
-        section.top_margin = Cm(theme["margins"]["top"])
-        section.bottom_margin = Cm(theme["margins"]["bottom"])
-        section.left_margin = Cm(theme["margins"]["left"])
-        section.right_margin = Cm(theme["margins"]["right"])
+        self._enable_update_fields_on_open(doc)
+        self._configure_document_header_footer_modes(doc, document_model)
+        self._apply_section_layout(section, margins=theme["margins"])
+        self._apply_section_header_footer(
+            section,
+            getattr(document_model.metadata, "header_footer", HeaderFooterConfig()),
+            theme,
+        )
 
         if document_model.metadata.title:
             self._add_title(doc, document_model.metadata.title, theme)
@@ -170,6 +176,10 @@ class WordDocumentBuilder:
             self._add_columns(doc, block, theme, document_model, workspace_dir)
         elif isinstance(block, PageBreakBlock):
             self._add_page_break(doc)
+        elif isinstance(block, SectionBreakBlock):
+            self._add_section_break(doc, block, theme)
+        elif isinstance(block, TocBlock):
+            self._add_toc(doc, block, theme)
         elif SummaryCardBlock is not None and isinstance(block, SummaryCardBlock):
             self._add_group(
                 doc,
@@ -422,6 +432,68 @@ class WordDocumentBuilder:
     def _add_page_break(doc: WordDocument) -> None:
         doc.add_page_break()
 
+    def _add_section_break(
+        self, doc: WordDocument, block: SectionBreakBlock, theme: dict
+    ) -> None:
+        from docx.enum.section import WD_SECTION
+
+        start_type_map = {
+            "continuous": WD_SECTION.CONTINUOUS,
+            "odd_page": WD_SECTION.ODD_PAGE,
+            "even_page": WD_SECTION.EVEN_PAGE,
+            "new_column": WD_SECTION.NEW_COLUMN,
+            "new_page": WD_SECTION.NEW_PAGE,
+        }
+        start_type = start_type_map.get(block.start_type, WD_SECTION.NEW_PAGE)
+        section = doc.add_section(start_type)
+        self._apply_section_layout(
+            section,
+            page_orientation=block.page_orientation,
+            margins=self._resolve_section_margins(block, theme),
+        )
+        self._apply_section_page_numbering(section, block)
+        if block.inherit_header_footer and not self._has_header_footer_override(
+            block.header_footer
+        ):
+            return
+        section.header.is_linked_to_previous = False
+        section.footer.is_linked_to_previous = False
+        section.first_page_header.is_linked_to_previous = False
+        section.first_page_footer.is_linked_to_previous = False
+        section.even_page_header.is_linked_to_previous = False
+        section.even_page_footer.is_linked_to_previous = False
+        self._apply_section_header_footer(section, block.header_footer, theme)
+
+    def _add_toc(self, doc: WordDocument, block: TocBlock, theme: dict) -> None:
+        from docx.shared import Pt
+
+        if block.start_on_new_page:
+            doc.add_page_break()
+
+        if block.title.strip():
+            title_paragraph = doc.add_paragraph()
+            title_paragraph.paragraph_format.space_after = Pt(
+                self._resolved_spacing(
+                    getattr(block.layout, "spacing_after", None),
+                    theme["heading_space_after"],
+                )
+            )
+            title_run = title_paragraph.add_run(block.title)
+            format_run(
+                title_run,
+                font_name=theme["font_name"],
+                font_size=Pt(theme["heading_size"]),
+                bold=True,
+                color=rgb(theme.get("heading_color", theme["accent"])),
+            )
+
+        toc_paragraph = doc.add_paragraph()
+        toc_paragraph.paragraph_format.space_after = Pt(theme["body_space_after"])
+        self._append_field_code(
+            toc_paragraph,
+            f'TOC \\o "1-{block.levels}" \\h \\z \\u',
+        )
+
     @staticmethod
     def _blend_hex(source: str, target: str, ratio: float) -> str:
         ratio = min(max(ratio, 0.0), 1.0)
@@ -469,6 +541,310 @@ class WordDocumentBuilder:
             return None
 
         return resolved_candidate if resolved_candidate.is_file() else None
+
+    def _configure_document_header_footer_modes(
+        self, doc: WordDocument, document_model: DocumentModel
+    ) -> None:
+        doc.settings.odd_and_even_pages_header_footer = any(
+            self._uses_even_page_variants(config)
+            for config in self._iter_header_footer_configs(document_model)
+        )
+
+    def _iter_header_footer_configs(self, document_model: DocumentModel):
+        yield getattr(document_model.metadata, "header_footer", HeaderFooterConfig())
+        for block in document_model.blocks:
+            if isinstance(block, SectionBreakBlock):
+                yield block.header_footer
+
+    def _apply_section_layout(
+        self,
+        section,
+        *,
+        page_orientation: str | None = None,
+        margins: dict[str, float] | None = None,
+    ) -> None:
+        from docx.enum.section import WD_ORIENT
+        from docx.shared import Cm
+
+        if page_orientation == "landscape":
+            if section.orientation != WD_ORIENT.LANDSCAPE:
+                section.orientation = WD_ORIENT.LANDSCAPE
+                section.page_width, section.page_height = (
+                    section.page_height,
+                    section.page_width,
+                )
+        elif page_orientation == "portrait":
+            if section.orientation != WD_ORIENT.PORTRAIT:
+                section.orientation = WD_ORIENT.PORTRAIT
+                section.page_width, section.page_height = (
+                    section.page_height,
+                    section.page_width,
+                )
+
+        if margins is None:
+            return
+        section.top_margin = Cm(margins["top"])
+        section.bottom_margin = Cm(margins["bottom"])
+        section.left_margin = Cm(margins["left"])
+        section.right_margin = Cm(margins["right"])
+
+    @staticmethod
+    def _resolve_section_margins(block: SectionBreakBlock, theme: dict) -> dict[str, float] | None:
+        overrides = block.margins
+        if not any(
+            value is not None
+            for value in (
+                overrides.top_cm,
+                overrides.bottom_cm,
+                overrides.left_cm,
+                overrides.right_cm,
+            )
+        ):
+            return None
+        base_margins = theme["margins"]
+        return {
+            "top": overrides.top_cm if overrides.top_cm is not None else base_margins["top"],
+            "bottom": (
+                overrides.bottom_cm
+                if overrides.bottom_cm is not None
+                else base_margins["bottom"]
+            ),
+            "left": overrides.left_cm if overrides.left_cm is not None else base_margins["left"],
+            "right": (
+                overrides.right_cm
+                if overrides.right_cm is not None
+                else base_margins["right"]
+            ),
+        }
+
+    def _apply_section_page_numbering(
+        self, section, block: SectionBreakBlock
+    ) -> None:
+        if not block.restart_page_numbering and block.page_number_start is None:
+            return
+
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        section_properties = section._sectPr
+        page_number = section_properties.find(qn("w:pgNumType"))
+        if page_number is None:
+            page_number = OxmlElement("w:pgNumType")
+            section_properties.append(page_number)
+        page_number.set(qn("w:start"), str(block.page_number_start or 1))
+
+    def _apply_section_header_footer(
+        self, section, config: HeaderFooterConfig, theme: dict
+    ) -> None:
+        uses_first_page = self._uses_first_page_variants(config)
+        uses_even_page = self._uses_even_page_variants(config)
+
+        section.different_first_page_header_footer = uses_first_page
+        self._set_story_text(section.header, config.header_text, theme)
+        self._set_footer_content(
+            section.footer,
+            text=config.footer_text,
+            show_page_number=config.show_page_number,
+            page_number_align=config.page_number_align,
+            theme=theme,
+        )
+
+        if uses_first_page:
+            section.first_page_header.is_linked_to_previous = False
+            section.first_page_footer.is_linked_to_previous = False
+            self._set_story_text(
+                section.first_page_header,
+                config.first_page_header_text,
+                theme,
+            )
+            self._set_footer_content(
+                section.first_page_footer,
+                text=config.first_page_footer_text,
+                show_page_number=(
+                    config.first_page_show_page_number
+                    if config.first_page_show_page_number is not None
+                    else False
+                ),
+                page_number_align=config.page_number_align,
+                theme=theme,
+            )
+        else:
+            self._set_story_text(section.first_page_header, "", theme)
+            self._set_footer_content(
+                section.first_page_footer,
+                text="",
+                show_page_number=False,
+                page_number_align=config.page_number_align,
+                theme=theme,
+            )
+
+        if uses_even_page:
+            section.even_page_header.is_linked_to_previous = False
+            section.even_page_footer.is_linked_to_previous = False
+            self._set_story_text(
+                section.even_page_header,
+                config.even_page_header_text or config.header_text,
+                theme,
+            )
+            self._set_footer_content(
+                section.even_page_footer,
+                text=config.even_page_footer_text or config.footer_text,
+                show_page_number=(
+                    config.even_page_show_page_number
+                    if config.even_page_show_page_number is not None
+                    else config.show_page_number
+                ),
+                page_number_align=config.page_number_align,
+                theme=theme,
+            )
+        else:
+            self._set_story_text(section.even_page_header, "", theme)
+            self._set_footer_content(
+                section.even_page_footer,
+                text="",
+                show_page_number=False,
+                page_number_align=config.page_number_align,
+                theme=theme,
+            )
+
+    def _set_footer_content(
+        self,
+        story,
+        *,
+        text: str,
+        show_page_number: bool,
+        page_number_align: str,
+        theme: dict,
+    ) -> None:
+        paragraph_count = 2 if text.strip() and show_page_number else 1
+        paragraphs = self._reset_story(story, paragraph_count=paragraph_count)
+        if text.strip():
+            text_paragraph = paragraphs[0]
+            text_paragraph.alignment = resolve_alignment("left", default=None)
+            run = text_paragraph.add_run(text)
+            format_run(
+                run,
+                font_name=theme["font_name"],
+                font_size=None,
+                bold=False,
+            )
+        if show_page_number:
+            page_paragraph = paragraphs[-1]
+            page_paragraph.alignment = resolve_alignment(
+                page_number_align,
+                default=None,
+            )
+            self._append_page_number_field(page_paragraph)
+
+    def _set_story_text(self, story, text: str, theme: dict) -> None:
+        paragraphs = self._reset_story(story)
+        if not text.strip():
+            return
+        run = paragraphs[0].add_run(text)
+        format_run(
+            run,
+            font_name=theme["font_name"],
+            font_size=None,
+            bold=False,
+        )
+
+    def _reset_story(self, story, *, paragraph_count: int = 1):
+        paragraphs = list(story.paragraphs)
+        if not paragraphs:
+            paragraphs = [story.add_paragraph()]
+        for paragraph in paragraphs[1:]:
+            paragraph._element.getparent().remove(paragraph._element)
+        base_paragraph = story.paragraphs[0]
+        self._clear_paragraph(base_paragraph)
+        paragraphs = [base_paragraph]
+        while len(paragraphs) < paragraph_count:
+            new_paragraph = story.add_paragraph()
+            self._clear_paragraph(new_paragraph)
+            paragraphs.append(new_paragraph)
+        return paragraphs
+
+    def _append_page_number_field(self, paragraph) -> None:
+        self._append_field_code(paragraph, "PAGE")
+
+    def _append_field_code(self, paragraph, instruction: str) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        begin = OxmlElement("w:fldChar")
+        begin.set(qn("w:fldCharType"), "begin")
+        paragraph._p.append(begin)
+
+        instr = OxmlElement("w:instrText")
+        instr.set(qn("xml:space"), "preserve")
+        instr.text = instruction
+        paragraph._p.append(instr)
+
+        separate = OxmlElement("w:fldChar")
+        separate.set(qn("w:fldCharType"), "separate")
+        paragraph._p.append(separate)
+
+        end = OxmlElement("w:fldChar")
+        end.set(qn("w:fldCharType"), "end")
+        paragraph._p.append(end)
+
+    def _enable_update_fields_on_open(self, doc: WordDocument) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        settings = doc.settings.element
+        update_fields = settings.find(qn("w:updateFields"))
+        if update_fields is None:
+            update_fields = OxmlElement("w:updateFields")
+            settings.append(update_fields)
+        update_fields.set(qn("w:val"), "true")
+
+    @staticmethod
+    def _clear_paragraph(paragraph) -> None:
+        from docx.oxml.ns import qn
+
+        for child in list(paragraph._p):
+            if child.tag != qn("w:pPr"):
+                paragraph._p.remove(child)
+
+    @staticmethod
+    def _has_header_footer_override(config: HeaderFooterConfig) -> bool:
+        return any(
+            [
+                config.header_text.strip(),
+                config.footer_text.strip(),
+                config.different_first_page,
+                config.first_page_header_text.strip(),
+                config.first_page_footer_text.strip(),
+                config.first_page_show_page_number is True,
+                config.different_odd_even,
+                config.even_page_header_text.strip(),
+                config.even_page_footer_text.strip(),
+                config.even_page_show_page_number is True,
+                config.show_page_number,
+            ]
+        )
+
+    @staticmethod
+    def _uses_first_page_variants(config: HeaderFooterConfig) -> bool:
+        return any(
+            [
+                config.different_first_page,
+                config.first_page_header_text.strip(),
+                config.first_page_footer_text.strip(),
+                config.first_page_show_page_number is not None,
+            ]
+        )
+
+    @staticmethod
+    def _uses_even_page_variants(config: HeaderFooterConfig) -> bool:
+        return any(
+            [
+                config.different_odd_even,
+                config.even_page_header_text.strip(),
+                config.even_page_footer_text.strip(),
+                config.even_page_show_page_number is not None,
+            ]
+        )
 
     @staticmethod
     def _resolved_spacing(value: float | None, default: float) -> float:

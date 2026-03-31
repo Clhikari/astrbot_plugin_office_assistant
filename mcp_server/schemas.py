@@ -9,7 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..document_core.models.blocks import (
     BlockLayout,
     BlockStyle,
+    HeaderFooterConfig,
     ParagraphRun,
+    SectionMarginsConfig,
+    SectionStartType,
     TableAlignment,
     TableBorderStyle,
     TableCaptionEmphasis,
@@ -80,6 +83,7 @@ class CreateDocumentRequest(BaseModel):
     density: str = "comfortable"
     accent_color: str = ""
     document_style: DocumentStyleConfig = Field(default_factory=DocumentStyleConfig)
+    header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
 
     @field_validator("output_name")
     @classmethod
@@ -383,6 +387,30 @@ class SectionPageBreakInput(BaseModel):
     type: Literal["page_break"] = "page_break"
 
 
+class SectionBreakInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["section_break"] = "section_break"
+    start_type: SectionStartType = "new_page"
+    inherit_header_footer: bool = True
+    page_orientation: Literal["portrait", "landscape"] | None = None
+    margins: SectionMarginsConfig = Field(default_factory=SectionMarginsConfig)
+    restart_page_numbering: bool = False
+    page_number_start: int | None = Field(default=None, ge=1, le=9999)
+    header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
+
+
+class TocInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["toc"] = "toc"
+    title: str = "目录"
+    levels: int = Field(default=3, ge=1, le=6)
+    start_on_new_page: bool = False
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+
 class BlockGroupInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -414,6 +442,8 @@ BlockInput = Annotated[
     | SectionTableInput
     | SectionCardInput
     | SectionPageBreakInput
+    | SectionBreakInput
+    | TocInput
     | BlockGroupInput
     | BlockColumnsInput,
     Field(discriminator="type"),
@@ -489,6 +519,7 @@ class DocumentSummary(BaseModel):
     density: str = ""
     accent_color: str = ""
     document_style: dict = Field(default_factory=dict)
+    header_footer: dict = Field(default_factory=dict)
 
 
 class ToolResult(BaseModel):
@@ -518,6 +549,11 @@ def build_document_summary(document_model: DocumentModel) -> DocumentSummary:
         density=document_model.metadata.density,
         accent_color=document_model.metadata.accent_color,
         document_style=document_model.metadata.document_style.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_defaults=True,
+        ),
+        header_footer=document_model.metadata.header_footer.model_dump(
             mode="json",
             exclude_none=True,
             exclude_defaults=True,
