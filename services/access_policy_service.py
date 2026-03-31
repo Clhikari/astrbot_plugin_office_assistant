@@ -62,7 +62,7 @@ class AccessPolicyService:
                 return True
             bot_id = str(event.message_obj.self_id)
             for segment in event.message_obj.message:
-                if isinstance(segment, At) or isinstance(segment, Reply):
+                if isinstance(segment, (At, Reply)):
                     target_id = getattr(segment, "qq", None) or getattr(
                         segment, "target", None
                     )

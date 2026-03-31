@@ -696,15 +696,16 @@ async def test_remember_recent_text_skips_system_notice_messages():
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
         event = _build_event()
-        session_key = plugin._get_attachment_session_key(event)
+        svc = plugin._runtime.upload_session_service
+        session_key = svc.get_attachment_session_key(event)
 
         event.message_str = "[System Notice] internal guidance"
-        plugin._remember_recent_text(event)
-        assert session_key not in plugin._recent_text_by_session
+        svc.remember_recent_text(event)
+        assert session_key not in svc.recent_text_by_session
 
         event.message_str = "整理成正式汇报"
-        plugin._remember_recent_text(event)
-        assert plugin._recent_text_by_session[session_key][0] == "整理成正式汇报"
+        svc.remember_recent_text(event)
+        assert svc.recent_text_by_session[session_key][0] == "整理成正式汇报"
     finally:
         await plugin.terminate()
 

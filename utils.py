@@ -1,7 +1,5 @@
 import hashlib
-import platform
 import re
-import shutil
 import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
@@ -11,19 +9,11 @@ from typing import Literal
 
 from astrbot.api import logger
 
-# 检测是否为 Windows 平台，旧格式需要 win32com
-_IS_WINDOWS = platform.system() == "Windows"
-_WIN32COM_AVAILABLE = False
-_ANTIWORD_AVAILABLE = shutil.which("antiword") is not None
+from .compat import _ANTIWORD_AVAILABLE, _IS_WINDOWS, _WIN32COM_AVAILABLE
 
-if _IS_WINDOWS:
-    try:
-        import pythoncom
-        import win32com.client
-
-        _WIN32COM_AVAILABLE = True
-    except ImportError:
-        pass
+if _WIN32COM_AVAILABLE:
+    import pythoncom
+    import win32com.client
 
 
 @contextmanager
@@ -64,11 +54,9 @@ def com_application(app_name: str) -> Generator:
 
 def format_file_size(size: int | float) -> str:
     """格式化文件大小"""
-    if size < 0:
+    if size <= 0:
         return "0 B"
-    if size == 0:
-        return "0 B"
-    for unit in ["B", "KB", "MB", "GB"]:
+    for unit in ("B", "KB", "MB", "GB"):
         if size < 1024:
             return f"{size:.2f} {unit}"
         size /= 1024

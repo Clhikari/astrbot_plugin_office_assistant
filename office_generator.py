@@ -13,6 +13,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.core.message.message_event_result import MessageChain
 
 from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
+from ._executor_mixin import ExecutorOwnerMixin
 from .document_core.builders.word_builder import WordDocumentBuilder
 from .document_core.models.blocks import (
     DocumentBlock,
@@ -23,17 +24,14 @@ from .document_core.models.blocks import (
 from .document_core.models.document import DocumentMetadata, DocumentModel
 
 
-class OfficeGenerator:
+class OfficeGenerator(ExecutorOwnerMixin):
     """Office文件生成器"""
 
     def __init__(self, data_path: Path, executor: ThreadPoolExecutor | None = None):
         self.data_path = data_path
         self.support = self._check_support()
         self._word_builder = WordDocumentBuilder()
-        self._executor = executor  # 使用外部传入的线程池
-        self._owns_executor = executor is None  # 标记是否自己管理线程池
-        if self._owns_executor:
-            self._executor = ThreadPoolExecutor(max_workers=2)
+        self._init_executor(executor, label="文件生成器")
 
     # 定义映射表
     _GENERATORS = {
@@ -94,26 +92,26 @@ class OfficeGenerator:
             return ""
 
         try:
-            filename = content.get("filename", f"{office_type}_file")
-            content = content.get("content", {})
+            resolved_filename = content.get("filename", f"{office_type}_file")
+            payload = content.get("content", {})
 
             # 解析content
-            if isinstance(content, str):
+            if isinstance(payload, str):
                 try:
-                    content = json.loads(content)
+                    payload = json.loads(payload)
                 except json.JSONDecodeError:
-                    content = self._create_default_content(office_type, content)
+                    payload = self._create_default_content(office_type, payload)
 
             # 清理文件名并添加扩展名
-            filename = self._sanitize_filename(filename)
+            resolved_filename = self._sanitize_filename(resolved_filename)
             extension = OFFICE_EXTENSIONS[office_type]
 
-            if not filename.endswith(extension):
-                filename = filename + extension
+            if not resolved_filename.endswith(extension):
+                resolved_filename = resolved_filename + extension
 
-            file_path = self._get_unique_filepath(filename)
+            file_path = self._get_unique_filepath(resolved_filename)
             generator = getattr(self, self._GENERATORS[office_type])
-            await generator(file_path, content)
+            await generator(file_path, payload)
 
             logger.info(f"[文件生成器] Office文件已生成: {file_path}")
             return file_path
@@ -563,7 +561,4 @@ class OfficeGenerator:
 
     def cleanup(self):
         """清理资源"""
-        # 只有自己创建的线程池才需要关闭
-        if self._owns_executor and hasattr(self, "_executor") and self._executor:
-            self._executor.shutdown(wait=False)
-            logger.debug("[文件生成器] 线程池已关闭")
+        self._shutdown_executor()

@@ -3,7 +3,13 @@ import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-import pdfplumber
+try:
+    import pdfplumber
+
+    _PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    pdfplumber = None  # type: ignore[assignment]
+    _PDFPLUMBER_AVAILABLE = False
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -94,15 +100,17 @@ class WorkspaceService:
 
         stem = dst_path.stem or "file"
         suffix = dst_path.suffix
-        index = 1
-        while True:
+        max_attempts = 1000
+        for index in range(1, max_attempts + 1):
             candidate_name = f"{stem}_{index}{suffix}"
             valid, candidate_path, error = self.validate_path(candidate_name)
             if not valid:
                 raise ValueError(error)
             if self.try_copy_uploaded_file(src_path, candidate_path):
                 return candidate_path
-            index += 1
+        raise RuntimeError(
+            f"在 {max_attempts} 次尝试后仍无法存储文件 '{safe_name}'"
+        )
 
     async def read_text_file(
         self, file_path: Path, max_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE
@@ -197,6 +205,9 @@ class WorkspaceService:
         )
 
     def extract_pdf_text(self, file_path: Path) -> str | None:
+        if not _PDFPLUMBER_AVAILABLE:
+            logger.warning("[文件管理] pdfplumber 未安装，无法提取 PDF 文本")
+            return None
         try:
             text_parts = []
             with pdfplumber.open(file_path) as pdf:

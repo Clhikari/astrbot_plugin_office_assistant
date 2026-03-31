@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
@@ -70,7 +71,7 @@ class PluginRuntimeBundle:
     access_policy_service: AccessPolicyService
     upload_session_service: UploadSessionService
     recent_text_by_session: dict
-    document_toolset: object
+    document_toolset: Any
     llm_request_policy: LLMRequestPolicy
     delivery_service: DeliveryService
     post_export_hook_service: PostExportHookService
@@ -270,13 +271,14 @@ def _extract_admin_users(root_config: dict) -> set[str]:
         return set()
 
     raw_admins = root_config.get("admins_id", [])
-    if raw_admins is None:
+    if not raw_admins:
         return set()
     if isinstance(raw_admins, (str, bytes)):
         return {str(raw_admins)}
-    if not isinstance(raw_admins, Iterable):
+    try:
+        return {str(admin_id) for admin_id in raw_admins}
+    except TypeError:
         return {str(raw_admins)}
-    return {str(admin_id) for admin_id in raw_admins}
 
 
 def _build_admin_users_resolver(context, *, initial_admin_users: set[str]):
@@ -358,9 +360,8 @@ def _prepare_workspace(
 
 def _check_office_libs() -> dict:
     libs = {}
-    for office_type in OFFICE_LIBS:
+    for office_type, (module_name, package_name) in OFFICE_LIBS.items():
         try:
-            module_name, package_name = OFFICE_LIBS[office_type]
             libs[module_name] = importlib.import_module(module_name)
             logger.debug(f"[文件管理] {package_name} 已加载")
         except ImportError:

@@ -12,7 +12,6 @@ PDF 转换器模块
 from __future__ import annotations
 
 import asyncio
-import platform
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -22,17 +21,15 @@ from pathlib import Path
 
 from astrbot.api import logger
 
+from ._executor_mixin import ExecutorOwnerMixin
+from .compat import _IS_WINDOWS, _WIN32COM_AVAILABLE
 from .utils import com_application
-
-# 系统类型检测
-_IS_WINDOWS = platform.system() == "Windows"
 
 # 可选依赖的导入状态
 _PDF2DOCX_AVAILABLE = False
 _TABULA_AVAILABLE = False
 _PDFPLUMBER_AVAILABLE = False
 _DOCX2PDF_AVAILABLE = False
-_WIN32COM_AVAILABLE = False
 
 try:
     from pdf2docx import Converter
@@ -64,17 +61,8 @@ if _IS_WINDOWS:
     except ImportError:
         pass
 
-    # win32com 支持 Word/Excel/PPT（需要 pythoncom 配合）
-    try:
-        import pythoncom  # noqa: F401
-        import win32com.client  # noqa: F401
 
-        _WIN32COM_AVAILABLE = True
-    except ImportError:
-        pass
-
-
-class PDFConverter:
+class PDFConverter(ExecutorOwnerMixin):
     """PDF 转换器"""
 
     # LibreOffice 可执行文件的可能路径
@@ -91,10 +79,7 @@ class PDFConverter:
 
     def __init__(self, data_path: Path, executor: ThreadPoolExecutor | None = None):
         self.data_path = data_path
-        self._executor = executor  # 使用外部传入的线程池
-        self._owns_executor = executor is None  # 标记是否自己管理线程池
-        if self._owns_executor:
-            self._executor = ThreadPoolExecutor(max_workers=2)
+        self._init_executor(executor, label="PDF转换器")
         self._libreoffice_path = self._find_libreoffice()
         self._java_available = self._check_java()
 
@@ -266,7 +251,7 @@ class PDFConverter:
                 )
             return result
         except Exception as e:
-            logger.error(f"[PDF转换器] Office→PDF 转换失败: {e}", exc_info=True)
+            logger.exception(f"[PDF转换器] {tag} 转换失败: {e}")
             return None
 
     def _office_to_pdf_docx2pdf(self, input_path: Path) -> Path | None:
@@ -431,8 +416,10 @@ class PDFConverter:
 
         try:
             cv = Converter(str(input_path))
-            cv.convert(str(output_path))
-            cv.close()
+            try:
+                cv.convert(str(output_path))
+            finally:
+                cv.close()
 
             if output_path.exists():
                 logger.info(f"[PDF转换器] PDF→Word 成功: {output_path}")
@@ -583,7 +570,4 @@ class PDFConverter:
 
     def cleanup(self):
         """清理资源"""
-        # 只有自己创建的线程池才需要关闭
-        if self._owns_executor and hasattr(self, "_executor") and self._executor:
-            self._executor.shutdown(wait=False)
-            logger.debug("[PDF转换器] 线程池已关闭")
+        self._shutdown_executor()
