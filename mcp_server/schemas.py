@@ -18,6 +18,7 @@ from ..document_core.models.blocks import (
     TableCaptionEmphasis,
     TableHeaderGroup,
     normalize_optional_hex_color,
+    validate_section_page_numbering,
     validate_table_structure,
 )
 from ..document_core.models.document import DocumentModel, DocumentStyleConfig
@@ -401,10 +402,10 @@ class SectionBreakInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_page_numbering(self) -> SectionBreakInput:
-        if self.page_number_start is not None and not self.restart_page_numbering:
-            raise ValueError(
-                "page_number_start requires restart_page_numbering=True"
-            )
+        validate_section_page_numbering(
+            self.restart_page_numbering,
+            self.page_number_start,
+        )
         return self
 
 
@@ -572,3 +573,4 @@ def build_document_summary(document_model: DocumentModel) -> DocumentSummary:
 BlockGroupInput.model_rebuild()
 BlockColumnInput.model_rebuild()
 BlockColumnsInput.model_rebuild()
+

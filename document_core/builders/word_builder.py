@@ -517,10 +517,7 @@ class WordDocumentBuilder:
         ):
             return current_header_footer
         effective_header_footer = (
-            self._merge_header_footer_config(
-                current_header_footer,
-                block.header_footer,
-            )
+            block.header_footer.merged_over(current_header_footer)
             if block.inherit_header_footer
             else block.header_footer.model_copy(deep=True)
         )
@@ -888,10 +885,7 @@ class WordDocumentBuilder:
 
     @staticmethod
     def _has_header_footer_override(config: HeaderFooterConfig) -> bool:
-        return any(
-            WordDocumentBuilder._config_field_is_set(config, field_name)
-            for field_name in HeaderFooterConfig.model_fields
-        )
+        return config.has_explicit_overrides()
 
     @staticmethod
     def _uses_first_page_variants(config: HeaderFooterConfig) -> bool:
@@ -915,26 +909,7 @@ class WordDocumentBuilder:
             ]
         )
 
-    @staticmethod
-    def _config_field_is_set(
-        config: HeaderFooterConfig, field_name: str
-    ) -> bool:
-        return field_name in getattr(config, "model_fields_set", set())
 
-    def _merge_header_footer_config(
-        self,
-        base_config: HeaderFooterConfig,
-        override_config: HeaderFooterConfig,
-    ) -> HeaderFooterConfig:
-        merged_config = base_config.model_copy(deep=True)
-        for field_name in HeaderFooterConfig.model_fields:
-            if self._config_field_is_set(override_config, field_name):
-                setattr(
-                    merged_config,
-                    field_name,
-                    getattr(override_config, field_name),
-                )
-        return merged_config
 
     @staticmethod
     def _resolved_spacing(value: float | None, default: float) -> float:
@@ -1009,3 +984,4 @@ class WordDocumentBuilder:
         if emphasis == "subtle":
             return rgb(theme["accent"])
         return default_color
+

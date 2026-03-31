@@ -30,8 +30,8 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     HeaderFooterConfig,
     ParagraphBlock,
     ParagraphRun,
-    SectionMarginsConfig,
     SectionBreakBlock,
+    SectionMarginsConfig,
     TableBlock,
     TocBlock,
 )
@@ -2561,6 +2561,37 @@ def test_word_document_builder_writes_toc_and_document_header_footer(
     )
 
 
+
+def test_word_document_builder_uses_default_header_footer_baseline(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-default-header-footer"
+    )
+    output_path = workspace_dir / "default-header-footer.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="default-header-footer-test",
+        metadata=DocumentMetadata(title="默认页眉页脚测试"),
+        blocks=[ParagraphBlock(text="正文")],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert _document_updates_fields_on_open(loaded_doc) is True
+    assert _document_uses_odd_even_headers(loaded_doc) is False
+    assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is False
+    assert _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is False
+    assert _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
+
 def test_word_document_builder_section_break_creates_new_section_with_override(
     workspace_root: Path,
 ):
@@ -2570,7 +2601,9 @@ def test_word_document_builder_section_break_creates_new_section_with_override(
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-section-break")
     output_path = workspace_dir / "section-break.docx"
 
-    from astrbot_plugin_office_assistant.document_core.models.blocks import ParagraphBlock
+    from astrbot_plugin_office_assistant.document_core.models.blocks import (
+        ParagraphBlock,
+    )
     from astrbot_plugin_office_assistant.document_core.models.document import (
         DocumentMetadata,
         DocumentModel,
