@@ -24,10 +24,13 @@ from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
+    ColumnBlock,
+    ColumnsBlock,
     GroupBlock,
     HeaderFooterConfig,
     ParagraphBlock,
     ParagraphRun,
+    SectionMarginsConfig,
     SectionBreakBlock,
     TableBlock,
     TocBlock,
@@ -475,6 +478,41 @@ def test_add_blocks_request_rejects_section_page_number_start_without_restart():
                 {
                     "type": "section_break",
                     "page_number_start": 2,
+                }
+            ],
+        )
+
+
+def test_section_margins_config_rejects_zero_margin():
+    with pytest.raises(ValidationError):
+        SectionMarginsConfig(top_cm=0, bottom_cm=2, left_cm=2, right_cm=2)
+
+
+def test_section_break_block_rejects_margin_greater_than_ten():
+    with pytest.raises(ValidationError):
+        SectionBreakBlock(
+            margins={
+                "top_cm": 2,
+                "bottom_cm": 2,
+                "left_cm": 20,
+                "right_cm": 2,
+            }
+        )
+
+
+def test_add_blocks_request_rejects_invalid_section_margins():
+    with pytest.raises(ValidationError):
+        AddBlocksRequest(
+            document_id="doc-1",
+            blocks=[
+                {
+                    "type": "section_break",
+                    "margins": {
+                        "top_cm": 0,
+                        "bottom_cm": 2,
+                        "left_cm": 2,
+                        "right_cm": 2,
+                    },
                 }
             ],
         )
@@ -2707,6 +2745,57 @@ def test_word_document_builder_section_break_restarts_page_numbering_from_one_by
     loaded_doc = docx.Document(output_path)
     assert len(loaded_doc.sections) == 2
     assert _section_page_number_start(loaded_doc.sections[1]) == 1
+
+
+def test_word_document_builder_enables_odd_even_headers_for_nested_section_breaks(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-nested-section-headers"
+    )
+    output_path = workspace_dir / "nested-section-headers.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="nested-section-header-test",
+        metadata=DocumentMetadata(title="嵌套分节测试"),
+        blocks=[
+            GroupBlock(
+                blocks=[
+                    ColumnsBlock(
+                        columns=[
+                            ColumnBlock(
+                                blocks=[
+                                    SectionBreakBlock(
+                                        start_type="new_page",
+                                        inherit_header_footer=False,
+                                        header_footer=HeaderFooterConfig(
+                                            different_odd_even=True,
+                                            even_page_header_text="嵌套偶数页页眉",
+                                        ),
+                                    ),
+                                    ParagraphBlock(text="第二节"),
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.sections) == 2
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert "嵌套偶数页页眉" in _story_texts(loaded_doc.sections[1].even_page_header)
 
 
 @pytest.mark.asyncio

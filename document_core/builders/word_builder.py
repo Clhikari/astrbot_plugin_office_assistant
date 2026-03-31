@@ -621,9 +621,19 @@ class WordDocumentBuilder:
 
     def _iter_header_footer_configs(self, document_model: DocumentModel):
         yield getattr(document_model.metadata, "header_footer", HeaderFooterConfig())
-        for block in document_model.blocks:
+        yield from self._iter_nested_header_footer_configs(document_model.blocks)
+
+    def _iter_nested_header_footer_configs(self, blocks):
+        for block in blocks:
             if isinstance(block, SectionBreakBlock):
                 yield block.header_footer
+            elif isinstance(block, GroupBlock):
+                yield from self._iter_nested_header_footer_configs(block.blocks)
+            elif isinstance(block, ColumnsBlock):
+                for column in block.columns:
+                    yield from self._iter_nested_header_footer_configs(
+                        column.blocks
+                    )
 
     def _apply_section_layout(
         self,
