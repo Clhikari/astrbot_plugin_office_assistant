@@ -36,6 +36,17 @@ class SectionMarginsConfig(BaseModel):
     right_cm: float | None = Field(default=None, gt=0, le=10)
 
 
+def validate_section_page_numbering(
+    restart_page_numbering: bool, page_number_start: int | None
+) -> None:
+    if page_number_start is not None and not restart_page_numbering:
+        raise ValueError("page_number_start requires restart_page_numbering=True")
+
+
+def _model_field_was_set(model: BaseModel, field_name: str) -> bool:
+    return field_name in getattr(model, "model_fields_set", set())
+
+
 class HeaderFooterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -51,6 +62,19 @@ class HeaderFooterConfig(BaseModel):
     even_page_show_page_number: bool | None = None
     show_page_number: bool | None = None
     page_number_align: PageNumberAlignment = "right"
+
+    def has_explicit_overrides(self) -> bool:
+        return any(
+            _model_field_was_set(self, field_name)
+            for field_name in type(self).model_fields
+        )
+
+    def merged_over(self, base_config: HeaderFooterConfig) -> HeaderFooterConfig:
+        merged_config = base_config.model_copy(deep=True)
+        for field_name in type(self).model_fields:
+            if _model_field_was_set(self, field_name):
+                setattr(merged_config, field_name, getattr(self, field_name))
+        return merged_config
 
 
 class BlockBase(BaseModel):
@@ -256,10 +280,10 @@ class SectionBreakBlock(BlockBase):
 
     @model_validator(mode="after")
     def validate_page_numbering(self) -> SectionBreakBlock:
-        if self.page_number_start is not None and not self.restart_page_numbering:
-            raise ValueError(
-                "page_number_start requires restart_page_numbering=True"
-            )
+        validate_section_page_numbering(
+            self.restart_page_numbering,
+            self.page_number_start,
+        )
         return self
 
 
@@ -288,3 +312,4 @@ DocumentBlock = Annotated[
 GroupBlock.model_rebuild()
 ColumnBlock.model_rebuild()
 ColumnsBlock.model_rebuild()
+
