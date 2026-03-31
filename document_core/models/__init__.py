@@ -3,12 +3,16 @@ from .blocks import (
     BlockStyle,
     ColumnsBlock,
     GroupBlock,
+    HeaderFooterConfig,
     HeadingBlock,
     ImageBlock,
     ListBlock,
     PageBreakBlock,
+    SectionMarginsConfig,
     ParagraphBlock,
+    SectionBreakBlock,
     TableBlock,
+    TocBlock,
 )
 from .document import DocumentMetadata, DocumentModel, DocumentStatus
 
@@ -20,10 +24,14 @@ __all__ = [
     "BlockStyle",
     "ColumnsBlock",
     "GroupBlock",
+    "HeaderFooterConfig",
     "HeadingBlock",
     "ListBlock",
     "PageBreakBlock",
+    "SectionMarginsConfig",
     "ParagraphBlock",
+    "SectionBreakBlock",
     "TableBlock",
+    "TocBlock",
     "ImageBlock",
 ]

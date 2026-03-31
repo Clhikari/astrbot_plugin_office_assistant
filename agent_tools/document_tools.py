@@ -119,6 +119,61 @@ class CreateDocumentTool(DocumentToolBase):
                     "type": "string",
                     "description": "Optional 6-digit hex accent override such as 1F4E79.",
                 },
+                "header_footer": {
+                    "type": "object",
+                    "description": "Optional whole-document header and footer settings.",
+                    "properties": {
+                        "header_text": {
+                            "type": "string",
+                            "description": "Optional repeated header text for the document.",
+                        },
+                        "footer_text": {
+                            "type": "string",
+                            "description": "Optional repeated footer text for the document.",
+                        },
+                        "different_first_page": {
+                            "type": "boolean",
+                            "description": "Whether the first page should use a different blank header and footer.",
+                        },
+                        "first_page_header_text": {
+                            "type": "string",
+                            "description": "Optional first-page-only header text.",
+                        },
+                        "first_page_footer_text": {
+                            "type": "string",
+                            "description": "Optional first-page-only footer text.",
+                        },
+                        "first_page_show_page_number": {
+                            "type": "boolean",
+                            "description": "Optional override for whether the first page footer should include a page number.",
+                        },
+                        "different_odd_even": {
+                            "type": "boolean",
+                            "description": "Whether odd and even pages should use different headers and footers.",
+                        },
+                        "even_page_header_text": {
+                            "type": "string",
+                            "description": "Optional even-page-only header text.",
+                        },
+                        "even_page_footer_text": {
+                            "type": "string",
+                            "description": "Optional even-page-only footer text.",
+                        },
+                        "even_page_show_page_number": {
+                            "type": "boolean",
+                            "description": "Optional override for whether even-page footers should include a page number.",
+                        },
+                        "show_page_number": {
+                            "type": "boolean",
+                            "description": "Whether to append a PAGE field in the footer.",
+                        },
+                        "page_number_align": {
+                            "type": "string",
+                            "enum": ["left", "center", "right"],
+                            "description": "Paragraph alignment used for the footer page number field.",
+                        },
+                    },
+                },
                 "document_style": {
                     "type": "object",
                     "description": "Optional whole-document style defaults, including high-level visual intent and table defaults.",
@@ -262,6 +317,7 @@ class CreateDocumentTool(DocumentToolBase):
             table_template=str(kwargs.get("table_template") or "report_grid"),
             density=str(kwargs.get("density") or "comfortable"),
             accent_color=str(kwargs.get("accent_color") or ""),
+            header_footer=dict(kwargs.get("header_footer") or {}),
             document_style=dict(kwargs.get("document_style") or {}),
         )
         document = self.store.create_document(request)
@@ -279,7 +335,7 @@ class AddBlocksTool(DocumentToolBase):
     name: str = "add_blocks"
     description: str = (
         "Append one or more blocks in order. Use this for mixed content such as "
-        "heading, paragraph, list, table, image, summary_card, page_break, group, or columns. "
+        "heading, paragraph, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
         "not as a separate heading block. For table styling, use table-specific fields like "
@@ -296,7 +352,7 @@ class AddBlocksTool(DocumentToolBase):
                 },
                 "blocks": {
                     "type": "array",
-                    "description": "Ordered block list. Supported block types: heading, paragraph, list, table, image, summary_card, page_break, group, columns.",
+                    "description": "Ordered block list. Supported block types: heading, paragraph, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -409,6 +465,73 @@ class AddBlocksTool(DocumentToolBase):
                             "path": {"type": "string"},
                             "width_px": {"type": "number"},
                             "variant": {"type": "string"},
+                            "start_type": {
+                                "type": "string",
+                                "enum": [
+                                    "new_page",
+                                    "continuous",
+                                    "odd_page",
+                                    "even_page",
+                                    "new_column",
+                                ],
+                            },
+                            "inherit_header_footer": {"type": "boolean"},
+                            "page_orientation": {
+                                "type": "string",
+                                "enum": ["portrait", "landscape"],
+                            },
+                            "margins": {
+                                "type": "object",
+                                "properties": {
+                                    "top_cm": {"type": "number"},
+                                    "bottom_cm": {"type": "number"},
+                                    "left_cm": {"type": "number"},
+                                    "right_cm": {"type": "number"},
+                                },
+                            },
+                            "restart_page_numbering": {"type": "boolean"},
+                            "page_number_start": {
+                                "type": "integer",
+                                "minimum": 1,
+                            },
+                            "header_footer": {
+                                "type": "object",
+                                "properties": {
+                                    "header_text": {"type": "string"},
+                                    "footer_text": {"type": "string"},
+                                    "different_first_page": {"type": "boolean"},
+                                    "first_page_header_text": {
+                                        "type": "string"
+                                    },
+                                    "first_page_footer_text": {
+                                        "type": "string"
+                                    },
+                                    "first_page_show_page_number": {
+                                        "type": "boolean"
+                                    },
+                                    "different_odd_even": {"type": "boolean"},
+                                    "even_page_header_text": {
+                                        "type": "string"
+                                    },
+                                    "even_page_footer_text": {
+                                        "type": "string"
+                                    },
+                                    "even_page_show_page_number": {
+                                        "type": "boolean"
+                                    },
+                                    "show_page_number": {"type": "boolean"},
+                                    "page_number_align": {
+                                        "type": "string",
+                                        "enum": ["left", "center", "right"],
+                                    },
+                                },
+                            },
+                            "levels": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 6,
+                            },
+                            "start_on_new_page": {"type": "boolean"},
                             "blocks": {
                                 "type": "array",
                                 "items": _GENERIC_BLOCK_ITEM_SCHEMA,

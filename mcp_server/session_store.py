@@ -17,8 +17,10 @@ from ..document_core.models.blocks import (
     ListBlock,
     PageBreakBlock,
     ParagraphBlock,
+    SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
+    TocBlock,
 )
 from ..document_core.models.document import (
     DocumentMetadata,
@@ -47,9 +49,11 @@ from .schemas import (
     FinalizeDocumentRequest,
     SectionCardInput,
     SectionListInput,
+    SectionBreakInput,
     SectionPageBreakInput,
     SectionParagraphInput,
     SectionTableInput,
+    TocInput,
     _normalize_docx_filename,
 )
 
@@ -142,6 +146,7 @@ class DocumentSessionStore:
                     table_template=request.table_template,
                     density=request.density,
                     accent_color=request.accent_color,
+                    header_footer=request.header_footer,
                     document_style=request.document_style,
                 ),
             )
@@ -296,6 +301,24 @@ class DocumentSessionStore:
             return expanded[0]
         if isinstance(block, SectionPageBreakInput):
             return PageBreakBlock()
+        if isinstance(block, SectionBreakInput):
+            return SectionBreakBlock(
+                start_type=block.start_type,
+                inherit_header_footer=block.inherit_header_footer,
+                page_orientation=block.page_orientation,
+                margins=block.margins,
+                restart_page_numbering=block.restart_page_numbering,
+                page_number_start=block.page_number_start,
+                header_footer=block.header_footer,
+            )
+        if isinstance(block, TocInput):
+            return TocBlock(
+                title=block.title,
+                levels=block.levels,
+                start_on_new_page=block.start_on_new_page,
+                style=block.style,
+                layout=block.layout,
+            )
         if isinstance(block, BlockGroupInput):
             return GroupBlock(
                 blocks=[
