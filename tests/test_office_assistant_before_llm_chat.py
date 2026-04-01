@@ -121,6 +121,20 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             "style={align, emphasis, font_scale, table_grid, cell_align}"
             in req.system_prompt
         )
+        assert (
+            "横向页面、节级页眉页脚、页码重置 MUST 使用独立的 `section_break` block"
+            in req.system_prompt
+        )
+        assert (
+            "不要把 `page_orientation`、`start_type`、`restart_page_numbering`"
+            in req.system_prompt
+        )
+        assert (
+            "`toc` 只使用 `title`、`levels`、`start_on_new_page`" in req.system_prompt
+        )
+        assert (
+            "表格列标题使用 `headers`；不要给 `table` 传 `columns`" in req.system_prompt
+        )
         assert "按章节或逻辑块分批调用 `add_blocks`" in req.system_prompt
         assert "MUST 持续调用直到 `export_document` 成功" in req.system_prompt
         assert "NEVER 调用网络搜索" in req.system_prompt
@@ -410,6 +424,8 @@ async def test_before_llm_chat_does_not_restrict_for_non_explicit_tool_mentions(
         assert "read_file" in tool_names
     finally:
         await plugin.terminate()
+
+
 @pytest.mark.asyncio
 async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_call():
     context = MagicMock()
@@ -785,12 +801,11 @@ async def test_before_llm_chat_exposes_file_tools_for_buffered_group_upload_when
         )
         raw_message = SimpleNamespace(mentions=[SimpleNamespace(id="bot-1")])
         event.message_obj.raw_message = raw_message
-        event.is_mentioned.side_effect = (
-            lambda: hasattr(event.message_obj.raw_message, "mentions")
-            and any(
-                str(mention.id) == str(event.message_obj.self_id)
-                for mention in event.message_obj.raw_message.mentions
-            )
+        event.is_mentioned.side_effect = lambda: hasattr(
+            event.message_obj.raw_message, "mentions"
+        ) and any(
+            str(mention.id) == str(event.message_obj.self_id)
+            for mention in event.message_obj.raw_message.mentions
         )
         upload = Comp.File(name="source.docx", file=str(source_path))
         buf = BufferedMessage(
@@ -843,12 +858,11 @@ async def test_before_llm_chat_hides_file_tools_for_buffered_group_upload_when_n
         )
         raw_message = SimpleNamespace(mentions=[])
         event.message_obj.raw_message = raw_message
-        event.is_mentioned.side_effect = (
-            lambda: hasattr(event.message_obj.raw_message, "mentions")
-            and any(
-                str(mention.id) == str(event.message_obj.self_id)
-                for mention in event.message_obj.raw_message.mentions
-            )
+        event.is_mentioned.side_effect = lambda: hasattr(
+            event.message_obj.raw_message, "mentions"
+        ) and any(
+            str(mention.id) == str(event.message_obj.self_id)
+            for mention in event.message_obj.raw_message.mentions
         )
         upload = Comp.File(name="source.docx", file=str(source_path))
         buf = BufferedMessage(

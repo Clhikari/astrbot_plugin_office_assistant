@@ -20,6 +20,7 @@ from ..mcp_server.schemas import (
     ToolResult,
     build_document_summary,
     build_header_footer_schema,
+    normalize_raw_block_payloads,
 )
 from ..mcp_server.session_store import DocumentSessionStore
 
@@ -476,9 +477,10 @@ class AddBlocksTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         try:
+            raw_blocks = normalize_raw_block_payloads(list(kwargs.get("blocks") or []))
             request = AddBlocksRequest(
                 document_id=str(kwargs.get("document_id") or ""),
-                blocks=list(kwargs.get("blocks") or []),
+                blocks=raw_blocks,
             )
             document = self.store.add_blocks(request)
         except Exception as exc:

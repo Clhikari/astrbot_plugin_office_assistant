@@ -98,6 +98,7 @@ class DocumentSessionStore:
         self._ttl = ttl
         self._normalize_block_hooks = normalize_block_hooks or [
             self._drop_duplicate_document_title_headings,
+            self._move_landscape_intro_paragraphs_before_section_break,
             self._promote_heading_before_table_to_caption,
         ]
 
@@ -205,6 +206,54 @@ class DocumentSessionStore:
         return normalized
 
     @staticmethod
+    def _move_landscape_intro_paragraphs_before_section_break(
+        context: BlockNormalizationContext,
+    ) -> list:
+        normalized: list = []
+        index = 0
+        blocks = context.incoming_blocks
+
+        while index < len(blocks):
+            current = blocks[index]
+            heading_block = blocks[index + 1] if index + 1 < len(blocks) else None
+            if not (
+                isinstance(current, SectionBreakInput)
+                and current.page_orientation == "landscape"
+                and isinstance(heading_block, BlockHeadingInput)
+            ):
+                normalized.append(current)
+                index += 1
+                continue
+
+            paragraph_start = index + 2
+            paragraph_end = paragraph_start
+            while paragraph_end < len(blocks):
+                paragraph_block = blocks[paragraph_end]
+                if not isinstance(paragraph_block, SectionParagraphInput):
+                    break
+                if paragraph_block.variant != "body":
+                    break
+                if not paragraph_block.text.strip() and not paragraph_block.runs:
+                    break
+                paragraph_end += 1
+
+            table_block = blocks[paragraph_end] if paragraph_end < len(blocks) else None
+            if paragraph_end == paragraph_start or not isinstance(
+                table_block, SectionTableInput
+            ):
+                normalized.append(current)
+                index += 1
+                continue
+
+            normalized.extend(blocks[paragraph_start:paragraph_end])
+            normalized.append(current)
+            normalized.append(heading_block)
+            normalized.append(table_block)
+            index = paragraph_end + 1
+
+        return normalized
+
+    @staticmethod
     def _promote_heading_before_table_to_caption(
         context: BlockNormalizationContext,
     ) -> list:
@@ -213,6 +262,7 @@ class DocumentSessionStore:
         blocks = context.incoming_blocks
         while index < len(blocks):
             current = blocks[index]
+            previous_block = blocks[index - 1] if index > 0 else None
             next_block = blocks[index + 1] if index + 1 < len(blocks) else None
             current_text = (
                 current.text.strip() if isinstance(current, BlockHeadingInput) else ""
@@ -227,11 +277,16 @@ class DocumentSessionStore:
                 if isinstance(next_block, SectionTableInput)
                 else ""
             )
+            follows_landscape_section = (
+                isinstance(previous_block, SectionBreakInput)
+                and previous_block.page_orientation == "landscape"
+            )
 
             if (
                 isinstance(current, BlockHeadingInput)
                 and isinstance(next_block, SectionTableInput)
                 and not (next_caption or next_title)
+                and not follows_landscape_section
                 and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
             ):
                 normalized.append(

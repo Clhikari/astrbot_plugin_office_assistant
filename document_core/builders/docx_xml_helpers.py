@@ -29,22 +29,30 @@ def append_field_code(paragraph, instruction: str) -> None:
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
+    begin_run = OxmlElement("w:r")
     begin = OxmlElement("w:fldChar")
     begin.set(qn("w:fldCharType"), "begin")
-    paragraph._p.append(begin)
+    begin_run.append(begin)
+    paragraph._p.append(begin_run)
 
+    instr_run = OxmlElement("w:r")
     instr = OxmlElement("w:instrText")
     instr.set(qn("xml:space"), "preserve")
     instr.text = instruction
-    paragraph._p.append(instr)
+    instr_run.append(instr)
+    paragraph._p.append(instr_run)
 
+    separate_run = OxmlElement("w:r")
     separate = OxmlElement("w:fldChar")
     separate.set(qn("w:fldCharType"), "separate")
-    paragraph._p.append(separate)
+    separate_run.append(separate)
+    paragraph._p.append(separate_run)
 
+    end_run = OxmlElement("w:r")
     end = OxmlElement("w:fldChar")
     end.set(qn("w:fldCharType"), "end")
-    paragraph._p.append(end)
+    end_run.append(end)
+    paragraph._p.append(end_run)
 
 
 def append_page_number_field(paragraph) -> None:
