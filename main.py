@@ -104,6 +104,8 @@ class FileOperationPlugin(Star):
             except Exception as e:
                 logger.warning(f"[文件管理] 清理临时目录失败: {e}")
 
+        self._runtime = None
+
     async def _on_buffer_complete(self, buf: BufferedMessage):
         await self._runtime.upload_session_service.on_buffer_complete(buf)
 
