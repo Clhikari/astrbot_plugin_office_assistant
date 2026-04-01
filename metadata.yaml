@@ -1,7 +1,7 @@
 name: astrbot_plugin_office_assistant
 display_name: Office 助手
 desc: 赋予 LLM 文件读取分析能力，支持 AI 生成 Office 文档（Word/Excel/PPT）。
-version: v1.4.3
+version: v1.5.0
 author: Clhikari
 repo: https://github.com/Clhikari/astrbot_plugin_office_assistant
 support_platforms:
