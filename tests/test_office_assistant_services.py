@@ -344,6 +344,35 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
                 pass
 
 
+def test_build_plugin_runtime_keeps_zero_admin_id():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": 0}
+
+    runtime = build_plugin_runtime(
+        context=context,
+        config={},
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id="0")
+        event.is_admin.return_value = False
+
+        assert runtime.access_policy_service.check_permission(event) is True
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
 def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1012,12 +1041,11 @@ async def test_upload_session_service_preserves_raw_message_for_platform_mention
     event = _build_event(message_type=MessageType.GROUP_MESSAGE)
     raw_message = SimpleNamespace(mentions=[SimpleNamespace(id="bot-1")])
     event.message_obj.raw_message = raw_message
-    event.is_mentioned.side_effect = (
-        lambda: hasattr(event.message_obj.raw_message, "mentions")
-        and any(
-            str(mention.id) == str(event.message_obj.self_id)
-            for mention in event.message_obj.raw_message.mentions
-        )
+    event.is_mentioned.side_effect = lambda: hasattr(
+        event.message_obj.raw_message, "mentions"
+    ) and any(
+        str(mention.id) == str(event.message_obj.self_id)
+        for mention in event.message_obj.raw_message.mentions
     )
     upload = Comp.File(name="report.docx", file="report.docx")
     buf = BufferedMessage(event=event, files=[upload], texts=[])
@@ -1259,7 +1287,9 @@ async def test_generated_file_delivery_service_sends_existing_output_with_expect
             delivery_service=delivery_service,
         )
 
-        result_without_message = await service.deliver_generated_file(event, output_path)
+        result_without_message = await service.deliver_generated_file(
+            event, output_path
+        )
         result_with_message = await service.deliver_generated_file(
             event,
             output_path,

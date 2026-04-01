@@ -24,6 +24,8 @@ from ..utils import (
     format_file_size,
 )
 
+STORE_UPLOADED_FILE_MAX_ATTEMPTS = 1000
+
 
 class WorkspaceService:
     def __init__(
@@ -100,7 +102,7 @@ class WorkspaceService:
 
         stem = dst_path.stem or "file"
         suffix = dst_path.suffix
-        max_attempts = 1000
+        max_attempts = STORE_UPLOADED_FILE_MAX_ATTEMPTS
         for index in range(1, max_attempts + 1):
             candidate_name = f"{stem}_{index}{suffix}"
             valid, candidate_path, error = self.validate_path(candidate_name)
@@ -108,9 +110,7 @@ class WorkspaceService:
                 raise ValueError(error)
             if self.try_copy_uploaded_file(src_path, candidate_path):
                 return candidate_path
-        raise RuntimeError(
-            f"在 {max_attempts} 次尝试后仍无法存储文件 '{safe_name}'"
-        )
+        raise RuntimeError(f"在 {max_attempts} 次尝试后仍无法存储文件 '{safe_name}'")
 
     async def read_text_file(
         self, file_path: Path, max_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE

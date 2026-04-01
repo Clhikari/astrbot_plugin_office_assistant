@@ -232,19 +232,19 @@ class PDFConverter(ExecutorOwnerMixin):
             # 根据后端选择转换方法
             if self._office_to_pdf_backend == "docx2pdf":
                 result = await loop.run_in_executor(
-                    self._executor,
+                    self._require_executor(),
                     self._office_to_pdf_docx2pdf,
                     input_path,
                 )
             elif self._office_to_pdf_backend == "win32com":
                 result = await loop.run_in_executor(
-                    self._executor,
+                    self._require_executor(),
                     self._office_to_pdf_win32com,
                     input_path,
                 )
             else:  # libreoffice
                 result = await loop.run_in_executor(
-                    self._executor,
+                    self._require_executor(),
                     self._office_to_pdf_libreoffice,
                     input_path,
                     timeout,
@@ -402,7 +402,7 @@ class PDFConverter(ExecutorOwnerMixin):
         loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
-                self._executor,
+                self._require_executor(),
                 self._pdf_to_word_sync,
                 input_path,
             )
@@ -451,7 +451,7 @@ class PDFConverter(ExecutorOwnerMixin):
         if self._excel_backend == "tabula":
             try:
                 result = await loop.run_in_executor(
-                    self._executor,
+                    self._require_executor(),
                     self._pdf_to_excel_tabula,
                     input_path,
                 )
@@ -463,7 +463,7 @@ class PDFConverter(ExecutorOwnerMixin):
                 if _PDFPLUMBER_AVAILABLE:
                     try:
                         return await loop.run_in_executor(
-                            self._executor,
+                            self._require_executor(),
                             self._pdf_to_excel_pdfplumber,
                             input_path,
                         )
@@ -474,7 +474,7 @@ class PDFConverter(ExecutorOwnerMixin):
         if self._excel_backend == "pdfplumber":
             try:
                 result = await loop.run_in_executor(
-                    self._executor,
+                    self._require_executor(),
                     self._pdf_to_excel_pdfplumber,
                     input_path,
                 )
