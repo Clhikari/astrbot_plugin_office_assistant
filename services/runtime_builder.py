@@ -270,10 +270,12 @@ def _extract_admin_users(root_config: dict) -> set[str]:
         return set()
 
     raw_admins = root_config.get("admins_id", [])
-    if not raw_admins:
+    if raw_admins is None:
         return set()
     if isinstance(raw_admins, (str, bytes)):
         return {str(raw_admins)}
+    if hasattr(raw_admins, "__len__") and len(raw_admins) == 0:
+        return set()
     try:
         return {str(admin_id) for admin_id in raw_admins}
     except TypeError:

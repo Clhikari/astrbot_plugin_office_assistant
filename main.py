@@ -81,7 +81,9 @@ class FileOperationPlugin(Star):
 
     async def terminate(self):
         """插件卸载时释放资源"""
-        rt = self._runtime
+        rt = getattr(self, "_runtime", None)
+        if rt is None:
+            return
 
         if rt.office_gen:
             rt.office_gen.cleanup()
@@ -115,15 +117,18 @@ class FileOperationPlugin(Star):
         return Path(file_path), component.name or Path(file_path).name
 
     def _store_uploaded_file(self, src_path: Path, preferred_name: str) -> Path:
-        return self._runtime.workspace_service.store_uploaded_file(src_path, preferred_name)
+        return self._runtime.workspace_service.store_uploaded_file(
+            src_path, preferred_name
+        )
 
     async def _handle_exported_document_tool(
         self, context: ContextWrapper[AstrAgentContext], output_path: str
     ) -> str | None:
-        return await self._runtime.post_export_hook_service.handle_exported_document_tool(
-            context, output_path
+        return (
+            await self._runtime.post_export_hook_service.handle_exported_document_tool(
+                context, output_path
+            )
         )
-
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def on_file_message(self, event: AstrMessageEvent):

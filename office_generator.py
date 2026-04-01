@@ -44,21 +44,21 @@ class OfficeGenerator(ExecutorOwnerMixin):
         """异步生成 Word"""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            self._executor, self._generate_word_sync, file_path, content
+            self._require_executor(), self._generate_word_sync, file_path, content
         )
 
     async def _generate_excel(self, file_path: Path, content: dict):
         """异步生成 Excel"""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            self._executor, self._generate_excel_sync, file_path, content
+            self._require_executor(), self._generate_excel_sync, file_path, content
         )
 
     async def _generate_powerpoint(self, file_path: Path, content: dict):
         """异步生成 PPT"""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            self._executor, self._generate_ppt_sync, file_path, content
+            self._require_executor(), self._generate_ppt_sync, file_path, content
         )
 
     def _check_support(self) -> dict[OfficeType, bool]:

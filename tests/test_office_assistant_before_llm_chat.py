@@ -711,6 +711,12 @@ async def test_remember_recent_text_skips_system_notice_messages():
 
 
 @pytest.mark.asyncio
+async def test_plugin_terminate_allows_missing_runtime():
+    plugin = FileOperationPlugin.__new__(FileOperationPlugin)
+    await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_buffered_upload_without_prompt_requires_read_file_first():
     context = MagicMock()
     event_queue = AsyncMock()
