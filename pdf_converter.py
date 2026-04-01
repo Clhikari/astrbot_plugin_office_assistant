@@ -251,12 +251,13 @@ class PDFConverter(ExecutorOwnerMixin):
                 )
             return result
         except Exception as e:
-            logger.exception(f"[PDF转换器] {tag} 转换失败: {e}")
+            logger.exception(f"[PDF转换器] {self._office_to_pdf_backend} 转换失败: {e}")
             return None
 
     def _office_to_pdf_docx2pdf(self, input_path: Path) -> Path | None:
         """使用 docx2pdf 转换（仅支持 Word，需要 MS Office）"""
         import docx2pdf
+        import pythoncom
 
         suffix = input_path.suffix.lower()
         if suffix not in (".doc", ".docx"):
