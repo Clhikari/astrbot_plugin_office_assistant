@@ -250,8 +250,8 @@ class PDFConverter(ExecutorOwnerMixin):
                     timeout,
                 )
             return result
-        except Exception as e:
-            logger.exception(f"[PDF转换器] {self._office_to_pdf_backend} 转换失败: {e}")
+        except Exception:
+            logger.exception(f"[PDF转换器] {self._office_to_pdf_backend} 转换失败")
             return None
 
     def _office_to_pdf_docx2pdf(self, input_path: Path) -> Path | None:

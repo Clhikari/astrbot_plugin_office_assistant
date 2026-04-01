@@ -373,6 +373,49 @@ def test_build_plugin_runtime_keeps_zero_admin_id():
                 pass
 
 
+@pytest.mark.parametrize(
+    ("admins_id", "sender_id", "expected"),
+    [
+        ([], "admin-1", False),
+        ((), "admin-1", False),
+        ("admin-1", "admin-1", True),
+        (["admin-1", "admin-2"], "admin-2", True),
+        (("admin-1", "admin-2"), "admin-2", True),
+    ],
+)
+def test_build_plugin_runtime_handles_multiple_admin_id_shapes(
+    admins_id,
+    sender_id: str,
+    expected: bool,
+):
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": admins_id}
+
+    runtime = build_plugin_runtime(
+        context=context,
+        config={},
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id=sender_id)
+        event.is_admin.return_value = False
+
+        assert runtime.access_policy_service.check_permission(event) is expected
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
 def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ):
