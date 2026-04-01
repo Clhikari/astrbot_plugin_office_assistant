@@ -8,6 +8,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..constants import (
+    DOCUMENT_BLOCK_FONT_SCALE_MAX,
+    DOCUMENT_BLOCK_FONT_SCALE_MIN,
+    DOCUMENT_BLOCK_SPACING_MAX,
+    DOCUMENT_BLOCK_SPACING_MIN,
+)
 from ..document_core.models.blocks import (
     BlockLayout,
     BlockStyle,
@@ -176,14 +182,20 @@ def _normalize_block_style_and_layout(block: dict) -> None:
     if isinstance(style, dict):
         font_scale = style.get("font_scale")
         if isinstance(font_scale, (int, float)):
-            style["font_scale"] = min(max(float(font_scale), 0.75), 2.0)
+            style["font_scale"] = min(
+                max(float(font_scale), DOCUMENT_BLOCK_FONT_SCALE_MIN),
+                DOCUMENT_BLOCK_FONT_SCALE_MAX,
+            )
 
     layout = block.get("layout")
     if isinstance(layout, dict):
         for field_name in ("spacing_before", "spacing_after"):
             value = layout.get(field_name)
             if isinstance(value, (int, float)):
-                layout[field_name] = min(max(float(value), 0.0), 72.0)
+                layout[field_name] = min(
+                    max(float(value), DOCUMENT_BLOCK_SPACING_MIN),
+                    DOCUMENT_BLOCK_SPACING_MAX,
+                )
 
 
 def _drop_unsupported_block_aliases(block: dict) -> None:

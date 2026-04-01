@@ -81,6 +81,10 @@ DEFAULT_MAX_FILE_SIZE_MB = 20
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
 DEFAULT_MAX_INLINE_DOCX_IMAGE_MB = 2
 DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT = 3
+DOCUMENT_BLOCK_FONT_SCALE_MIN = 0.75
+DOCUMENT_BLOCK_FONT_SCALE_MAX = 2.0
+DOCUMENT_BLOCK_SPACING_MIN = 0.0
+DOCUMENT_BLOCK_SPACING_MAX = 72.0
 # 所有文件类工具名称，用于 before_llm_chat 中的可见性控制。
 # 同步点：@llm_tool(name=...) 定义在 main.py，
 #         document tool 名称定义在 agent_tools/document_tools.py 的 name 字段。
@@ -139,8 +143,10 @@ NOTICE_DOCUMENT_TOOLS_GUIDE = (
     "`first_column_bold`、`table_align`、`border_style`、`caption_emphasis`\n"
     "- 预设不够时再用 `style={align, emphasis, font_scale, table_grid, cell_align}`"
     " 和 `layout={spacing_before, spacing_after}`\n"
-    "- `style.font_scale` 建议保持在 0.75 到 2.0 之间，`layout.spacing_before` 和 "
-    "`layout.spacing_after` 保持在 0 到 72 之间\n"
+    f"- `style.font_scale` 建议保持在 {DOCUMENT_BLOCK_FONT_SCALE_MIN} 到 "
+    f"{DOCUMENT_BLOCK_FONT_SCALE_MAX} 之间，`layout.spacing_before` 和 "
+    f"`layout.spacing_after` 保持在 {int(DOCUMENT_BLOCK_SPACING_MIN)} 到 "
+    f"{int(DOCUMENT_BLOCK_SPACING_MAX)} 之间\n"
     "- 标题颜色属于整份文档风格，请在 `create_document.document_style.heading_color` "
     "里设置；不要把 `heading_color` 写到单个 `heading` block 上\n"
     "- 横向页面、节级页眉页脚、页码重置 MUST 使用独立的 `section_break` block；"
