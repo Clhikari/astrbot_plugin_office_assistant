@@ -36,9 +36,13 @@ class ExecutorOwnerMixin:
     def _shutdown_executor(self) -> None:
         executor = self._executor
         if self._owns_executor and executor is not None:
+            label = self._executor_label
             executor.shutdown(wait=False)
-            if self._executor_label:
-                logger.debug(f"[{self._executor_label}] 线程池已关闭")
+            self._executor = None
+            self._owns_executor = False
+            self._executor_label = ""
+            if label:
+                logger.debug(f"[{label}] 线程池已关闭")
 
     def _require_executor(self) -> ThreadPoolExecutor:
         executor = self._executor
