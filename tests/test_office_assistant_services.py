@@ -416,6 +416,39 @@ def test_build_plugin_runtime_handles_multiple_admin_id_shapes(
                 pass
 
 
+def test_build_plugin_runtime_handles_iterable_admin_ids_without_len():
+    class _AdminIterable:
+        def __iter__(self):
+            yield "admin-iterable"
+
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": _AdminIterable()}
+
+    runtime = build_plugin_runtime(
+        context=context,
+        config={},
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id="admin-iterable")
+        event.is_admin.return_value = False
+
+        assert runtime.access_policy_service.check_permission(event) is True
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
 def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ):

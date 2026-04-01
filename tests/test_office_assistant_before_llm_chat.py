@@ -725,13 +725,15 @@ async def test_plugin_terminate_cleans_runtime_resources():
         executor=MagicMock(shutdown=MagicMock()),
         temp_dir=MagicMock(cleanup=MagicMock()),
     )
+    runtime = plugin._runtime
 
     await plugin.terminate()
 
-    plugin._runtime.office_gen.cleanup.assert_called_once_with()
-    plugin._runtime.pdf_converter.cleanup.assert_called_once_with()
-    plugin._runtime.executor.shutdown.assert_called_once_with(wait=False)
-    plugin._runtime.temp_dir.cleanup.assert_called_once_with()
+    runtime.office_gen.cleanup.assert_called_once_with()
+    runtime.pdf_converter.cleanup.assert_called_once_with()
+    runtime.executor.shutdown.assert_called_once_with(wait=False)
+    runtime.temp_dir.cleanup.assert_called_once_with()
+    assert plugin._runtime is None
 
 
 @pytest.mark.asyncio
