@@ -85,6 +85,9 @@ class FileOperationPlugin(Star):
         if rt is None:
             return
 
+        if getattr(rt, "message_buffer", None):
+            rt.message_buffer.set_complete_callback(None)
+
         if rt.office_gen:
             rt.office_gen.cleanup()
             logger.debug("[文件管理] Office生成器已清理")
@@ -107,7 +110,12 @@ class FileOperationPlugin(Star):
         self._runtime = None
 
     async def _on_buffer_complete(self, buf: BufferedMessage):
-        await self._runtime.upload_session_service.on_buffer_complete(buf)
+        rt = getattr(self, "_runtime", None)
+        if rt is None:
+            logger.warning("[文件管理] 缓冲区完成回调触发时运行时已释放，忽略此次处理")
+            return
+
+        await rt.upload_session_service.on_buffer_complete(buf)
 
     async def _extract_upload_source(
         self, component: Comp.File

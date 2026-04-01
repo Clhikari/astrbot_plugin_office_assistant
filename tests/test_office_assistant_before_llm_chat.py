@@ -720,6 +720,7 @@ async def test_plugin_terminate_allows_missing_runtime():
 async def test_plugin_terminate_cleans_runtime_resources():
     plugin = FileOperationPlugin.__new__(FileOperationPlugin)
     plugin._runtime = SimpleNamespace(
+        message_buffer=MagicMock(set_complete_callback=MagicMock()),
         office_gen=MagicMock(cleanup=MagicMock()),
         pdf_converter=MagicMock(cleanup=MagicMock()),
         executor=MagicMock(shutdown=MagicMock()),
@@ -729,11 +730,46 @@ async def test_plugin_terminate_cleans_runtime_resources():
 
     await plugin.terminate()
 
+    runtime.message_buffer.set_complete_callback.assert_called_once_with(None)
     runtime.office_gen.cleanup.assert_called_once_with()
     runtime.pdf_converter.cleanup.assert_called_once_with()
     runtime.executor.shutdown.assert_called_once_with(wait=False)
     runtime.temp_dir.cleanup.assert_called_once_with()
     assert plugin._runtime is None
+
+
+@pytest.mark.asyncio
+async def test_plugin_terminate_tolerates_temp_dir_permission_error():
+    plugin = FileOperationPlugin.__new__(FileOperationPlugin)
+    plugin._runtime = SimpleNamespace(
+        message_buffer=MagicMock(set_complete_callback=MagicMock()),
+        office_gen=MagicMock(cleanup=MagicMock()),
+        pdf_converter=MagicMock(cleanup=MagicMock()),
+        executor=MagicMock(shutdown=MagicMock()),
+        temp_dir=MagicMock(cleanup=MagicMock(side_effect=PermissionError("locked"))),
+    )
+    runtime = plugin._runtime
+
+    await plugin.terminate()
+
+    runtime.message_buffer.set_complete_callback.assert_called_once_with(None)
+    runtime.office_gen.cleanup.assert_called_once_with()
+    runtime.pdf_converter.cleanup.assert_called_once_with()
+    runtime.executor.shutdown.assert_called_once_with(wait=False)
+    runtime.temp_dir.cleanup.assert_called_once_with()
+    assert plugin._runtime is None
+
+
+@pytest.mark.asyncio
+async def test_on_buffer_complete_ignores_released_runtime():
+    plugin = FileOperationPlugin.__new__(FileOperationPlugin)
+    plugin._runtime = None
+    buf = MagicMock()
+
+    with patch("astrbot_plugin_office_assistant.main.logger.warning") as warning:
+        await plugin._on_buffer_complete(buf)
+
+    warning.assert_called_once()
 
 
 @pytest.mark.asyncio
