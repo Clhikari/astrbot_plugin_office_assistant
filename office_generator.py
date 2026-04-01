@@ -92,7 +92,9 @@ class OfficeGenerator(ExecutorOwnerMixin):
             return ""
 
         try:
-            resolved_filename = content.get("filename", f"{office_type}_file")
+            resolved_filename = (
+                content.get("filename") or filename or f"{office_type}_file"
+            )
             payload = content.get("content", {})
 
             # 解析content

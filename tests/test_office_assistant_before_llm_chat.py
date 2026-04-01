@@ -717,6 +717,24 @@ async def test_plugin_terminate_allows_missing_runtime():
 
 
 @pytest.mark.asyncio
+async def test_plugin_terminate_cleans_runtime_resources():
+    plugin = FileOperationPlugin.__new__(FileOperationPlugin)
+    plugin._runtime = SimpleNamespace(
+        office_gen=MagicMock(cleanup=MagicMock()),
+        pdf_converter=MagicMock(cleanup=MagicMock()),
+        executor=MagicMock(shutdown=MagicMock()),
+        temp_dir=MagicMock(cleanup=MagicMock()),
+    )
+
+    await plugin.terminate()
+
+    plugin._runtime.office_gen.cleanup.assert_called_once_with()
+    plugin._runtime.pdf_converter.cleanup.assert_called_once_with()
+    plugin._runtime.executor.shutdown.assert_called_once_with(wait=False)
+    plugin._runtime.temp_dir.cleanup.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_buffered_upload_without_prompt_requires_read_file_first():
     context = MagicMock()
     event_queue = AsyncMock()

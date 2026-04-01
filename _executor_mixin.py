@@ -25,6 +25,15 @@ class ExecutorOwnerMixin:
         max_workers: int = 2,
         label: str = "",
     ) -> None:
+        current_executor = self._executor
+        if executor is not None and current_executor is executor:
+            self._owns_executor = False
+            self._executor_label = label
+            return
+
+        if self._owns_executor and current_executor is not None:
+            current_executor.shutdown(wait=False)
+
         self._owns_executor = executor is None
         self._executor = (
             executor
