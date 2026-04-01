@@ -41,6 +41,7 @@ from astrbot_plugin_office_assistant.mcp_server.schemas import (
     BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
+    normalize_raw_block_payloads,
     SectionParagraphInput,
     SectionTableInput,
 )
@@ -121,6 +122,17 @@ def _paragraph_field_codes(paragraph) -> list[str]:
         for node in paragraph._p.iter(qn("w:instrText"))
         if node.text is not None
     ]
+
+
+def _paragraph_field_nodes_use_runs(paragraph) -> bool:
+    from docx.oxml.ns import qn
+
+    field_tags = {qn("w:fldChar"), qn("w:instrText")}
+    return all(
+        node.getparent() is not None and node.getparent().tag == qn("w:r")
+        for node in paragraph._p.iter()
+        if node.tag in field_tags
+    )
 
 
 def _story_texts(story) -> list[str]:
@@ -525,6 +537,72 @@ def test_add_blocks_request_rejects_invalid_section_margins():
                 }
             ],
         )
+
+
+def test_normalize_raw_block_payloads_repairs_section_toc_and_table_aliases():
+    normalized = normalize_raw_block_payloads(
+        [
+            {"type": "toc", "text": "目录"},
+            {
+                "type": "heading",
+                "text": "三、运营数据分析",
+                "level": 1,
+                "page_orientation": "landscape",
+                "start_on_new_page": True,
+                "restart_page_numbering": True,
+                "heading_color": "1F4E79",
+            },
+            {
+                "type": "table",
+                "title": "第一季度核心运营指标汇总",
+                "items": ["用户增长数|10000|10500|105%"],
+                "columns": [
+                    {"blocks": [{"type": "paragraph", "text": "指标名称"}]},
+                    {"blocks": [{"type": "paragraph", "text": "Q1目标值"}]},
+                    {"blocks": [{"type": "paragraph", "text": "Q1实际值"}]},
+                    {"blocks": [{"type": "paragraph", "text": "达成率"}]},
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "四、问题与挑战",
+                "level": 1,
+                "page_orientation": "portrait",
+                "start_on_new_page": True,
+            },
+            {
+                "type": "paragraph",
+                "text": "封面标题",
+                "style": {"font_scale": 3},
+                "layout": {"spacing_before": 200, "spacing_after": -5},
+            },
+        ]
+    )
+
+    assert normalized[0] == {"type": "toc", "title": "目录"}
+    assert normalized[1] == {
+        "type": "section_break",
+        "start_type": "new_page",
+        "page_orientation": "landscape",
+        "restart_page_numbering": True,
+    }
+    assert normalized[2]["type"] == "heading"
+    assert normalized[2]["text"] == "三、运营数据分析"
+    assert "heading_color" not in normalized[2]
+    assert normalized[3]["type"] == "table"
+    assert normalized[3]["headers"] == ["指标名称", "Q1目标值", "Q1实际值", "达成率"]
+    assert normalized[3]["rows"] == [["用户增长数", "10000", "10500", "105%"]]
+    assert "columns" not in normalized[3]
+    assert normalized[4] == {
+        "type": "section_break",
+        "start_type": "new_page",
+        "page_orientation": "portrait",
+    }
+    assert normalized[5]["type"] == "heading"
+    assert normalized[5]["text"] == "四、问题与挑战"
+    assert normalized[6]["style"]["font_scale"] == pytest.approx(2.0)
+    assert normalized[6]["layout"]["spacing_before"] == pytest.approx(72.0)
+    assert normalized[6]["layout"]["spacing_after"] == pytest.approx(0.0)
 
 
 def test_paragraph_schema_requires_text_or_runs():
@@ -2561,6 +2639,10 @@ def test_word_document_builder_writes_toc_and_document_header_footer(
         _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
     )
     assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is True
+    assert all(
+        _paragraph_field_nodes_use_runs(paragraph)
+        for paragraph in loaded_doc.sections[0].footer.paragraphs
+    )
     assert loaded_doc.sections[0].orientation == WD_ORIENT.PORTRAIT
     assert any(
         _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
@@ -2574,6 +2656,7 @@ def test_word_document_builder_writes_toc_and_document_header_footer(
         'TOC \\o "1-2"' in field_code
         for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
     )
+    assert _paragraph_field_nodes_use_runs(loaded_doc.paragraphs[toc_index + 1]) is True
 
 
 def test_word_document_builder_uses_default_header_footer_baseline(
@@ -2609,6 +2692,41 @@ def test_word_document_builder_uses_default_header_footer_baseline(
     assert (
         _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
     )
+
+
+def test_word_document_builder_assigns_builtin_heading_styles(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-heading-style")
+    output_path = workspace_dir / "heading-style.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import HeadingBlock
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="heading-style-test",
+        metadata=DocumentMetadata(),
+        blocks=[
+            HeadingBlock(text="一级标题", level=1),
+            HeadingBlock(text="三级标题", level=3),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    heading_one = _find_paragraph(loaded_doc, "一级标题")
+    heading_three = _find_paragraph(loaded_doc, "三级标题")
+
+    assert heading_one.style.style_id == "Heading1"
+    assert heading_three.style.style_id == "Heading3"
+    assert heading_one.runs[0].bold is True
+    assert _paragraph_run_rgb(heading_one) == "1F4E79"
 
 
 def test_word_document_builder_section_break_creates_new_section_with_override(
@@ -2716,6 +2834,65 @@ def test_word_document_builder_section_break_inherits_header_footer_without_over
     assert loaded_doc.sections[1].header.is_linked_to_previous is True
     assert loaded_doc.sections[1].footer.is_linked_to_previous is True
     assert _section_page_number_start(loaded_doc.sections[1]) is None
+
+
+def test_word_document_builder_section_break_does_not_reuse_cover_first_page_rules(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-section-cover-page-numbering"
+    )
+    output_path = workspace_dir / "section-cover-page-numbering.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="section-cover-page-numbering-test",
+        metadata=DocumentMetadata(
+            title="封面页码测试",
+            header_footer=HeaderFooterConfig(
+                header_text="董事会季度经营汇报",
+                different_first_page=True,
+                first_page_header_text="董事会季度经营汇报封面",
+                first_page_show_page_number=False,
+                different_odd_even=True,
+                even_page_header_text="董事会季度经营汇报（偶数页）",
+                show_page_number=True,
+            ),
+        ),
+        blocks=[
+            ParagraphBlock(text="封面内容"),
+            SectionBreakBlock(
+                start_type="new_page",
+                page_orientation="landscape",
+                restart_page_numbering=True,
+            ),
+            ParagraphBlock(text="横向节内容"),
+            SectionBreakBlock(
+                start_type="new_page",
+                page_orientation="portrait",
+            ),
+            ParagraphBlock(text="纵向节内容"),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    assert len(loaded_doc.sections) == 3
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert loaded_doc.sections[0].different_first_page_header_footer is True
+    assert loaded_doc.sections[1].different_first_page_header_footer is False
+    assert loaded_doc.sections[2].different_first_page_header_footer is False
+    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
+    assert _story_has_field_code(loaded_doc.sections[2].footer, "PAGE") is True
+    assert _section_page_number_start(loaded_doc.sections[1]) == 1
+    assert _section_page_number_start(loaded_doc.sections[2]) is None
 
 
 def test_word_document_builder_section_break_can_disable_page_numbers_while_inheriting_text(
@@ -2945,6 +3122,141 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.section import WD_ORIENT
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-raw-aliases")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="原始别名修复",
+            output_name="raw-aliases.docx",
+        )
+    )
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[
+                {"type": "toc", "text": "目录"},
+                {
+                    "type": "heading",
+                    "text": "三、运营数据分析",
+                    "level": 1,
+                    "page_orientation": "landscape",
+                    "start_on_new_page": True,
+                    "restart_page_numbering": True,
+                },
+                {
+                    "type": "table",
+                    "caption": "第一季度核心运营指标汇总",
+                    "items": [
+                        "用户增长数|10000|10500|105%",
+                        "营收总额(万元)|5000|4800|96%",
+                    ],
+                    "columns": [
+                        {"blocks": [{"type": "paragraph", "text": "指标名称"}]},
+                        {"blocks": [{"type": "paragraph", "text": "Q1目标值"}]},
+                        {"blocks": [{"type": "paragraph", "text": "Q1实际值"}]},
+                        {"blocks": [{"type": "paragraph", "text": "达成率"}]},
+                    ],
+                },
+                {
+                    "type": "heading",
+                    "text": "四、问题与挑战",
+                    "level": 1,
+                    "page_orientation": "portrait",
+                    "start_on_new_page": True,
+                },
+            ],
+        )
+    )
+
+    assert add_blocks_result["success"] is True
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.sections) == 3
+    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
+    assert loaded_doc.sections[2].orientation == WD_ORIENT.PORTRAIT
+    toc_index = next(
+        index
+        for index, paragraph in enumerate(loaded_doc.paragraphs)
+        if paragraph.text == "目录"
+    )
+    assert any(
+        'TOC \\o "1-3"' in field_code
+        for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
+    )
+    assert loaded_doc.tables[0].rows[1].cells[0].text == "指标名称"
+    assert loaded_doc.tables[0].rows[1].cells[3].text == "达成率"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_clamps_block_ranges_and_drops_heading_color(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-block-clamp")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="块级兜底",
+            output_name="block-clamp.docx",
+        )
+    )
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[
+                {
+                    "type": "paragraph",
+                    "text": "第一季度经营复盘",
+                    "style": {"font_scale": 3, "align": "center"},
+                    "layout": {"spacing_before": 200, "spacing_after": -10},
+                },
+                {
+                    "type": "heading",
+                    "text": "一、第一季度整体经营概况",
+                    "level": 1,
+                    "heading_color": "1F4E79",
+                },
+            ],
+        )
+    )
+
+    assert add_blocks_result["success"] is True
+
+    document = tool_by_name["add_blocks"].store.require_document(
+        created["document"]["document_id"]
+    )
+    paragraph_block = document.blocks[0]
+    heading_block = document.blocks[1]
+
+    assert paragraph_block.style.font_scale == pytest.approx(2.0)
+    assert paragraph_block.layout.spacing_before == pytest.approx(72.0)
+    assert paragraph_block.layout.spacing_after == pytest.approx(0.0)
+    assert not hasattr(heading_block, "heading_color")
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_falls_back_when_metrics_table_style_is_missing(
     workspace_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3013,6 +3325,53 @@ def test_document_session_store_expands_summary_card_blocks():
     assert isinstance(updated.blocks[0], GroupBlock)
     assert updated.blocks[0].blocks[0].text == "Conclusion"
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_document_session_store_moves_landscape_intro_before_section_break():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Landscape Flow"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "section_break",
+                    "start_type": "new_page",
+                    "page_orientation": "landscape",
+                    "restart_page_numbering": True,
+                    "page_number_start": 1,
+                },
+                {
+                    "type": "heading",
+                    "text": "二、各业务线详细数据盘点（宽表展示）",
+                    "level": 1,
+                },
+                {
+                    "type": "paragraph",
+                    "text": "本章节详细列出了公司五大核心业务线在第一季度的关键经营指标。",
+                },
+                {
+                    "type": "table",
+                    "headers": ["业务线", "营收"],
+                    "rows": [["核心电商业务", "21500"]],
+                },
+            ],
+        )
+    )
+
+    assert [block.type for block in updated.blocks] == [
+        "paragraph",
+        "section_break",
+        "heading",
+        "table",
+    ]
+    assert (
+        updated.blocks[0].text
+        == "本章节详细列出了公司五大核心业务线在第一季度的关键经营指标。"
+    )
+    assert updated.blocks[1].page_orientation == "landscape"
+    assert updated.blocks[2].text == "二、各业务线详细数据盘点（宽表展示）"
 
 
 def test_document_session_store_applies_summary_card_defaults():

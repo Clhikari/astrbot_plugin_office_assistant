@@ -296,6 +296,7 @@ class WordDocumentBuilder:
         from docx.shared import Pt
 
         paragraph = doc.add_paragraph()
+        paragraph.style = f"Heading {block.level}"
         paragraph.alignment = resolve_alignment(
             getattr(block.style, "align", None),
             default=WD_ALIGN_PARAGRAPH.LEFT,
@@ -458,6 +459,9 @@ class WordDocumentBuilder:
     ) -> None:
         theme = context.theme
         current_header_footer = context.current_header_footer
+        inherited_header_footer = self._normalize_inherited_header_footer(
+            current_header_footer
+        )
         from docx.enum.section import WD_SECTION
 
         start_type_map = {
@@ -478,9 +482,13 @@ class WordDocumentBuilder:
         if block.inherit_header_footer and not self._has_header_footer_override(
             block.header_footer
         ):
+            section.different_first_page_header_footer = self._uses_first_page_variants(
+                inherited_header_footer
+            )
+            context.current_header_footer = inherited_header_footer
             return
         effective_header_footer = (
-            block.header_footer.merged_over(current_header_footer)
+            block.header_footer.merged_over(inherited_header_footer)
             if block.inherit_header_footer
             else block.header_footer.model_copy(deep=True)
         )
@@ -492,6 +500,17 @@ class WordDocumentBuilder:
         section.even_page_footer.is_linked_to_previous = False
         self._apply_section_header_footer(section, effective_header_footer, theme)
         context.current_header_footer = effective_header_footer
+
+    def _normalize_inherited_header_footer(
+        self, config: HeaderFooterConfig
+    ) -> HeaderFooterConfig:
+        normalized_config = config.model_copy(deep=True)
+        if self._uses_first_page_variants(normalized_config):
+            normalized_config.different_first_page = False
+            normalized_config.first_page_header_text = ""
+            normalized_config.first_page_footer_text = ""
+            normalized_config.first_page_show_page_number = None
+        return normalized_config
 
     def _add_toc(self, doc: WordDocument, block: TocBlock, theme: dict) -> None:
         from docx.shared import Pt

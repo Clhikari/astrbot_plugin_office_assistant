@@ -1,6 +1,11 @@
 from mcp.server.fastmcp import FastMCP
 
-from ..schemas import AddBlocksRequest, ToolResult, build_document_summary
+from ..schemas import (
+    AddBlocksRequest,
+    ToolResult,
+    build_document_summary,
+    normalize_raw_block_payloads,
+)
 from ..session_store import DocumentSessionStore
 
 
@@ -16,7 +21,7 @@ def register_add_blocks_tool(server: FastMCP, store: DocumentSessionStore) -> No
     def add_blocks(document_id: str, blocks: list[dict]) -> ToolResult:
         request = AddBlocksRequest(
             document_id=document_id,
-            blocks=blocks,
+            blocks=normalize_raw_block_payloads(blocks),
         )
         document = store.add_blocks(request)
         return ToolResult(

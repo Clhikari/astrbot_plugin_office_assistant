@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -89,6 +90,169 @@ def build_header_footer_schema(*, description: str) -> dict:
         "description": description,
         "properties": copy.deepcopy(_HEADER_FOOTER_SCHEMA_PROPERTIES),
     }
+
+
+_SECTION_BREAK_COMPAT_KEYS = (
+    "start_type",
+    "inherit_header_footer",
+    "page_orientation",
+    "margins",
+    "restart_page_numbering",
+    "page_number_start",
+    "header_footer",
+)
+_SECTION_BREAK_COMPAT_BLOCK_TYPES = {"heading", "paragraph", "table"}
+
+
+def _copy_raw_block(block: object) -> object:
+    return copy.deepcopy(block)
+
+
+def _extract_text_from_column_alias(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, Mapping):
+        return ""
+    if isinstance(value.get("text"), str) and value["text"].strip():
+        return value["text"].strip()
+    nested_blocks = value.get("blocks")
+    if isinstance(nested_blocks, list):
+        for child in nested_blocks:
+            text = _extract_text_from_column_alias(child)
+            if text:
+                return text
+    return ""
+
+
+def _normalize_table_header_alias(block: dict) -> None:
+    if block.get("type") != "table":
+        return
+    if block.get("headers"):
+        block.pop("columns", None)
+        return
+    raw_columns = block.get("columns")
+    if not isinstance(raw_columns, list):
+        return
+    headers = [
+        text
+        for text in (_extract_text_from_column_alias(column) for column in raw_columns)
+        if text
+    ]
+    if headers:
+        block["headers"] = headers
+        block.pop("columns", None)
+
+
+def _normalize_table_row_alias(block: dict) -> None:
+    if block.get("type") != "table":
+        return
+    raw_items = block.pop("items", None)
+    if raw_items is None or block.get("rows"):
+        return
+    if not isinstance(raw_items, list):
+        return
+
+    normalized_rows: list[list[str]] = []
+    for item in raw_items:
+        if isinstance(item, list):
+            normalized_rows.append([str(cell).strip() for cell in item])
+            continue
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        if "|" in text:
+            normalized_rows.append([cell.strip() for cell in text.split("|")])
+        else:
+            normalized_rows.append([text])
+
+    if normalized_rows:
+        block["rows"] = normalized_rows
+
+
+def _normalize_block_style_and_layout(block: dict) -> None:
+    style = block.get("style")
+    if isinstance(style, dict):
+        font_scale = style.get("font_scale")
+        if isinstance(font_scale, (int, float)):
+            style["font_scale"] = min(max(float(font_scale), 0.75), 2.0)
+
+    layout = block.get("layout")
+    if isinstance(layout, dict):
+        for field_name in ("spacing_before", "spacing_after"):
+            value = layout.get(field_name)
+            if isinstance(value, (int, float)):
+                layout[field_name] = min(max(float(value), 0.0), 72.0)
+
+
+def _drop_unsupported_block_aliases(block: dict) -> None:
+    if block.get("type") == "heading":
+        block.pop("heading_color", None)
+
+
+def _extract_compat_section_break(block: dict) -> dict | None:
+    if block.get("type") not in _SECTION_BREAK_COMPAT_BLOCK_TYPES:
+        return None
+
+    section_break: dict[str, object] = {"type": "section_break"}
+    has_section_fields = False
+
+    if block.pop("start_on_new_page", False):
+        section_break["start_type"] = "new_page"
+        has_section_fields = True
+
+    for key in _SECTION_BREAK_COMPAT_KEYS:
+        if key not in block:
+            continue
+        value = block.pop(key)
+        if value in (None, "", {}, []):
+            continue
+        section_break[key] = value
+        has_section_fields = True
+
+    return section_break if has_section_fields else None
+
+
+def normalize_raw_block_payloads(blocks: list[object]) -> list[object]:
+    normalized_blocks: list[object] = []
+    for raw_block in blocks:
+        block = _copy_raw_block(raw_block)
+        if not isinstance(block, dict):
+            normalized_blocks.append(block)
+            continue
+
+        block_type = block.get("type")
+        if block_type == "group" and isinstance(block.get("blocks"), list):
+            block["blocks"] = normalize_raw_block_payloads(block["blocks"])
+        elif block_type == "columns" and isinstance(block.get("columns"), list):
+            normalized_columns: list[object] = []
+            for column in block["columns"]:
+                normalized_column = _copy_raw_block(column)
+                if isinstance(normalized_column, dict) and isinstance(
+                    normalized_column.get("blocks"), list
+                ):
+                    normalized_column["blocks"] = normalize_raw_block_payloads(
+                        normalized_column["blocks"]
+                    )
+                normalized_columns.append(normalized_column)
+            block["columns"] = normalized_columns
+
+        if block_type == "toc" and not block.get("title"):
+            toc_text = block.pop("text", "")
+            if isinstance(toc_text, str) and toc_text.strip():
+                block["title"] = toc_text.strip()
+
+        _normalize_block_style_and_layout(block)
+        _drop_unsupported_block_aliases(block)
+        _normalize_table_header_alias(block)
+        _normalize_table_row_alias(block)
+        section_break = _extract_compat_section_break(block)
+        if section_break is not None:
+            normalized_blocks.append(section_break)
+        normalized_blocks.append(block)
+
+    return normalized_blocks
 
 
 def _split_path_parts(value: str) -> list[str]:
