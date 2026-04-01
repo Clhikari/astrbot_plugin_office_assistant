@@ -54,3 +54,27 @@ def test_init_executor_shuts_down_previous_owned_executor_before_replacing():
         assert owner._executor_label == "新线程池"
     finally:
         external_executor.shutdown(wait=False)
+
+
+def test_init_executor_keeps_same_external_executor_usable():
+    owner = _DummyExecutorOwner()
+    external_executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        owner._init_executor(external_executor, label="外部线程池一")
+        owner._init_executor(external_executor, label="外部线程池二")
+
+        future = owner._require_executor().submit(lambda: "ok")
+
+        assert future.result(timeout=5) == "ok"
+        assert owner._require_executor() is external_executor
+        assert owner._owns_executor is False
+        assert owner._executor_label == "外部线程池二"
+    finally:
+        external_executor.shutdown(wait=False)
+
+
+def test_require_executor_raises_before_init():
+    owner = _DummyExecutorOwner()
+
+    with pytest.raises(RuntimeError, match="_init_executor"):
+        owner._require_executor()
