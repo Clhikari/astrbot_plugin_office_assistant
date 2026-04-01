@@ -697,6 +697,8 @@ class WordDocumentBuilder:
     def _apply_section_header_footer(
         self, section, config: HeaderFooterConfig, theme: dict
     ) -> None:
+        # Callers unlink section stories before applying overrides so story updates
+        # stay local to the current section.
         uses_first_page = self._uses_first_page_variants(config)
         uses_even_page = self._uses_even_page_variants(config)
 
