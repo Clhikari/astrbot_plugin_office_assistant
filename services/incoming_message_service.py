@@ -28,7 +28,6 @@ class IncomingMessageService:
         if not event.message_obj.message:
             return
 
-        self._remember_recent_text(event)
         has_supported_file = False
         for component in event.message_obj.message:
             if isinstance(component, Comp.File):
@@ -43,10 +42,6 @@ class IncomingMessageService:
                     break
 
         if not has_supported_file:
-            if self._message_buffer.is_buffering(event):
-                await self._message_buffer.add_message(event)
-                event.stop_event()
-                logger.debug("[文件管理] 消息已加入现有缓冲")
             return
 
         buffered = await self._message_buffer.add_message(event)

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from astrbot_plugin_office_assistant.constants import DOC_COMMAND_TRIGGER_EVENT_KEY
 from astrbot_plugin_office_assistant.internal_hooks import (
     NoticeBuildContext,
     ToolExposureContext,
@@ -58,6 +59,7 @@ def _build_event(
     is_admin: bool = False,
 ):
     event = MagicMock()
+    extras: dict[str, object] = {}
     event.message_obj = SimpleNamespace(type=message_type, message=[], self_id="bot-1")
     event.get_sender_id.return_value = sender_id
     event.get_platform_id.return_value = "platform-1"
@@ -65,6 +67,10 @@ def _build_event(
     event.unified_msg_origin = "session-1"
     event.message_str = ""
     event._buffer_reentry_count = 0
+    event.set_extra.side_effect = lambda key, value: extras.__setitem__(key, value)
+    event.get_extra.side_effect = lambda key=None, default=None: (
+        dict(extras) if key is None else extras.get(key, default)
+    )
     return event
 
 
@@ -691,7 +697,7 @@ def test_llm_request_policy_requires_hook_pairs():
 
 
 @pytest.mark.asyncio
-async def test_remember_recent_text_skips_system_notice_messages():
+async def test_remember_recent_text_is_disabled():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
@@ -701,11 +707,9 @@ async def test_remember_recent_text_skips_system_notice_messages():
 
         event.message_str = "[System Notice] internal guidance"
         svc.remember_recent_text(event)
-        assert session_key not in svc.recent_text_by_session
-
         event.message_str = "整理成正式汇报"
         svc.remember_recent_text(event)
-        assert svc.recent_text_by_session[session_key][0] == "整理成正式汇报"
+        assert session_key not in svc.recent_text_by_session
     finally:
         await plugin.terminate()
 
@@ -773,7 +777,88 @@ async def test_on_buffer_complete_ignores_released_runtime():
 
 
 @pytest.mark.asyncio
-async def test_buffered_upload_without_prompt_requires_read_file_first():
+async def test_handle_exported_document_tool_uses_bound_service_after_runtime_release():
+    plugin = FileOperationPlugin.__new__(FileOperationPlugin)
+    service = MagicMock()
+    service.handle_exported_document_tool = AsyncMock(return_value="sent")
+    plugin._post_export_hook_service = service
+    plugin._runtime = None
+    context = MagicMock()
+
+    result = await plugin._handle_exported_document_tool(
+        context,
+        "/tmp/exported.docx",
+    )
+
+    service.handle_exported_document_tool.assert_awaited_once_with(
+        context,
+        "/tmp/exported.docx",
+    )
+    assert result == "sent"
+
+
+@pytest.mark.asyncio
+async def test_doc_list_command_stops_event_after_sending():
+    context = MagicMock()
+    config = _build_config()
+    config["trigger_settings"]["enable_features_in_group"] = True
+    plugin = FileOperationPlugin(context=context, config=config)
+    try:
+        event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+        event.set_result = MagicMock()
+
+        await plugin.doc_list(event)
+
+        event.set_result.assert_called_once()
+        result = event.set_result.call_args.args[0]
+        assert result.get_plain_text() == "当前没有可处理的上传文件。"
+        assert result.is_stopped() is True
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_doc_use_command_stops_event_after_requeue():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+        event.stop_event = MagicMock()
+        plugin._runtime.command_service.doc_use = AsyncMock(return_value=None)
+
+        await plugin.doc_use(event, "f1 根据这份文件整理")
+
+        plugin._runtime.command_service.doc_use.assert_awaited_once_with(
+            event,
+            "f1 根据这份文件整理",
+        )
+        event.stop_event.assert_called_once_with()
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_doc_clear_command_sets_stopped_result():
+    context = MagicMock()
+    config = _build_config()
+    config["trigger_settings"]["enable_features_in_group"] = True
+    plugin = FileOperationPlugin(context=context, config=config)
+    try:
+        event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+        event.set_result = MagicMock()
+
+        await plugin.doc_clear(event, "")
+
+        event.set_result.assert_called_once()
+        result = event.set_result.call_args.args[0]
+        assert result.get_plain_text() == "❌ 当前没有可处理的上传文件。"
+        assert result.is_stopped() is True
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_buffered_upload_without_prompt_only_caches_upload_infos():
     context = MagicMock()
     event_queue = AsyncMock()
     context.get_event_queue.return_value = event_queue
@@ -792,16 +877,14 @@ async def test_buffered_upload_without_prompt_requires_read_file_first():
 
         await plugin._on_buffer_complete(buf)
 
-        assert isinstance(event.message_obj.message[0], Comp.Plain)
-        prompt_text = event.message_obj.message[0].text
-        assert "用户上传了可读取文件" in prompt_text
-        assert "工作区文件名: report_1.docx" in prompt_text
-        assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
-        assert "若使用相对路径，请使用上面的工作区文件名" in prompt_text
-        assert "如果要读取文件" in prompt_text
-        assert "NEVER 创建新文档" not in prompt_text
-        assert event.message_str == prompt_text.strip()
-        event_queue.put.assert_awaited_once_with(event)
+        event_queue.put.assert_not_awaited()
+        upload_infos = plugin._runtime.upload_session_service.list_session_upload_infos(
+            event
+        )
+        assert len(upload_infos) == 1
+        assert upload_infos[0]["original_name"] == "report.docx"
+        assert upload_infos[0]["stored_name"] == "report_1.docx"
+        assert upload_infos[0]["file_id"] == "f1"
     finally:
         await plugin.terminate()
 
@@ -814,8 +897,10 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
     service = UploadSessionService(
         context=context,
         recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
         recent_text_max_entries=32,
         recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(
             return_value=(Path(__file__).resolve(), "report.docx")
         ),
@@ -832,8 +917,10 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
 
     await service.on_buffer_complete(buf)
 
-    assert isinstance(event.message_obj.message[0], Comp.Plain)
-    prompt_text = event.message_obj.message[0].text
+    queued_event = event_queue.put.await_args.args[0]
+    assert queued_event is not event
+    assert isinstance(queued_event.message_obj.message[0], Comp.Plain)
+    prompt_text = queued_event.message_obj.message[0].text
     assert "[文件信息]" in prompt_text
     assert "[用户指令]" in prompt_text
     assert "请根据上传文档整理成正式汇报" in prompt_text
@@ -844,8 +931,9 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
     assert "先调用 `read_file` 读取文件" in prompt_text
     assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
     assert "NEVER 创建新文档" not in prompt_text
-    assert event.message_str == prompt_text.strip()
-    event_queue.put.assert_awaited_once_with(event)
+    assert not queued_event.message_str.startswith("/")
+    assert queued_event.message_str.endswith(prompt_text.strip())
+    event_queue.put.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -884,18 +972,19 @@ async def test_before_llm_chat_exposes_file_tools_for_buffered_group_upload_when
         plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source_1.docx")
 
         await plugin._on_buffer_complete(buf)
+        queued_event = event_queue.put.await_args.args[0]
 
         req = ProviderRequest(
-            prompt=event.message_str,
+            prompt=queued_event.message_str,
             system_prompt="base",
             func_tool=ToolSet([_tool("existing_tool")]),
         )
 
-        await plugin.before_llm_chat(event, req)
+        await plugin.before_llm_chat(queued_event, req)
 
         tool_names = set(req.func_tool.names())
-        assert event.message_obj.raw_message is raw_message
-        assert event.is_mentioned() is True
+        assert queued_event.message_obj.raw_message is raw_message
+        assert queued_event.is_mentioned() is True
         assert "create_document" in tool_names
         assert "add_blocks" in tool_names
         assert "export_document" in tool_names
@@ -958,6 +1047,47 @@ async def test_before_llm_chat_hides_file_tools_for_buffered_group_upload_when_n
         assert "export_document" not in tool_names
         assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
         assert "工作区文件名：source_1.docx" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_exposes_file_tools_for_group_doc_command_without_mention():
+    context = MagicMock()
+    config = _build_config()
+    config["trigger_settings"]["enable_features_in_group"] = True
+    plugin = FileOperationPlugin(context=context, config=config)
+    try:
+        event = _build_event(
+            message_type=MessageType.GROUP_MESSAGE,
+            sender_id="user-1",
+        )
+        event.is_mentioned.return_value = False
+        event._buffered = True
+        event.set_extra(DOC_COMMAND_TRIGGER_EVENT_KEY, True)
+        event.message_str = (
+            "[System Notice] 用户上传了 1 个文件\n\n"
+            "[文件信息]\n"
+            "- 原始文件名: B.xlsx (类型: .xlsx)\n"
+            "  工作区文件名: B_1.xlsx\n\n"
+            "[用户指令]\n"
+            "根据这份文件整理成正式汇报\n\n"
+            "[处理建议]\n"
+            "1. 优先围绕这些上传文件完成用户请求。\n"
+        )
+        req = ProviderRequest(
+            prompt=event.message_str,
+            system_prompt="base",
+            func_tool=ToolSet([_tool("existing_tool")]),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "export_document" in tool_names
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
     finally:
         await plugin.terminate()
 

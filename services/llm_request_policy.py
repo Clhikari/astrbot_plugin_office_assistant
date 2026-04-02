@@ -7,6 +7,7 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 
 from ..constants import (
+    DOC_COMMAND_TRIGGER_EVENT_KEY,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     FILE_TOOLS,
     NOTICE_TOOLS_DENIED,
@@ -67,9 +68,7 @@ class LLMRequestPolicy:
             self._tool_exposure_hooks = tool_exposure_hooks
         else:
             self._notice_hooks = request_hook_service.build_notice_hooks()
-            self._tool_exposure_hooks = (
-                request_hook_service.build_tool_exposure_hooks()
-            )
+            self._tool_exposure_hooks = request_hook_service.build_tool_exposure_hooks()
 
     def _detect_explicit_file_tool(self, text: str) -> str | None:
         if not text:
@@ -146,10 +145,14 @@ class LLMRequestPolicy:
 
         has_permission = self._check_permission(event)
         can_process_upload = has_permission or event.is_admin()
+        doc_command_triggered = bool(
+            event.get_extra(DOC_COMMAND_TRIGGER_EVENT_KEY, False)
+        )
         meets_group_trigger = (
             not is_group
             or not self._require_at_in_group
             or self._is_bot_mentioned(event)
+            or doc_command_triggered
         )
         should_expose = (is_friend and event.is_admin()) or (
             has_permission and meets_group_trigger

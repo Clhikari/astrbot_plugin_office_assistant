@@ -95,6 +95,7 @@ FILE_TOOLS = (
 )
 
 EXPLICIT_FILE_TOOL_EVENT_KEY = "office_assistant_explicit_file_tool_name"
+DOC_COMMAND_TRIGGER_EVENT_KEY = "office_assistant_doc_command_trigger"
 
 EXECUTION_TOOLS = (
     "astrbot_execute_shell",

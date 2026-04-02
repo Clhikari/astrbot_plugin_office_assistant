@@ -8,8 +8,9 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
-from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star import star_map
 
 from .message_buffer import BufferedMessage
@@ -74,6 +75,7 @@ class FileOperationPlugin(Star):
 
     def _apply_runtime(self, runtime: PluginRuntimeBundle) -> None:
         self._runtime = runtime
+        self._post_export_hook_service = runtime.post_export_hook_service
         # 构造函数日志需要的快捷字段
         self._auto_delete = runtime.settings.auto_delete
         self.plugin_data_path = runtime.plugin_data_path
@@ -134,11 +136,12 @@ class FileOperationPlugin(Star):
     async def _handle_exported_document_tool(
         self, context: ContextWrapper[AstrAgentContext], output_path: str
     ) -> str | None:
-        return (
-            await self._runtime.post_export_hook_service.handle_exported_document_tool(
-                context, output_path
-            )
-        )
+        service = getattr(self, "_post_export_hook_service", None)
+        if service is None:
+            logger.warning("[文件管理] 导出回调触发时发送服务不可用，跳过文件回传")
+            return None
+
+        return await service.handle_exported_document_tool(context, output_path)
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def on_file_message(self, event: AstrMessageEvent):
@@ -272,6 +275,38 @@ class FileOperationPlugin(Star):
     async def pdf_status(self, event: AstrMessageEvent):
         """显示 PDF 转换功能的状态和依赖信息"""
         yield event.plain_result(self._runtime.command_service.pdf_status(event))
+
+    @filter.command_group("doc")
+    def doc(self):
+        """处理当前会话中的上传文件。"""
+
+    @doc.command("list")
+    async def doc_list(self, event: AstrMessageEvent):
+        """查看当前会话可用的上传文件。"""
+        result = self._runtime.command_service.doc_list(event)
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @doc.command("clear")
+    async def doc_clear(self, event: AstrMessageEvent, file_id: str = ""):
+        """清理当前会话中的上传文件。"""
+        result = self._runtime.command_service.doc_clear(event, file_id)
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @doc.command("use")
+    async def doc_use(
+        self,
+        event: AstrMessageEvent,
+        selection: GreedyStr,
+    ):
+        """使用指定文件继续处理请求。"""
+        result = await self._runtime.command_service.doc_use(
+            event,
+            str(selection),
+        )
+        if result:
+            event.set_result(MessageEventResult().message(result).stop_event())
+            return
+        event.stop_event()
 
     @on_plugin_error_filter()
     async def on_plugin_error(

@@ -53,8 +53,10 @@ class PluginSettings:
     allow_external_input_files: bool
     feature_settings: dict
     recent_text_ttl_seconds: int
+    upload_session_ttl_seconds: int
     recent_text_max_entries: int
     recent_text_cleanup_interval_seconds: int
+    upload_session_cleanup_interval_seconds: int
 
 
 @dataclass(slots=True)
@@ -138,8 +140,10 @@ def build_plugin_runtime(
     upload_session_service = UploadSessionService(
         context=context,
         recent_text_ttl_seconds=settings.recent_text_ttl_seconds,
+        upload_session_ttl_seconds=settings.upload_session_ttl_seconds,
         recent_text_max_entries=settings.recent_text_max_entries,
         recent_text_cleanup_interval_seconds=settings.recent_text_cleanup_interval_seconds,
+        upload_session_cleanup_interval_seconds=settings.upload_session_cleanup_interval_seconds,
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,
@@ -211,6 +215,7 @@ def build_plugin_runtime(
         enable_features_in_group=settings.enable_features_in_group,
         auto_block_execution_tools=settings.auto_block_execution_tools,
         reply_to_user=settings.reply_to_user,
+        upload_session_service=upload_session_service,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
@@ -318,9 +323,20 @@ def _load_settings(config) -> PluginSettings:
     preview_dpi = preview_settings.get("dpi", 150)
     allow_external_input_files = path_settings.get("allow_external_input_files", False)
     feature_settings = config.get("feature_settings", {})
-    recent_text_ttl_seconds = max(20, int(buffer_wait) + 10)
+    recent_text_ttl_seconds = max(
+        20,
+        int(file_settings.get("recent_text_ttl_seconds", int(buffer_wait) + 10)),
+    )
+    upload_session_ttl_seconds = max(
+        60,
+        int(file_settings.get("upload_session_ttl_seconds", 600)),
+    )
     recent_text_max_entries = 512
     recent_text_cleanup_interval_seconds = max(5, min(60, recent_text_ttl_seconds))
+    upload_session_cleanup_interval_seconds = max(
+        10,
+        min(300, upload_session_ttl_seconds),
+    )
 
     return PluginSettings(
         auto_delete=auto_delete,
@@ -338,8 +354,10 @@ def _load_settings(config) -> PluginSettings:
         allow_external_input_files=allow_external_input_files,
         feature_settings=feature_settings,
         recent_text_ttl_seconds=recent_text_ttl_seconds,
+        upload_session_ttl_seconds=upload_session_ttl_seconds,
         recent_text_max_entries=recent_text_max_entries,
         recent_text_cleanup_interval_seconds=recent_text_cleanup_interval_seconds,
+        upload_session_cleanup_interval_seconds=upload_session_cleanup_interval_seconds,
     )
 
 
