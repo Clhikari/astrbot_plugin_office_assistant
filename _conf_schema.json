@@ -98,10 +98,22 @@
                 "default": true
             },
             "message_buffer_seconds": {
-                "description": "文件消息缓冲时间(秒)",
+                "description": "文件合并等待时间(秒)",
                 "type": "float",
-                "hint": "收到文件后等待后续消息的时间。用于聚合分离发送的文件和文本消息。",
+                "hint": "上传文件后，系统会先等几秒，看看你是不是还要继续发别的文件。这个时间内发来的文件会被当成同一批处理。",
                 "default": 4
+            },
+            "recent_text_ttl_seconds": {
+                "description": "旧流程文本缓存时间(秒)",
+                "type": "int",
+                "hint": "兼容旧流程用，当前 `/doc` 模式下基本不会用到，一般不用改。",
+                "default": 20
+            },
+            "upload_session_ttl_seconds": {
+                "description": "上传文件保留时间(秒)",
+                "type": "int",
+                "hint": "上传完成后，文件会在当前会话里保留这段时间，供 `/doc list`、`/doc use`、`/doc clear` 使用。超过时间后会自动失效。",
+                "default": 600
             }
         }
     },

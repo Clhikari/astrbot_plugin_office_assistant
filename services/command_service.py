@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ..constants import DOC_COMMAND_TRIGGER_EVENT_KEY
 from ..constants import ALL_OFFICE_SUFFIXES
 from ..utils import format_file_size
 
@@ -16,6 +17,7 @@ class CommandService:
         enable_features_in_group: bool,
         auto_block_execution_tools: bool,
         reply_to_user: bool,
+        upload_session_service,
         is_group_feature_enabled,
         check_permission,
         group_feature_disabled_error,
@@ -28,6 +30,7 @@ class CommandService:
         self._enable_features_in_group = enable_features_in_group
         self._auto_block_execution_tools = auto_block_execution_tools
         self._reply_to_user = reply_to_user
+        self._upload_session_service = upload_session_service
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._group_feature_disabled_error = group_feature_disabled_error
@@ -164,9 +167,124 @@ class CommandService:
 
         return "\n".join(lines)
 
+    def doc_list(self, event) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        available_files = self._upload_session_service.list_session_upload_infos(event)
+        return self._format_doc_list(available_files)
+
+    def doc_clear(self, event, file_id: str = "") -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        available_files = self._upload_session_service.list_session_upload_infos(event)
+        if not available_files:
+            return "❌ 当前没有可处理的上传文件。"
+
+        cleared_count = self._upload_session_service.clear_session_upload_infos(
+            event,
+            file_id=file_id.strip() or None,
+        )
+        if cleared_count == 0:
+            return "❌ 当前没有匹配的上传文件可清除。"
+        if file_id.strip():
+            return f"✅ 已清除文件 {file_id.strip()}。"
+        return f"✅ 已清除 {cleared_count} 个待处理文件。"
+
+    async def doc_use(self, event, selection: str) -> str | None:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        available_files = self._upload_session_service.list_session_upload_infos(event)
+        if not available_files:
+            return "❌ 当前没有可处理的上传文件，请先上传文件。"
+
+        selected_infos, normalized_ids, normalized_instruction = (
+            self._parse_doc_use_selection(available_files, selection.strip())
+        )
+
+        if selected_infos is None:
+            return self._format_doc_selection_help(available_files)
+
+        if not normalized_instruction:
+            selected_label = " ".join(normalized_ids) if normalized_ids else "文件ID"
+            return f"❌ 用法: /doc use {selected_label} 你的要求"
+
+        await self._requeue_doc_request(
+            event,
+            upload_infos=selected_infos,
+            user_instruction=normalized_instruction,
+        )
+        return None
+
+    def _parse_doc_use_selection(
+        self,
+        available_files: list[dict],
+        raw_selection: str,
+    ) -> tuple[list[dict] | None, list[str], str]:
+        available_by_id = {
+            str(info.get("file_id", "")).lower(): info for info in available_files
+        }
+        tokens = [token for token in raw_selection.split() if token]
+        selected_ids: list[str] = []
+        instruction_tokens: list[str] = []
+
+        for index, token in enumerate(tokens):
+            normalized = token.strip().lower()
+            if normalized in available_by_id:
+                if normalized not in selected_ids:
+                    selected_ids.append(normalized)
+                continue
+
+            instruction_tokens = tokens[index:]
+            break
+
+        if not selected_ids:
+            if len(available_files) == 1:
+                return [available_files[0]], [], raw_selection
+            return None, [], ""
+
+        selected_infos = [available_by_id[file_id] for file_id in selected_ids]
+        instruction = " ".join(instruction_tokens).strip()
+        return selected_infos, selected_ids, instruction
+
+    def _format_doc_list(self, upload_infos: list[dict]) -> str:
+        if not upload_infos:
+            return "当前没有可处理的上传文件。"
+        lines = ["当前可用文件："]
+        for info in upload_infos:
+            file_id = info.get("file_id", "unknown")
+            original_name = info.get("original_name", "未命名文件")
+            lines.append(f"- [{file_id}] {original_name}")
+        return "\n".join(lines)
+
+    def _format_doc_selection_help(self, upload_infos: list[dict]) -> str:
+        lines = [self._format_doc_list(upload_infos)]
+        lines.append("")
+        lines.append("请使用 `/doc use 文件ID 你的要求` 指定要处理的文件。")
+        lines.append("需要多个文件时，可以连续写多个文件ID。")
+        lines.append("例如：/doc use f2 根据这份文件整理成正式汇报")
+        lines.append("例如：/doc use f1 f2 根据这些文件整理成正式汇报")
+        lines.append("也可以使用 `/doc list` 查看文件，或 `/doc clear` 清空当前缓存。")
+        return "\n".join(lines)
+
     def _require_access(self, event) -> str | None:
         if not self._is_group_feature_enabled(event):
             return "❌ " + self._group_feature_disabled_error()
         if not self._check_permission(event):
             return "❌ 权限不足"
         return None
+
+    async def _requeue_doc_request(
+        self, event, *, upload_infos: list[dict], user_instruction: str
+    ) -> None:
+        event.set_extra(DOC_COMMAND_TRIGGER_EVENT_KEY, True)
+        await self._upload_session_service.requeue_upload_request(
+            event,
+            upload_infos=upload_infos,
+            user_instruction=user_instruction,
+        )
