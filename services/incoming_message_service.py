@@ -11,11 +11,9 @@ class IncomingMessageService:
         self,
         *,
         message_buffer,
-        remember_recent_text,
         is_group_feature_enabled,
     ) -> None:
         self._message_buffer = message_buffer
-        self._remember_recent_text = remember_recent_text
         self._is_group_feature_enabled = is_group_feature_enabled
 
     async def handle_file_message(self, event) -> None:

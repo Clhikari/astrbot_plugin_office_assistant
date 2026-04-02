@@ -44,16 +44,10 @@ class UploadSessionService:
         self._prompt_service = UploadPromptService(
             allow_external_input_files=allow_external_input_files
         )
-        self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
-        self._recent_text_last_cleanup_ts = 0.0
         self._session_uploads_by_session: dict[
             tuple[str, str, str], list[tuple[UploadInfo, float]]
         ] = {}
         self._session_uploads_last_cleanup_ts = 0.0
-
-    @property
-    def recent_text_by_session(self) -> dict[tuple[str, str, str], tuple[str, float]]:
-        return self._recent_text_by_session
 
     def get_attachment_session_key(
         self, event: AstrMessageEvent
@@ -92,34 +86,6 @@ class UploadSessionService:
             or f"unknown_sender:{id(message_obj) if message_obj else id(event)}",
             origin or f"unknown_origin:{id(event)}",
         )
-
-    def cleanup_recent_text_cache(self, now: float, *, force: bool = False) -> None:
-        if (
-            not force
-            and now - self._recent_text_last_cleanup_ts
-            < self._recent_text_cleanup_interval_seconds
-            and len(self._recent_text_by_session) <= self._recent_text_max_entries
-        ):
-            return
-
-        expire_before = now - self._recent_text_ttl_seconds
-        expired_keys = [
-            key
-            for key, (_, ts) in self._recent_text_by_session.items()
-            if ts <= expire_before
-        ]
-        for key in expired_keys:
-            self._recent_text_by_session.pop(key, None)
-
-        overflow = len(self._recent_text_by_session) - self._recent_text_max_entries
-        if overflow > 0:
-            oldest_keys = sorted(
-                self._recent_text_by_session.items(), key=lambda item: item[1][1]
-            )[:overflow]
-            for key, _ in oldest_keys:
-                self._recent_text_by_session.pop(key, None)
-
-        self._recent_text_last_cleanup_ts = now
 
     def _cleanup_session_upload_cache(self, now: float, *, force: bool = False) -> None:
         if (
@@ -166,12 +132,14 @@ class UploadSessionService:
         session_key = self.get_attachment_session_key(event)
         cached_infos = self._session_uploads_by_session.setdefault(session_key, [])
 
+        assigned_infos: list[UploadInfo] = []
         for info in upload_infos:
-            file_id = self._allocate_file_id(session_key)
-            info["file_id"] = file_id
-            cached_infos.append((dict(info), now))
+            cached_info = dict(info)
+            cached_info["file_id"] = self._allocate_file_id(session_key)
+            cached_infos.append((cached_info, now))
+            assigned_infos.append(cached_info)
 
-        return upload_infos
+        return assigned_infos
 
     def _get_wake_prefix(self, event: AstrMessageEvent) -> str:
         get_config = getattr(self._context, "get_config", None)
@@ -334,12 +302,6 @@ class UploadSessionService:
             logger.debug("[消息缓冲] 事件已重新放入队列")
         except Exception as exc:
             logger.error(f"[消息缓冲] 重新分发事件失败: {exc}")
-
-    def remember_recent_text(self, event: AstrMessageEvent) -> None:
-        return None
-
-    def pop_recent_text(self, event: AstrMessageEvent) -> str:
-        return ""
 
     def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[UploadInfo]:
         cached = getattr(event, EVENT_UPLOAD_CACHE_ATTR, None)

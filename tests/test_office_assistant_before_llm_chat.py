@@ -697,19 +697,12 @@ def test_llm_request_policy_requires_hook_pairs():
 
 
 @pytest.mark.asyncio
-async def test_remember_recent_text_is_disabled():
+async def test_runtime_bundle_does_not_expose_recent_text_cache():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
     try:
-        event = _build_event()
-        svc = plugin._runtime.upload_session_service
-        session_key = svc.get_attachment_session_key(event)
-
-        event.message_str = "[System Notice] internal guidance"
-        svc.remember_recent_text(event)
-        event.message_str = "整理成正式汇报"
-        svc.remember_recent_text(event)
-        assert session_key not in svc.recent_text_by_session
+        assert hasattr(plugin._runtime, "upload_session_service") is True
+        assert hasattr(plugin._runtime, "recent_text_by_session") is False
     finally:
         await plugin.terminate()
 

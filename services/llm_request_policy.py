@@ -133,7 +133,9 @@ class LLMRequestPolicy:
         explicit_tool_name = self._detect_explicit_file_tool(
             self._extract_explicit_tool_text(event, req)
         )
-        event.set_extra(EXPLICIT_FILE_TOOL_EVENT_KEY, explicit_tool_name)
+        set_extra = getattr(event, "set_extra", None)
+        if callable(set_extra):
+            set_extra(EXPLICIT_FILE_TOOL_EVENT_KEY, explicit_tool_name)
 
         if not self._is_group_feature_enabled(event):
             if req.func_tool:
@@ -145,8 +147,11 @@ class LLMRequestPolicy:
 
         has_permission = self._check_permission(event)
         can_process_upload = has_permission or event.is_admin()
+        get_extra = getattr(event, "get_extra", None)
         doc_command_triggered = bool(
-            event.get_extra(DOC_COMMAND_TRIGGER_EVENT_KEY, False)
+            get_extra(DOC_COMMAND_TRIGGER_EVENT_KEY, False)
+            if callable(get_extra)
+            else False
         )
         meets_group_trigger = (
             not is_group
