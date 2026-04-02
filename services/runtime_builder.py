@@ -227,6 +227,7 @@ def build_plugin_runtime(
     message_buffer = MessageBuffer(wait_seconds=settings.buffer_wait)
     incoming_message_service = IncomingMessageService(
         message_buffer=message_buffer,
+        remember_recent_text=upload_session_service.remember_recent_text,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
     )
 

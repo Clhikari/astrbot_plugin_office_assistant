@@ -1119,7 +1119,7 @@ def test_upload_session_service_preserves_input_upload_infos_when_caching():
 
 
 @pytest.mark.asyncio
-async def test_upload_session_service_caches_file_only_buffered_upload_without_requeue():
+async def test_upload_session_service_requeues_file_only_buffered_upload_in_friend_chat():
     context = MagicMock()
     event_queue = AsyncMock()
     context.get_event_queue.return_value = event_queue
@@ -1141,12 +1141,108 @@ async def test_upload_session_service_caches_file_only_buffered_upload_without_r
 
     await service.on_buffer_complete(buf)
 
+    queued_event = event_queue.put.await_args.args[0]
+    prompt_text = queued_event.message_obj.message[0].text
+    upload_infos = service.list_session_upload_infos(event)
+    assert len(upload_infos) == 1
+    assert upload_infos[0]["original_name"] == "report.docx"
+    assert upload_infos[0]["stored_name"] == "report_1.docx"
+    assert upload_infos[0]["file_id"] == "f1"
+    assert "[用户指令]" not in prompt_text
+    assert "用户意图尚不明确时，再用中文询问用户想要如何处理" in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_caches_file_only_buffered_upload_in_group_chat():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=True,
+    )
+    event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+    await service.on_buffer_complete(buf)
+
     event_queue.put.assert_not_awaited()
     upload_infos = service.list_session_upload_infos(event)
     assert len(upload_infos) == 1
     assert upload_infos[0]["original_name"] == "report.docx"
     assert upload_infos[0]["stored_name"] == "report_1.docx"
     assert upload_infos[0]["file_id"] == "f1"
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_uses_recent_text_for_file_only_buffered_upload():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=True,
+    )
+    text_event = _build_event()
+    text_event.message_obj.message = [Comp.Plain("根据这份文件整理成正式汇报")]
+    file_event = _build_event()
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=file_event, files=[upload], texts=[])
+
+    service.remember_recent_text(text_event)
+    await service.on_buffer_complete(buf)
+
+    queued_event = event_queue.put.await_args.args[0]
+    prompt_text = queued_event.message_obj.message[0].text
+    assert "[用户指令]" in prompt_text
+    assert "根据这份文件整理成正式汇报" in prompt_text
+    assert "工作区文件名: report_1.docx" in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_ignores_command_like_recent_text():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=True,
+    )
+    text_event = _build_event()
+    text_event.message_obj.message = [Comp.Plain("/doc list")]
+    file_event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+    upload = Comp.File(name="report.docx", file="report.docx")
+    buf = BufferedMessage(event=file_event, files=[upload], texts=[])
+
+    service.remember_recent_text(text_event)
+    await service.on_buffer_complete(buf)
+
+    event_queue.put.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1210,11 +1306,13 @@ async def test_upload_session_service_omits_external_path_when_disabled():
 
     await service.on_buffer_complete(buf)
 
-    event_queue.put.assert_not_awaited()
+    queued_event = event_queue.put.await_args.args[0]
+    prompt_text = queued_event.message_obj.message[0].text
     upload_infos = service.list_session_upload_infos(event)
     assert len(upload_infos) == 1
     assert upload_infos[0]["stored_name"] == "report_1.docx"
     assert upload_infos[0]["source_path"]
+    assert "外部绝对路径:" not in prompt_text
 
 
 @pytest.mark.asyncio
@@ -1575,10 +1673,18 @@ async def test_upload_session_service_requeues_buffered_upload_without_command_p
         "is_supported": True,
     }
 
-    await service.requeue_buffered_upload_request(
-        event,
-        upload_infos=[upload_info],
-        user_instruction="整理成正式汇报",
+    with patch(
+        "astrbot_plugin_office_assistant.services.upload_session_service.active_event_registry.request_agent_stop_all"
+    ) as request_agent_stop_all:
+        await service.requeue_buffered_upload_request(
+            event,
+            upload_infos=[upload_info],
+            user_instruction="整理成正式汇报",
+        )
+
+    request_agent_stop_all.assert_called_once_with(
+        event.unified_msg_origin,
+        exclude=event,
     )
 
     queued_event = event_queue.put.await_args.args[0]
@@ -1586,6 +1692,50 @@ async def test_upload_session_service_requeues_buffered_upload_without_command_p
     assert not queued_event.message_str.startswith("!")
     assert not queued_event.message_str.startswith("/")
     assert "[用户指令]" in queued_event.message_str
+    event_queue.put.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_requests_active_agent_stop_before_command_requeue():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    context.get_config.return_value = {"wake_prefix": ["/"]}
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    event = _build_event(sender_id="user-a")
+    upload_info = {
+        "file_id": "f1",
+        "original_name": "A.docx",
+        "stored_name": "A_1.docx",
+        "source_path": "",
+        "file_suffix": ".docx",
+        "type_desc": "Office文档 (Word/Excel/PPT)",
+        "is_supported": True,
+    }
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.upload_session_service.active_event_registry.request_agent_stop_all"
+    ) as request_agent_stop_all:
+        await service.requeue_upload_request(
+            event,
+            upload_infos=[upload_info],
+            user_instruction="整理成正式汇报",
+        )
+
+    request_agent_stop_all.assert_called_once_with(
+        event.unified_msg_origin,
+        exclude=event,
+    )
     event_queue.put.assert_awaited_once()
 
 
@@ -1849,8 +1999,10 @@ async def test_incoming_message_service_buffers_supported_file_and_stops_event()
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = False
+    remember_recent_text = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
     )
     event = _build_event()
@@ -1859,6 +2011,7 @@ async def test_incoming_message_service_buffers_supported_file_and_stops_event()
 
     await service.handle_file_message(event)
 
+    remember_recent_text.assert_not_called()
     message_buffer.add_message.assert_awaited_once_with(event)
     event.stop_event.assert_called_once()
 
@@ -1868,8 +2021,10 @@ async def test_incoming_message_service_ignores_non_file_messages_during_buffer(
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
     )
     event = _build_event()
@@ -1878,18 +2033,21 @@ async def test_incoming_message_service_ignores_non_file_messages_during_buffer(
 
     await service.handle_file_message(event)
 
-    message_buffer.is_buffering.assert_not_called()
+    remember_recent_text.assert_not_called()
+    message_buffer.is_buffering.assert_called_once_with(event)
     message_buffer.add_message.assert_not_awaited()
     event.stop_event.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_incoming_message_service_does_not_buffer_plain_text_while_file_waits():
+async def test_incoming_message_service_buffers_follow_up_plain_text_while_file_waits():
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
     )
     event = _build_event()
@@ -1898,7 +2056,54 @@ async def test_incoming_message_service_does_not_buffer_plain_text_while_file_wa
 
     await service.handle_file_message(event)
 
-    message_buffer.is_buffering.assert_not_called()
+    remember_recent_text.assert_not_called()
+    message_buffer.is_buffering.assert_called_once_with(event)
+    message_buffer.add_message.assert_awaited_once_with(event)
+    event.stop_event.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_service_ignores_command_like_text_while_file_waits():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    event.message_obj.message = [Comp.Plain("/doc list")]
+
+    await service.handle_file_message(event)
+
+    remember_recent_text.assert_not_called()
+    message_buffer.is_buffering.assert_called_once_with(event)
+    message_buffer.add_message.assert_not_awaited()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_service_remembers_plain_text_when_no_buffer_active():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = False
+    remember_recent_text = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    event.message_obj.message = [Comp.Plain("根据这份文件整理成正式汇报")]
+
+    await service.handle_file_message(event)
+
+    remember_recent_text.assert_called_once_with(event)
+    message_buffer.is_buffering.assert_called_once_with(event)
     message_buffer.add_message.assert_not_awaited()
     event.stop_event.assert_not_called()
 

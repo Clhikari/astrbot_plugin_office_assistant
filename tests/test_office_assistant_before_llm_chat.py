@@ -851,7 +851,7 @@ async def test_doc_clear_command_sets_stopped_result():
 
 
 @pytest.mark.asyncio
-async def test_buffered_upload_without_prompt_only_caches_upload_infos():
+async def test_buffered_upload_without_prompt_requeues_in_friend_chat():
     context = MagicMock()
     event_queue = AsyncMock()
     context.get_event_queue.return_value = event_queue
@@ -859,6 +859,41 @@ async def test_buffered_upload_without_prompt_only_caches_upload_infos():
     try:
         source_path = Path(__file__).resolve()
         event = _build_event()
+        upload = Comp.File(name="report.docx", file="report.docx")
+        buf = BufferedMessage(event=event, files=[upload], texts=[])
+
+        async def _fake_extract_upload_source(_component):
+            return source_path, "report.docx"
+
+        plugin._extract_upload_source = _fake_extract_upload_source
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("report_1.docx")
+
+        await plugin._on_buffer_complete(buf)
+
+        queued_event = event_queue.put.await_args.args[0]
+        prompt_text = queued_event.message_obj.message[0].text
+        upload_infos = plugin._runtime.upload_session_service.list_session_upload_infos(
+            event
+        )
+        assert len(upload_infos) == 1
+        assert upload_infos[0]["original_name"] == "report.docx"
+        assert upload_infos[0]["stored_name"] == "report_1.docx"
+        assert upload_infos[0]["file_id"] == "f1"
+        assert "[用户指令]" not in prompt_text
+        assert "用户意图尚不明确时，再用中文询问用户想要如何处理" in prompt_text
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_buffered_upload_without_prompt_only_caches_upload_infos_in_group_chat():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        source_path = Path(__file__).resolve()
+        event = _build_event(message_type=MessageType.GROUP_MESSAGE)
         upload = Comp.File(name="report.docx", file="report.docx")
         buf = BufferedMessage(event=event, files=[upload], texts=[])
 
@@ -883,7 +918,7 @@ async def test_buffered_upload_without_prompt_only_caches_upload_infos():
 
 
 @pytest.mark.asyncio
-async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_constraints():
+async def test_buffered_upload_with_prompt_uses_structured_notice_and_follow_through_guidance():
     context = MagicMock()
     event_queue = AsyncMock()
     context.get_event_queue.return_value = event_queue
@@ -923,7 +958,10 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_without_hard_c
     assert "外部绝对路径:" in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
     assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
-    assert "NEVER 创建新文档" not in prompt_text
+    assert (
+        "如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取后继续调用相应工具完成结果"
+        in prompt_text
+    )
     assert not queued_event.message_str.startswith("/")
     assert queued_event.message_str.endswith(prompt_text.strip())
     event_queue.put.assert_awaited_once()

@@ -6,6 +6,8 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Context
+from astrbot.core.utils.active_event_registry import active_event_registry
+from astrbot.core.platform.message_type import MessageType
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
 from ..message_buffer import BufferedMessage
@@ -44,6 +46,8 @@ class UploadSessionService:
         self._prompt_service = UploadPromptService(
             allow_external_input_files=allow_external_input_files
         )
+        self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
+        self._recent_text_last_cleanup_ts = 0.0
         self._session_uploads_by_session: dict[
             tuple[str, str, str], list[tuple[UploadInfo, float]]
         ] = {}
@@ -108,6 +112,60 @@ class UploadSessionService:
             self._session_uploads_by_session.pop(session_key, None)
 
         self._session_uploads_last_cleanup_ts = now
+
+    def _cleanup_recent_text_cache(self, now: float, *, force: bool = False) -> None:
+        if (
+            not force
+            and now - self._recent_text_last_cleanup_ts
+            < self._recent_text_cleanup_interval_seconds
+            and len(self._recent_text_by_session) <= self._recent_text_max_entries
+        ):
+            return
+
+        expire_before = now - self._recent_text_ttl_seconds
+        expired_keys = [
+            key
+            for key, (_, ts) in self._recent_text_by_session.items()
+            if ts <= expire_before
+        ]
+        for key in expired_keys:
+            self._recent_text_by_session.pop(key, None)
+
+        overflow = len(self._recent_text_by_session) - self._recent_text_max_entries
+        if overflow > 0:
+            oldest_keys = sorted(
+                self._recent_text_by_session.items(), key=lambda item: item[1][1]
+            )[:overflow]
+            for key, _ in oldest_keys:
+                self._recent_text_by_session.pop(key, None)
+
+        self._recent_text_last_cleanup_ts = now
+
+    def _extract_recent_text_candidate(self, event: AstrMessageEvent) -> str:
+        if getattr(event, "_buffered", False):
+            return ""
+
+        message = getattr(getattr(event, "message_obj", None), "message", None) or []
+        if not message:
+            return ""
+
+        texts: list[str] = []
+        for component in message:
+            if isinstance(component, Comp.File):
+                return ""
+            if isinstance(component, Comp.Plain):
+                text = component.text.strip()
+                if text:
+                    if text.startswith("/"):
+                        return ""
+                    texts.append(text)
+
+        candidate = " ".join(texts).strip()
+        if not candidate:
+            return ""
+        if candidate.startswith("[System Notice]"):
+            return ""
+        return candidate
 
     def _allocate_file_id(self, session_key: tuple[str, str, str]) -> str:
         existing_ids = {
@@ -291,6 +349,10 @@ class UploadSessionService:
         logger.info(f"[消息缓冲] 已合并消息，提示: {prompt_text[:50]}...")
 
         try:
+            active_event_registry.request_agent_stop_all(
+                event.unified_msg_origin,
+                exclude=event,
+            )
             setattr(requeued_event, "_buffered", True)
             setattr(requeued_event, "_buffer_reentry_count", reentry_count + 1)
             requeued_event._result = None
@@ -302,6 +364,29 @@ class UploadSessionService:
             logger.debug("[消息缓冲] 事件已重新放入队列")
         except Exception as exc:
             logger.error(f"[消息缓冲] 重新分发事件失败: {exc}")
+
+    def remember_recent_text(self, event: AstrMessageEvent) -> None:
+        candidate = self._extract_recent_text_candidate(event)
+        if not candidate:
+            return
+
+        now = time.time()
+        self._cleanup_recent_text_cache(now)
+        session_key = self.get_attachment_session_key(event)
+        self._recent_text_by_session[session_key] = (candidate, now)
+
+    def pop_recent_text(self, event: AstrMessageEvent) -> str:
+        now = time.time()
+        self._cleanup_recent_text_cache(now)
+        session_key = self.get_attachment_session_key(event)
+        text_and_ts = self._recent_text_by_session.pop(session_key, None)
+        if text_and_ts is None:
+            return ""
+
+        text, ts = text_and_ts
+        if now - ts > self._recent_text_ttl_seconds:
+            return ""
+        return text
 
     def get_cached_upload_infos(self, event: AstrMessageEvent) -> list[UploadInfo]:
         cached = getattr(event, EVENT_UPLOAD_CACHE_ATTR, None)
@@ -394,8 +479,12 @@ class UploadSessionService:
 
         user_instruction = " ".join(texts).strip() if texts else ""
         if not user_instruction:
-            logger.debug("[消息缓冲] 已缓存上传文件，等待显式命令继续处理")
-            return
+            user_instruction = self.pop_recent_text(event)
+        if not user_instruction:
+            message_type = getattr(getattr(event, "message_obj", None), "type", None)
+            if message_type == MessageType.GROUP_MESSAGE:
+                logger.debug("[消息缓冲] 已缓存上传文件，等待显式命令继续处理")
+                return
 
         await self.requeue_buffered_upload_request(
             event,

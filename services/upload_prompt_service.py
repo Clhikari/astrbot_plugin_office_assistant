@@ -40,7 +40,8 @@ class UploadPromptService:
                 + "1. 优先围绕这些上传文件完成用户请求。\n"
                 + "2. 先调用 `read_file` 读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
                 + relative_path_guidance
-                + "4. 所有面向用户的回复 MUST 使用中文。"
+                + "4. 如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取后继续调用相应工具完成结果，不要停下来只回复过渡说明。\n"
+                + "5. 所有面向用户的回复 MUST 使用中文。"
             )
 
         if has_readable_file:
