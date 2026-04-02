@@ -72,7 +72,6 @@ class PluginRuntimeBundle:
     workspace_service: WorkspaceService
     access_policy_service: AccessPolicyService
     upload_session_service: UploadSessionService
-    recent_text_by_session: dict
     document_toolset: Any
     llm_request_policy: LLMRequestPolicy
     delivery_service: DeliveryService
@@ -228,7 +227,6 @@ def build_plugin_runtime(
     message_buffer = MessageBuffer(wait_seconds=settings.buffer_wait)
     incoming_message_service = IncomingMessageService(
         message_buffer=message_buffer,
-        remember_recent_text=upload_session_service.remember_recent_text,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
     )
 
@@ -244,7 +242,6 @@ def build_plugin_runtime(
         workspace_service=workspace_service,
         access_policy_service=access_policy_service,
         upload_session_service=upload_session_service,
-        recent_text_by_session=upload_session_service.recent_text_by_session,
         document_toolset=document_toolset,
         llm_request_policy=llm_request_policy,
         delivery_service=delivery_service,

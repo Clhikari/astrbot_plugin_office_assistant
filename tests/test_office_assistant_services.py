@@ -290,6 +290,34 @@ async def test_llm_request_policy_logs_missing_group_trigger():
     )
 
 
+@pytest.mark.asyncio
+async def test_llm_request_policy_handles_events_without_get_extra():
+    event = SimpleNamespace(
+        message_obj=SimpleNamespace(type=MessageType.GROUP_MESSAGE),
+        get_sender_id=lambda: "1474436119298048127",
+        is_admin=lambda: False,
+    )
+    request = ProviderRequest(
+        prompt="请读取 report.docx",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=ToolSet([_tool("read_file")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+
+    await policy.apply(event, request)
+
+    assert "read_file" not in set(request.func_tool.names())
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in request.system_prompt
+
+
 def test_build_plugin_runtime_returns_temp_workspace_and_services():
     context = MagicMock()
     context.get_config.return_value = {"admins_id": ["admin-1"]}
@@ -1059,7 +1087,7 @@ def test_workspace_service_pre_check_rejects_outside_workspace():
         executor.shutdown(wait=False)
 
 
-def test_upload_session_service_does_not_buffer_recent_text():
+def test_upload_session_service_preserves_input_upload_infos_when_caching():
     service = UploadSessionService(
         context=MagicMock(),
         recent_text_ttl_seconds=30,
@@ -1072,16 +1100,22 @@ def test_upload_session_service_does_not_buffer_recent_text():
         allow_external_input_files=False,
     )
     event = _build_event()
-    session_key = service.get_attachment_session_key(event)
+    upload_infos = [
+        {
+            "original_name": "report.docx",
+            "file_suffix": ".docx",
+            "type_desc": "Office文档 (Word/Excel/PPT)",
+            "is_supported": True,
+            "stored_name": "report_1.docx",
+            "source_path": "D:/tmp/report.docx",
+        }
+    ]
 
-    event.message_str = "[System Notice] internal guidance"
-    service.remember_recent_text(event)
-    event.message_str = "整理成正式汇报"
-    service.remember_recent_text(event)
-    event.message_str = "/doc list"
-    service.remember_recent_text(event)
+    assigned_infos = service._cache_session_upload_infos(event, upload_infos)
 
-    assert session_key not in service.recent_text_by_session
+    assert "file_id" not in upload_infos[0]
+    assert assigned_infos[0]["file_id"] == "f1"
+    assert service.list_session_upload_infos(event)[0]["file_id"] == "f1"
 
 
 @pytest.mark.asyncio
@@ -1815,10 +1849,8 @@ async def test_incoming_message_service_buffers_supported_file_and_stops_event()
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = False
-    remember_recent_text = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
-        remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
     )
     event = _build_event()
@@ -1827,7 +1859,6 @@ async def test_incoming_message_service_buffers_supported_file_and_stops_event()
 
     await service.handle_file_message(event)
 
-    remember_recent_text.assert_not_called()
     message_buffer.add_message.assert_awaited_once_with(event)
     event.stop_event.assert_called_once()
 
@@ -1837,10 +1868,8 @@ async def test_incoming_message_service_ignores_non_file_messages_during_buffer(
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = True
-    remember_recent_text = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
-        remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
     )
     event = _build_event()
@@ -1849,7 +1878,6 @@ async def test_incoming_message_service_ignores_non_file_messages_during_buffer(
 
     await service.handle_file_message(event)
 
-    remember_recent_text.assert_not_called()
     message_buffer.is_buffering.assert_not_called()
     message_buffer.add_message.assert_not_awaited()
     event.stop_event.assert_not_called()
@@ -1860,10 +1888,8 @@ async def test_incoming_message_service_does_not_buffer_plain_text_while_file_wa
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = True
-    remember_recent_text = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
-        remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
     )
     event = _build_event()
@@ -1872,7 +1898,6 @@ async def test_incoming_message_service_does_not_buffer_plain_text_while_file_wa
 
     await service.handle_file_message(event)
 
-    remember_recent_text.assert_not_called()
     message_buffer.is_buffering.assert_not_called()
     message_buffer.add_message.assert_not_awaited()
     event.stop_event.assert_not_called()
