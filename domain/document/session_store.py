@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
@@ -26,6 +27,7 @@ from ...document_core.models.document import (
     DocumentMetadata,
     DocumentModel,
     DocumentStatus,
+    DocumentSummaryCardDefaults,
 )
 from .contracts import (
     AddBlocksRequest,
@@ -66,6 +68,10 @@ BLOCK_TYPE_TABLE = "table"
 BLOCK_TYPE_SUMMARY_CARD = "summary_card"
 BLOCK_TYPE_PAGE_BREAK = "page_break"
 MAX_HEADING_LENGTH_FOR_TABLE_TITLE = 24
+SummaryCardDefaultsResolver = Callable[
+    [DocumentSummaryCardDefaults | None],
+    dict[str, object | None],
+]
 
 
 def _default_workspace_dir() -> Path:
@@ -88,7 +94,9 @@ class DocumentSessionStore:
         max_documents: int | None = 256,
         ttl: timedelta | None = None,
         normalize_block_hooks: list[BlockNormalizeHook] | None = None,
-        summary_card_defaults_resolver=summary_card_defaults_from_config,
+        summary_card_defaults_resolver: SummaryCardDefaultsResolver = (
+            summary_card_defaults_from_config
+        ),
     ) -> None:
         self._lock = RLock()
         self._documents: dict[str, DocumentModel] = {}
@@ -593,7 +601,8 @@ class DocumentSessionStore:
     @staticmethod
     def _build_prompt_summary_locked(document: DocumentModel) -> dict[str, object]:
         latest_block_types = [
-            getattr(block, "type", "unknown") for block in document.blocks[-3:]
+            DocumentSessionStore._summarize_runtime_block_type(block)
+            for block in document.blocks[-3:]
         ]
         next_allowed_actions: list[str]
         if document.status == DocumentStatus.DRAFT:
@@ -610,6 +619,30 @@ class DocumentSessionStore:
             "latest_block_types": latest_block_types,
             "next_allowed_actions": next_allowed_actions,
         }
+
+    @staticmethod
+    def _summarize_runtime_block_type(block: object) -> str:
+        if isinstance(block, HeadingBlock):
+            return BLOCK_TYPE_HEADING
+        if isinstance(block, ParagraphBlock):
+            return BLOCK_TYPE_PARAGRAPH
+        if isinstance(block, ListBlock):
+            return BLOCK_TYPE_LIST
+        if isinstance(block, TableBlock):
+            return BLOCK_TYPE_TABLE
+        if isinstance(block, SummaryCardBlock):
+            return BLOCK_TYPE_SUMMARY_CARD
+        if isinstance(block, PageBreakBlock):
+            return BLOCK_TYPE_PAGE_BREAK
+        if isinstance(block, SectionBreakBlock):
+            return "section_break"
+        if isinstance(block, TocBlock):
+            return "toc"
+        if isinstance(block, GroupBlock):
+            return "group"
+        if isinstance(block, ColumnsBlock):
+            return "columns"
+        return getattr(block, "type", "unknown")
 
     def prepare_export_path(
         self, request: ExportDocumentRequest

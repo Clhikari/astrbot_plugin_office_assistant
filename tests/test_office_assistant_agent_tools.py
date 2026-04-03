@@ -3775,6 +3775,7 @@ def test_document_session_store_builds_prompt_summary_for_later_states():
     document = store.create_document(CreateDocumentRequest(title="经营复盘"))
 
     draft_summary = store.build_prompt_summary(document.document_id)
+    assert draft_summary["latest_block_types"] == []
     assert draft_summary["next_allowed_actions"] == [
         "add_blocks",
         "finalize_document",
