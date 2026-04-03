@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
 from .registry import get_document_tool_specs
 
+if TYPE_CHECKING:
+    from ..domain.document.session_store import DocumentSessionStore
+
 
 def register_document_tools_from_registry(
     server: FastMCP,
-    store: Any,
+    store: DocumentSessionStore,
     *,
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,

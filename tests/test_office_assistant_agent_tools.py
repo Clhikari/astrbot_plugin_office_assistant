@@ -3,6 +3,7 @@ import struct
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -51,6 +52,9 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
+)
+from astrbot_plugin_office_assistant.tools.mcp_adapter import (
+    register_document_tools_from_registry,
 )
 from astrbot_plugin_office_assistant.tools.registry import (
     get_document_tool_specs,
@@ -307,6 +311,81 @@ def test_document_tool_registry_keeps_document_tool_order():
         "finalize_document",
         "export_document",
     ]
+
+
+def test_mcp_document_tool_registration_matches_registry_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registered_names: list[str] = []
+
+    def _make_registrar(name: str):
+        def _record(*_args, **_kwargs):
+            registered_names.append(name)
+
+        return _record
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_document.register_create_document_tool",
+        _make_registrar("create_document"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        _make_registrar("add_blocks"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
+        _make_registrar("finalize_document"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_document.register_export_document_tool",
+        _make_registrar("export_document"),
+    )
+
+    register_document_tools_from_registry(
+        server=MagicMock(),
+        store=DocumentSessionStore(),
+    )
+
+    assert registered_names == [spec.name for spec in get_document_tool_specs()]
+
+
+def test_mcp_document_tool_registration_passes_export_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    export_call_kwargs: dict[str, object] = {}
+    before_hooks = [MagicMock()]
+    after_hooks = [MagicMock()]
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_document.register_create_document_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _record_export(*_args, **kwargs):
+        export_call_kwargs.update(kwargs)
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_document.register_export_document_tool",
+        _record_export,
+    )
+
+    register_document_tools_from_registry(
+        server=MagicMock(),
+        store=DocumentSessionStore(),
+        before_export_hooks=before_hooks,
+        after_export_hooks=after_hooks,
+    )
+
+    assert export_call_kwargs["before_export_hooks"] is before_hooks
+    assert export_call_kwargs["after_export_hooks"] is after_hooks
 
 
 def test_create_document_tool_schema_exposes_document_style():

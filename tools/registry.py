@@ -3,27 +3,33 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
+from mcp.server.fastmcp import FastMCP
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..domain.document.session_store import DocumentSessionStore
+
+
+class AstrBotDocumentTool(Protocol):
+    name: str
 
 AfterExportCallback = Callable[
     [ContextWrapper[AstrAgentContext], str], Awaitable[str | None]
 ]
 AstrBotToolFactory = Callable[
     [
-        Any,
+        DocumentSessionStore,
         list[BeforeExportHook],
         list[AfterExportHook],
         AfterExportCallback | None,
     ],
-    Any,
+    AstrBotDocumentTool,
 ]
 McpToolRegistrar = Callable[
-    [Any, Any, list[BeforeExportHook], list[AfterExportHook]],
+    [FastMCP, DocumentSessionStore, list[BeforeExportHook], list[AfterExportHook]],
     None,
 ]
 
@@ -36,44 +42,44 @@ class DocumentToolSpec:
 
 
 def _build_create_document_tool(
-    store: Any,
+    store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
     _after_export_hooks: list[AfterExportHook],
     _after_export: AfterExportCallback | None,
-) -> Any:
+) -> AstrBotDocumentTool:
     from ..agent_tools.document_tools import CreateDocumentTool
 
     return CreateDocumentTool(store=store)
 
 
 def _build_add_blocks_tool(
-    store: Any,
+    store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
     _after_export_hooks: list[AfterExportHook],
     _after_export: AfterExportCallback | None,
-) -> Any:
+) -> AstrBotDocumentTool:
     from ..agent_tools.document_tools import AddBlocksTool
 
     return AddBlocksTool(store=store)
 
 
 def _build_finalize_document_tool(
-    store: Any,
+    store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
     _after_export_hooks: list[AfterExportHook],
     _after_export: AfterExportCallback | None,
-) -> Any:
+) -> AstrBotDocumentTool:
     from ..agent_tools.document_tools import FinalizeDocumentTool
 
     return FinalizeDocumentTool(store=store)
 
 
 def _build_export_document_tool(
-    store: Any,
+    store: DocumentSessionStore,
     before_export_hooks: list[BeforeExportHook],
     after_export_hooks: list[AfterExportHook],
     after_export: AfterExportCallback | None,
-) -> Any:
+) -> AstrBotDocumentTool:
     from ..agent_tools.document_tools import ExportDocumentTool
 
     return ExportDocumentTool(
@@ -85,8 +91,8 @@ def _build_export_document_tool(
 
 
 def _register_create_document_tool(
-    server: Any,
-    store: Any,
+    server: FastMCP,
+    store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
     _after_export_hooks: list[AfterExportHook],
 ) -> None:
@@ -96,8 +102,8 @@ def _register_create_document_tool(
 
 
 def _register_add_blocks_tool(
-    server: Any,
-    store: Any,
+    server: FastMCP,
+    store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
     _after_export_hooks: list[AfterExportHook],
 ) -> None:
@@ -107,8 +113,8 @@ def _register_add_blocks_tool(
 
 
 def _register_finalize_document_tool(
-    server: Any,
-    store: Any,
+    server: FastMCP,
+    store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
     _after_export_hooks: list[AfterExportHook],
 ) -> None:
@@ -118,8 +124,8 @@ def _register_finalize_document_tool(
 
 
 def _register_export_document_tool(
-    server: Any,
-    store: Any,
+    server: FastMCP,
+    store: DocumentSessionStore,
     before_export_hooks: list[BeforeExportHook],
     after_export_hooks: list[AfterExportHook],
 ) -> None:
@@ -158,7 +164,7 @@ def get_document_tool_specs() -> tuple[DocumentToolSpec, ...]:
     )
 
 
-def build_document_store(workspace_dir: Path | None = None) -> Any:
+def build_document_store(workspace_dir: Path | None = None) -> DocumentSessionStore:
     from ..domain.document.session_store import DocumentSessionStore
 
     return DocumentSessionStore(workspace_dir=workspace_dir)
