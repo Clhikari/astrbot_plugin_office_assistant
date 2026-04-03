@@ -3,13 +3,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from inspect import isawaitable
-from typing import Any
+from typing import Any, TypeVar
+
+from .contracts import BlockInput
 
 
 @dataclass(slots=True)
 class BlockNormalizationContext:
     document: Any
-    incoming_blocks: list[Any]
+    incoming_blocks: list[BlockInput]
     source: str
 
 
@@ -27,7 +29,9 @@ class AfterExportContext:
     source: str
 
 
-BlockNormalizeHook = Callable[[BlockNormalizationContext], list[Any] | None]
+BlockNormalizeHook = Callable[
+    [BlockNormalizationContext], Sequence[BlockInput] | None
+]
 BeforeExportHook = Callable[
     [ExportPreparationContext],
     ExportPreparationContext | None | Awaitable[ExportPreparationContext | None],
@@ -37,11 +41,13 @@ AfterExportHook = Callable[
     AfterExportContext | None | Awaitable[AfterExportContext | None],
 ]
 
+HookContextT = TypeVar("HookContextT")
+
 
 def run_block_normalize_hooks(
     hooks: Sequence[BlockNormalizeHook],
     context: BlockNormalizationContext,
-) -> list[Any]:
+) -> list[BlockInput]:
     blocks = list(context.incoming_blocks)
     for hook in hooks:
         result = hook(
@@ -60,20 +66,20 @@ async def run_before_export_hooks(
     hooks: Sequence[BeforeExportHook],
     context: ExportPreparationContext,
 ) -> ExportPreparationContext:
-    current = context
-    for hook in hooks:
-        result = hook(current)
-        if isawaitable(result):
-            result = await result
-        if result is not None:
-            current = result
-    return current
+    return await _run_async_hooks(hooks, context)
 
 
 async def run_after_export_hooks(
     hooks: Sequence[AfterExportHook],
     context: AfterExportContext,
 ) -> AfterExportContext:
+    return await _run_async_hooks(hooks, context)
+
+
+async def _run_async_hooks(
+    hooks: Sequence[Callable[[HookContextT], HookContextT | None | Awaitable[HookContextT | None]]],
+    context: HookContextT,
+) -> HookContextT:
     current = context
     for hook in hooks:
         result = hook(current)

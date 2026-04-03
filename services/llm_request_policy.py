@@ -37,6 +37,7 @@ class LLMRequestPolicy:
     @dataclass(slots=True)
     class ExposureDecision:
         explicit_tool_name: str | None
+        has_permission: bool
         can_process_upload: bool
         should_expose: bool
 
@@ -209,6 +210,7 @@ class LLMRequestPolicy:
         )
         return self.ExposureDecision(
             explicit_tool_name=explicit_tool_name,
+            has_permission=has_permission,
             can_process_upload=can_process_upload,
             should_expose=should_expose,
         )
@@ -235,7 +237,7 @@ class LLMRequestPolicy:
             return
 
         if not decision.should_expose:
-            if not self._check_permission(event):
+            if not decision.has_permission:
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 无文件权限，已隐藏文件工具"
                 )

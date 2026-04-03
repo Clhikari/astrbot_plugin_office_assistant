@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
-from importlib import import_module
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -9,9 +9,11 @@ from uuid import uuid4
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+from ...document_core.macros import summary_card_defaults_from_config
 from ...document_core.models.blocks import (
     ColumnBlock,
     ColumnsBlock,
+    DocumentBlock,
     GroupBlock,
     HeadingBlock,
     ListBlock,
@@ -26,6 +28,7 @@ from ...document_core.models.document import (
     DocumentMetadata,
     DocumentModel,
     DocumentStatus,
+    DocumentSummaryCardDefaults,
 )
 from .contracts import (
     AddBlocksRequest,
@@ -36,15 +39,16 @@ from .contracts import (
     AddSectionBundleRequest,
     AddSummaryCardRequest,
     AddTableRequest,
+    BlockInput,
     BlockColumnsInput,
     BlockGroupInput,
     BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
+    SectionBreakInput,
     SectionCardInput,
     SectionListInput,
-    SectionBreakInput,
     SectionPageBreakInput,
     SectionParagraphInput,
     SectionTableInput,
@@ -66,6 +70,11 @@ BLOCK_TYPE_TABLE = "table"
 BLOCK_TYPE_SUMMARY_CARD = "summary_card"
 BLOCK_TYPE_PAGE_BREAK = "page_break"
 MAX_HEADING_LENGTH_FOR_TABLE_TITLE = 24
+SummaryCardDefaultsResolver = Callable[
+    [DocumentSummaryCardDefaults | None],
+    dict[str, object | None],
+]
+RuntimeBlock = DocumentBlock
 
 
 def _default_workspace_dir() -> Path:
@@ -80,13 +89,6 @@ def _is_within_workspace(path: Path, workspace_dir: Path) -> bool:
         return False
 
 
-def _resolve_summary_card_defaults_from_config():
-    legacy_module = import_module(
-        "astrbot_plugin_office_assistant.mcp_server.session_store"
-    )
-    return getattr(legacy_module, "summary_card_defaults_from_config")
-
-
 class DocumentSessionStore:
     def __init__(
         self,
@@ -94,7 +96,10 @@ class DocumentSessionStore:
         *,
         max_documents: int | None = 256,
         ttl: timedelta | None = None,
-        normalize_block_hooks: list[BlockNormalizeHook] | None = None,
+        normalize_block_hooks: Sequence[BlockNormalizeHook] | None = None,
+        summary_card_defaults_resolver: SummaryCardDefaultsResolver = (
+            summary_card_defaults_from_config
+        ),
     ) -> None:
         self._lock = RLock()
         self._documents: dict[str, DocumentModel] = {}
@@ -102,6 +107,7 @@ class DocumentSessionStore:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self._max_documents = max_documents
         self._ttl = ttl
+        self._summary_card_defaults_resolver = summary_card_defaults_resolver
         self._normalize_block_hooks = normalize_block_hooks or [
             self._drop_duplicate_document_title_headings,
             self._move_landscape_intro_paragraphs_before_section_break,
@@ -178,8 +184,10 @@ class DocumentSessionStore:
             self._append_blocks_locked(document, request.blocks)
             return document
 
-    def _append_blocks_locked(self, document: DocumentModel, blocks: list) -> None:
-        normalized_blocks = run_block_normalize_hooks(
+    def _append_blocks_locked(
+        self, document: DocumentModel, blocks: list[BlockInput]
+    ) -> None:
+        normalized_blocks: list[BlockInput] = run_block_normalize_hooks(
             self._normalize_block_hooks,
             BlockNormalizationContext(
                 document=document,
@@ -194,8 +202,8 @@ class DocumentSessionStore:
     @staticmethod
     def _drop_duplicate_document_title_headings(
         context: BlockNormalizationContext,
-    ) -> list:
-        normalized: list = []
+    ) -> list[BlockInput]:
+        normalized: list[BlockInput] = []
         normalized_document_title = context.document.metadata.title.strip()
         for current in context.incoming_blocks:
             current_text = (
@@ -214,8 +222,8 @@ class DocumentSessionStore:
     @staticmethod
     def _move_landscape_intro_paragraphs_before_section_break(
         context: BlockNormalizationContext,
-    ) -> list:
-        normalized: list = []
+    ) -> list[BlockInput]:
+        normalized: list[BlockInput] = []
         index = 0
         blocks = context.incoming_blocks
 
@@ -262,8 +270,8 @@ class DocumentSessionStore:
     @staticmethod
     def _promote_heading_before_table_to_caption(
         context: BlockNormalizationContext,
-    ) -> list:
-        normalized: list = []
+    ) -> list[BlockInput]:
+        normalized: list[BlockInput] = []
         index = 0
         blocks = context.incoming_blocks
         while index < len(blocks):
@@ -311,7 +319,11 @@ class DocumentSessionStore:
 
         return normalized
 
-    def _build_runtime_block(self, block, document: DocumentModel):
+    def _build_runtime_block(
+        self,
+        block: BlockInput,
+        document: DocumentModel,
+    ) -> RuntimeBlock:
         if isinstance(block, BlockHeadingInput):
             return HeadingBlock(
                 text=block.text,
@@ -410,7 +422,7 @@ class DocumentSessionStore:
         document_style = getattr(document.metadata, "document_style", None)
         summary_card_config = getattr(document_style, "summary_card_defaults", None)
         try:
-            summary_card_defaults = _resolve_summary_card_defaults_from_config()(
+            summary_card_defaults = self._summary_card_defaults_resolver(
                 summary_card_config
             )
         except Exception:
@@ -597,7 +609,10 @@ class DocumentSessionStore:
 
     @staticmethod
     def _build_prompt_summary_locked(document: DocumentModel) -> dict[str, object]:
-        latest_block_types = [block.type for block in document.blocks[-3:]]
+        latest_block_types = [
+            DocumentSessionStore._summarize_runtime_block_type(block)
+            for block in document.blocks[-3:]
+        ]
         next_allowed_actions: list[str]
         if document.status == DocumentStatus.DRAFT:
             next_allowed_actions = ["add_blocks", "finalize_document"]
@@ -613,6 +628,30 @@ class DocumentSessionStore:
             "latest_block_types": latest_block_types,
             "next_allowed_actions": next_allowed_actions,
         }
+
+    @staticmethod
+    def _summarize_runtime_block_type(block: object) -> str:
+        if isinstance(block, HeadingBlock):
+            return BLOCK_TYPE_HEADING
+        if isinstance(block, ParagraphBlock):
+            return BLOCK_TYPE_PARAGRAPH
+        if isinstance(block, ListBlock):
+            return BLOCK_TYPE_LIST
+        if isinstance(block, TableBlock):
+            return BLOCK_TYPE_TABLE
+        if isinstance(block, SummaryCardBlock):
+            return BLOCK_TYPE_SUMMARY_CARD
+        if isinstance(block, PageBreakBlock):
+            return BLOCK_TYPE_PAGE_BREAK
+        if isinstance(block, SectionBreakBlock):
+            return "section_break"
+        if isinstance(block, TocBlock):
+            return "toc"
+        if isinstance(block, GroupBlock):
+            return "group"
+        if isinstance(block, ColumnsBlock):
+            return "columns"
+        return getattr(block, "type", "unknown")
 
     def prepare_export_path(
         self, request: ExportDocumentRequest
