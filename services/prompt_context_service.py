@@ -16,6 +16,13 @@ from ..prompts.static import (
 )
 from .upload_types import UploadInfo
 
+SECTION_STATIC_ACCESS = "static_access"
+SECTION_STATIC_DOCUMENT_TOOLS = "static_document_tools"
+SECTION_STATIC_DOCUMENT_TOOLS_DETAIL = "static_document_tools_detail"
+SECTION_SCENE_UPLOADED_FILE = "scene_uploaded_file"
+SECTION_DYNAMIC_UPLOAD_SUMMARY = "dynamic_upload_summary"
+SECTION_DYNAMIC_DOCUMENT_SUMMARY = "dynamic_document_summary"
+
 
 @dataclass(frozen=True, slots=True)
 class PromptSection:
@@ -127,7 +134,7 @@ class PromptContextService:
 
     def build_tools_denied_section(self) -> PromptSection:
         return PromptSection(
-            name="static_access",
+            name=SECTION_STATIC_ACCESS,
             content=build_tools_denied_notice(),
         )
 
@@ -136,13 +143,13 @@ class PromptContextService:
 
     def build_document_tool_guide_section(self) -> PromptSection:
         return PromptSection(
-            name="static_document_tools",
+            name=SECTION_STATIC_DOCUMENT_TOOLS,
             content=build_document_tools_core_notice(),
         )
 
     def build_document_tool_detail_section(self) -> PromptSection:
         return PromptSection(
-            name="static_document_tools_detail",
+            name=SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
             content=build_document_tools_detail_notice(),
         )
 
@@ -169,7 +176,7 @@ class PromptContextService:
         block_count = int(summary.get("block_count") or 0)
         document_id = str(summary.get("document_id") or "").strip()
         return PromptSection(
-            name="dynamic_document_summary",
+            name=SECTION_DYNAMIC_DOCUMENT_SUMMARY,
             content=(
                 "\n[System Notice] 当前文档状态摘要\n"
                 f"- document_id: {document_id}\n"
@@ -198,7 +205,7 @@ class PromptContextService:
         source_path: str,
     ) -> PromptSection:
         return PromptSection(
-            name="dynamic_upload_summary",
+            name=SECTION_DYNAMIC_UPLOAD_SUMMARY,
             content=build_uploaded_file_notice(
                 type_desc=type_desc,
                 original_name=original_name,
@@ -215,7 +222,7 @@ class PromptContextService:
         file_count: int,
     ) -> PromptSection:
         return PromptSection(
-            name="scene_uploaded_file",
+            name=SECTION_SCENE_UPLOADED_FILE,
             content=build_uploaded_file_scene_notice(
                 file_count=file_count,
                 allow_external_input_files=self._allow_external_input_files,
@@ -247,7 +254,7 @@ class PromptContextService:
         upload_infos: list[UploadInfo],
     ) -> PromptSection:
         return PromptSection(
-            name="dynamic_upload_summary",
+            name=SECTION_DYNAMIC_UPLOAD_SUMMARY,
             content=build_uploaded_file_summary_notice(
                 upload_infos=upload_infos,
                 allow_external_input_files=self._allow_external_input_files,

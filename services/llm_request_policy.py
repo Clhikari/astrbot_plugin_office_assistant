@@ -247,6 +247,7 @@ class LLMRequestPolicy:
                 )
             self._remove_file_tools(req)
             self._append_tools_denied_notice(req)
+            return
 
         if decision.should_expose and req.func_tool:
             for tool in self._document_toolset.tools:
