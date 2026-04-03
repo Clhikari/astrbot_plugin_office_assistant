@@ -781,6 +781,49 @@ def test_llm_request_policy_requires_hook_pairs():
 
 
 @pytest.mark.asyncio
+async def test_llm_request_policy_returns_after_tools_denied_notice():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/tmp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: False,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    event.message_obj.message = [
+        Comp.File(name="report.docx", file="/tmp/report.docx"),
+    ]
+    req = ProviderRequest(
+        prompt="根据上传文件整理一下",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file"), _tool("existing_tool")]),
+    )
+
+    await policy.apply(event, req)
+
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "已收到上传文件" not in req.system_prompt
+    assert "existing_tool" in set(req.func_tool.names())
+    assert "read_file" not in set(req.func_tool.names())
+
+
+@pytest.mark.asyncio
 async def test_runtime_bundle_does_not_expose_recent_text_cache():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
