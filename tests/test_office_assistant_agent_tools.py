@@ -22,6 +22,9 @@ from astrbot_plugin_office_assistant.document_core.builders.word_builder import 
 from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
     build_summary_card_group,
 )
+from astrbot_plugin_office_assistant.domain.document.session_store import (
+    DocumentSessionStore,
+)
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
     ColumnBlock,
@@ -35,12 +38,13 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     TableBlock,
     TocBlock,
 )
-from astrbot_plugin_office_assistant.mcp_server.schemas import (
+from astrbot_plugin_office_assistant.domain.document.contracts import (
     AddBlocksRequest,
     AddTableRequest,
     BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
+    FinalizeDocumentRequest,
     normalize_raw_block_payloads,
     SectionParagraphInput,
     SectionTableInput,
@@ -48,8 +52,8 @@ from astrbot_plugin_office_assistant.mcp_server.schemas import (
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
 )
-from astrbot_plugin_office_assistant.mcp_server.session_store import (
-    DocumentSessionStore,
+from astrbot_plugin_office_assistant.tools.registry import (
+    get_document_tool_specs,
 )
 from pydantic import ValidationError
 
@@ -294,6 +298,15 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
         / "documents"
     )
     assert stores[0].workspace_dir == expected_workspace
+
+
+def test_document_tool_registry_keeps_document_tool_order():
+    assert [spec.name for spec in get_document_tool_specs()] == [
+        "create_document",
+        "add_blocks",
+        "finalize_document",
+        "export_document",
+    ]
 
 
 def test_create_document_tool_schema_exposes_document_style():
@@ -3452,6 +3465,44 @@ def test_document_session_store_tolerates_summary_card_default_resolution_errors
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
 
 
+def test_domain_document_session_store_uses_legacy_summary_card_patch_point(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from astrbot_plugin_office_assistant.domain.document.session_store import (
+        DocumentSessionStore as DomainDocumentSessionStore,
+    )
+
+    store = DomainDocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Domain Summary"))
+
+    def _raise_defaults_error(_config):
+        raise RuntimeError("bad defaults")
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.session_store.summary_card_defaults_from_config",
+        _raise_defaults_error,
+    )
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    assert updated.blocks[0].blocks[0].text == "Conclusion"
+    assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
 def test_document_session_store_runs_internal_normalize_hooks():
     def _inject_heading(_context):
         return [
@@ -3710,6 +3761,58 @@ def test_document_session_store_add_table_preserves_grouped_headers():
     assert table.header_groups[1].span == 1
     assert table.header_fill == "1F4E79"
     assert table.border_style == "strong"
+
+
+def test_document_session_store_builds_prompt_summary_for_draft_documents():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="季度复盘"))
+
+    store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {"type": "heading", "text": "概览", "level": 1},
+                {"type": "paragraph", "text": "营收稳定增长。"},
+                {
+                    "type": "table",
+                    "headers": ["区域", "完成率"],
+                    "rows": [["华东", "98%"]],
+                },
+            ],
+        )
+    )
+
+    summary = store.build_prompt_summary(document.document_id)
+
+    assert summary == {
+        "document_id": document.document_id,
+        "title": "季度复盘",
+        "status": "draft",
+        "block_count": 3,
+        "latest_block_types": ["heading", "paragraph", "table"],
+        "next_allowed_actions": ["add_blocks", "finalize_document"],
+    }
+
+
+def test_document_session_store_builds_prompt_summary_for_later_states():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="经营复盘"))
+
+    draft_summary = store.build_prompt_summary(document.document_id)
+    assert draft_summary["next_allowed_actions"] == [
+        "add_blocks",
+        "finalize_document",
+    ]
+
+    store.finalize_document(FinalizeDocumentRequest(document_id=document.document_id))
+    finalized_summary = store.build_prompt_summary(document.document_id)
+    assert finalized_summary["status"] == "finalized"
+    assert finalized_summary["next_allowed_actions"] == ["export_document"]
+
+    store.complete_export(document.document_id)
+    exported_summary = store.build_prompt_summary(document.document_id)
+    assert exported_summary["status"] == "exported"
+    assert exported_summary["next_allowed_actions"] == []
 
 
 @pytest.mark.asyncio

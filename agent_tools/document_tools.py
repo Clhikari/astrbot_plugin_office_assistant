@@ -9,9 +9,10 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..document_core.builders.word_builder import WordDocumentBuilder
-from ..export_pipeline import export_document_via_pipeline
-from ..internal_hooks import AfterExportHook, BeforeExportHook
-from ..mcp_server.schemas import (
+from ..domain.document.export_pipeline import export_document_via_pipeline
+from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..domain.document.session_store import DocumentSessionStore
+from ..domain.document.contracts import (
     AddBlocksRequest,
     CreateDocumentRequest,
     ExportDocumentRequest,
@@ -22,7 +23,6 @@ from ..mcp_server.schemas import (
     build_header_footer_schema,
     normalize_raw_block_payloads,
 )
-from ..mcp_server.session_store import DocumentSessionStore
 
 
 def _dump_result(result: ToolResult) -> str:
