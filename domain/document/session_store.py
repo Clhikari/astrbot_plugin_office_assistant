@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
@@ -96,7 +96,7 @@ class DocumentSessionStore:
         *,
         max_documents: int | None = 256,
         ttl: timedelta | None = None,
-        normalize_block_hooks: list[BlockNormalizeHook] | None = None,
+        normalize_block_hooks: Sequence[BlockNormalizeHook] | None = None,
         summary_card_defaults_resolver: SummaryCardDefaultsResolver = (
             summary_card_defaults_from_config
         ),
@@ -184,8 +184,10 @@ class DocumentSessionStore:
             self._append_blocks_locked(document, request.blocks)
             return document
 
-    def _append_blocks_locked(self, document: DocumentModel, blocks: list) -> None:
-        normalized_blocks = run_block_normalize_hooks(
+    def _append_blocks_locked(
+        self, document: DocumentModel, blocks: list[BlockInput]
+    ) -> None:
+        normalized_blocks: list[BlockInput] = run_block_normalize_hooks(
             self._normalize_block_hooks,
             BlockNormalizationContext(
                 document=document,
@@ -200,8 +202,8 @@ class DocumentSessionStore:
     @staticmethod
     def _drop_duplicate_document_title_headings(
         context: BlockNormalizationContext,
-    ) -> list:
-        normalized: list = []
+    ) -> list[BlockInput]:
+        normalized: list[BlockInput] = []
         normalized_document_title = context.document.metadata.title.strip()
         for current in context.incoming_blocks:
             current_text = (
@@ -220,8 +222,8 @@ class DocumentSessionStore:
     @staticmethod
     def _move_landscape_intro_paragraphs_before_section_break(
         context: BlockNormalizationContext,
-    ) -> list:
-        normalized: list = []
+    ) -> list[BlockInput]:
+        normalized: list[BlockInput] = []
         index = 0
         blocks = context.incoming_blocks
 
@@ -268,8 +270,8 @@ class DocumentSessionStore:
     @staticmethod
     def _promote_heading_before_table_to_caption(
         context: BlockNormalizationContext,
-    ) -> list:
-        normalized: list = []
+    ) -> list[BlockInput]:
+        normalized: list[BlockInput] = []
         index = 0
         blocks = context.incoming_blocks
         while index < len(blocks):

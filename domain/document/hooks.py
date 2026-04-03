@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from inspect import isawaitable
 from typing import Any, TypeVar
 
+from .contracts import BlockInput
+
 
 @dataclass(slots=True)
 class BlockNormalizationContext:
     document: Any
-    incoming_blocks: list[Any]
+    incoming_blocks: list[BlockInput]
     source: str
 
 
@@ -27,7 +29,9 @@ class AfterExportContext:
     source: str
 
 
-BlockNormalizeHook = Callable[[BlockNormalizationContext], list[Any] | None]
+BlockNormalizeHook = Callable[
+    [BlockNormalizationContext], Sequence[BlockInput] | None
+]
 BeforeExportHook = Callable[
     [ExportPreparationContext],
     ExportPreparationContext | None | Awaitable[ExportPreparationContext | None],
@@ -43,7 +47,7 @@ HookContextT = TypeVar("HookContextT")
 def run_block_normalize_hooks(
     hooks: Sequence[BlockNormalizeHook],
     context: BlockNormalizationContext,
-) -> list[Any]:
+) -> list[BlockInput]:
     blocks = list(context.incoming_blocks)
     for hook in hooks:
         result = hook(
