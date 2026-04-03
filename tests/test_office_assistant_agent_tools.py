@@ -22,9 +22,6 @@ from astrbot_plugin_office_assistant.document_core.builders.word_builder import 
 from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
     build_summary_card_group,
 )
-from astrbot_plugin_office_assistant.domain.document.session_store import (
-    DocumentSessionStore,
-)
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
     ColumnBlock,
@@ -45,9 +42,12 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
-    normalize_raw_block_payloads,
     SectionParagraphInput,
     SectionTableInput,
+    normalize_raw_block_payloads,
+)
+from astrbot_plugin_office_assistant.domain.document.session_store import (
+    DocumentSessionStore,
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
@@ -3419,19 +3419,12 @@ def test_document_session_store_applies_summary_card_defaults():
     assert list_block.layout.spacing_after == pytest.approx(8)
 
 
-def test_document_session_store_tolerates_summary_card_default_resolution_errors(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    store = DocumentSessionStore()
-    document = store.create_document(CreateDocumentRequest(title="Summary Fallback"))
-
+def test_document_session_store_tolerates_summary_card_default_resolution_errors():
     def _raise_defaults_error(_config):
         raise RuntimeError("bad defaults")
 
-    monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.mcp_server.session_store.summary_card_defaults_from_config",
-        _raise_defaults_error,
-    )
+    store = DocumentSessionStore(summary_card_defaults_resolver=_raise_defaults_error)
+    document = store.create_document(CreateDocumentRequest(title="Summary Fallback"))
 
     updated = store.add_blocks(
         AddBlocksRequest(
@@ -3453,23 +3446,18 @@ def test_document_session_store_tolerates_summary_card_default_resolution_errors
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
 
 
-def test_domain_document_session_store_uses_legacy_summary_card_patch_point(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_domain_document_session_store_accepts_summary_card_defaults_resolver():
     from astrbot_plugin_office_assistant.domain.document.session_store import (
         DocumentSessionStore as DomainDocumentSessionStore,
     )
 
-    store = DomainDocumentSessionStore()
-    document = store.create_document(CreateDocumentRequest(title="Domain Summary"))
-
     def _raise_defaults_error(_config):
         raise RuntimeError("bad defaults")
 
-    monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.mcp_server.session_store.summary_card_defaults_from_config",
-        _raise_defaults_error,
+    store = DomainDocumentSessionStore(
+        summary_card_defaults_resolver=_raise_defaults_error
     )
+    document = store.create_document(CreateDocumentRequest(title="Domain Summary"))
 
     updated = store.add_blocks(
         AddBlocksRequest(
@@ -3801,6 +3789,20 @@ def test_document_session_store_builds_prompt_summary_for_later_states():
     exported_summary = store.build_prompt_summary(document.document_id)
     assert exported_summary["status"] == "exported"
     assert exported_summary["next_allowed_actions"] == []
+
+
+def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="兼容块测试"))
+
+    class _UnknownBlock:
+        pass
+
+    document.blocks.extend([_UnknownBlock()])
+
+    summary = DocumentSessionStore._build_prompt_summary_locked(document)
+
+    assert summary["latest_block_types"] == ["unknown"]
 
 
 @pytest.mark.asyncio

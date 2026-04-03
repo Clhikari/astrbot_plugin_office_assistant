@@ -36,6 +36,7 @@ SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
 SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
+DEFAULT_DOCX_FILENAME = "document.docx"
 
 _HEADER_FOOTER_SCHEMA_PROPERTIES = {
     "header_text": {
@@ -283,7 +284,10 @@ def _looks_like_absolute_path(value: str) -> bool:
     )
 
 
-def _normalize_docx_filename(value: str, default: str = "document.docx") -> str:
+def _normalize_docx_filename(
+    value: str,
+    default: str = DEFAULT_DOCX_FILENAME,
+) -> str:
     candidate = _split_path_parts(value)[-1] if value.strip() else default
     candidate = candidate or default
     if not candidate.lower().endswith(".docx"):
@@ -315,7 +319,7 @@ class CreateDocumentRequest(BaseModel):
 
     session_id: str = ""
     title: str = ""
-    output_name: str = "document.docx"
+    output_name: str = DEFAULT_DOCX_FILENAME
     theme_name: str = "business_report"
     table_template: str = "report_grid"
     density: str = "comfortable"
@@ -777,6 +781,7 @@ class ToolResult(BaseModel):
 
 
 class ExportDocumentResult(ToolResult):
+    model_config = ConfigDict(extra="forbid")
     file_path: str = ""
 
 
