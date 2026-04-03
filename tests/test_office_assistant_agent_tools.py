@@ -56,6 +56,9 @@ from astrbot_plugin_office_assistant.mcp_server.server import (
 from astrbot_plugin_office_assistant.tools.mcp_adapter import (
     register_document_tools_from_registry,
 )
+from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
+    build_document_toolset_from_registry,
+)
 from astrbot_plugin_office_assistant.tools.registry import (
     get_document_tool_specs,
 )
@@ -310,6 +313,14 @@ def test_document_tool_registry_keeps_document_tool_order():
         "add_blocks",
         "finalize_document",
         "export_document",
+    ]
+
+
+def test_astrbot_toolset_preserves_document_tool_registry_order():
+    toolset = build_document_toolset_from_registry()
+
+    assert [tool.name for tool in toolset.tools] == [
+        spec.name for spec in get_document_tool_specs()
     ]
 
 
