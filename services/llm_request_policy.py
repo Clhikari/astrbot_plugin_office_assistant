@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -10,7 +11,6 @@ from ..constants import (
     DOC_COMMAND_TRIGGER_EVENT_KEY,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     FILE_TOOLS,
-    NOTICE_TOOLS_DENIED,
 )
 from ..internal_hooks import (
     NoticeBuildContext,
@@ -20,6 +20,7 @@ from ..internal_hooks import (
     run_notice_hooks,
     run_tool_exposure_hooks,
 )
+from .prompt_context_service import PromptContextService
 from .request_hook_service import RequestHookService
 
 
@@ -33,6 +34,12 @@ class LLMRequestPolicy:
         flags=re.DOTALL,
     )
 
+    @dataclass(slots=True)
+    class ExposureDecision:
+        explicit_tool_name: str | None
+        can_process_upload: bool
+        should_expose: bool
+
     def __init__(
         self,
         *,
@@ -42,6 +49,7 @@ class LLMRequestPolicy:
         check_permission: Callable[[AstrMessageEvent], bool],
         is_bot_mentioned: Callable[[AstrMessageEvent], bool],
         request_hook_service: RequestHookService | None = None,
+        prompt_context_service: PromptContextService | None = None,
         notice_hooks: list[NoticeBuildHook] | None = None,
         tool_exposure_hooks: list[ToolExposureHook] | None = None,
     ) -> None:
@@ -50,6 +58,11 @@ class LLMRequestPolicy:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._is_bot_mentioned = is_bot_mentioned
+        self._prompt_context_service = (
+            prompt_context_service
+            or getattr(request_hook_service, "prompt_context_service", None)
+            or PromptContextService(allow_external_input_files=False)
+        )
         explicit_hooks_provided = (
             notice_hooks is not None or tool_exposure_hooks is not None
         )
@@ -66,9 +79,11 @@ class LLMRequestPolicy:
         if explicit_hooks_provided:
             self._notice_hooks = notice_hooks
             self._tool_exposure_hooks = tool_exposure_hooks
+            self._request_hook_service = None
         else:
-            self._notice_hooks = request_hook_service.build_notice_hooks()
-            self._tool_exposure_hooks = request_hook_service.build_tool_exposure_hooks()
+            self._notice_hooks = None
+            self._tool_exposure_hooks = None
+            self._request_hook_service = request_hook_service
 
     def _detect_explicit_file_tool(self, text: str) -> str | None:
         if not text:
@@ -120,31 +135,61 @@ class LLMRequestPolicy:
     async def _run_before_expose_tools(
         self, context: ToolExposureContext
     ) -> ToolExposureContext:
+        if self._request_hook_service is not None:
+            return await self._request_hook_service.apply_tool_exposure_hooks(context)
         return await run_tool_exposure_hooks(self._tool_exposure_hooks, context)
 
     async def _run_before_build_notices(
         self, context: NoticeBuildContext
     ) -> NoticeBuildContext:
+        if self._request_hook_service is not None:
+            return await self._request_hook_service.apply_notice_hooks(context)
         return await run_notice_hooks(self._notice_hooks, context)
 
-    async def apply(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
-        is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
-        is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
+    @staticmethod
+    def _set_event_extra(
+        event: AstrMessageEvent,
+        key: str,
+        value,
+    ) -> None:
+        set_extra = getattr(event, "set_extra", None)
+        if callable(set_extra):
+            set_extra(key, value)
+
+    @staticmethod
+    def _remove_file_tools(req: ProviderRequest) -> None:
+        if req.func_tool:
+            for tool_name in FILE_TOOLS:
+                req.func_tool.remove_tool(tool_name)
+
+    def _append_tools_denied_notice(self, req: ProviderRequest) -> None:
+        denied_section = self._prompt_context_service.build_tools_denied_section()
+        ordered_names, ordered_notices = (
+            self._prompt_context_service.order_notice_sections(
+                section_names=[denied_section.name],
+                notices=[denied_section.content],
+            )
+        )
+        req.system_prompt = (req.system_prompt or "") + "".join(ordered_notices)
+        logger.debug(
+            "[文件管理] Prompt sections: %s",
+            self._prompt_context_service.build_section_trace(
+                section_names=ordered_names,
+                notices=ordered_notices,
+            ),
+        )
+
+    def _resolve_exposure_decision(
+        self,
+        event: AstrMessageEvent,
+        req: ProviderRequest,
+        *,
+        is_group: bool,
+        is_friend: bool,
+    ) -> ExposureDecision:
         explicit_tool_name = self._detect_explicit_file_tool(
             self._extract_explicit_tool_text(event, req)
         )
-        set_extra = getattr(event, "set_extra", None)
-        if callable(set_extra):
-            set_extra(EXPLICIT_FILE_TOOL_EVENT_KEY, explicit_tool_name)
-
-        if not self._is_group_feature_enabled(event):
-            if req.func_tool:
-                for tool_name in FILE_TOOLS:
-                    req.func_tool.remove_tool(tool_name)
-            req.system_prompt = (req.system_prompt or "") + NOTICE_TOOLS_DENIED
-            logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
-            return
-
         has_permission = self._check_permission(event)
         can_process_upload = has_permission or event.is_admin()
         get_extra = getattr(event, "get_extra", None)
@@ -162,9 +207,35 @@ class LLMRequestPolicy:
         should_expose = (is_friend and event.is_admin()) or (
             has_permission and meets_group_trigger
         )
+        return self.ExposureDecision(
+            explicit_tool_name=explicit_tool_name,
+            can_process_upload=can_process_upload,
+            should_expose=should_expose,
+        )
 
-        if not should_expose:
-            if not has_permission:
+    async def apply(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
+        is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
+        decision = self._resolve_exposure_decision(
+            event,
+            req,
+            is_group=is_group,
+            is_friend=is_friend,
+        )
+        self._set_event_extra(
+            event,
+            EXPLICIT_FILE_TOOL_EVENT_KEY,
+            decision.explicit_tool_name,
+        )
+
+        if not self._is_group_feature_enabled(event):
+            self._remove_file_tools(req)
+            self._append_tools_denied_notice(req)
+            logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
+            return
+
+        if not decision.should_expose:
+            if not self._check_permission(event):
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 无文件权限，已隐藏文件工具"
                 )
@@ -172,12 +243,10 @@ class LLMRequestPolicy:
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 未满足群聊触发条件，已隐藏文件工具"
                 )
-            if req.func_tool:
-                for tool_name in FILE_TOOLS:
-                    req.func_tool.remove_tool(tool_name)
-            req.system_prompt = (req.system_prompt or "") + NOTICE_TOOLS_DENIED
+            self._remove_file_tools(req)
+            self._append_tools_denied_notice(req)
 
-        if should_expose and req.func_tool:
+        if decision.should_expose and req.func_tool:
             for tool in self._document_toolset.tools:
                 req.func_tool.add_tool(tool)
 
@@ -185,9 +254,9 @@ class LLMRequestPolicy:
             ToolExposureContext(
                 event=event,
                 request=req,
-                should_expose=should_expose,
-                can_process_upload=can_process_upload,
-                explicit_tool_name=explicit_tool_name,
+                should_expose=decision.should_expose,
+                can_process_upload=decision.can_process_upload,
+                explicit_tool_name=decision.explicit_tool_name,
             )
         )
 
@@ -195,12 +264,23 @@ class LLMRequestPolicy:
             NoticeBuildContext(
                 event=event,
                 request=req,
-                should_expose=should_expose,
-                can_process_upload=can_process_upload,
-                explicit_tool_name=explicit_tool_name,
+                should_expose=decision.should_expose,
+                can_process_upload=decision.can_process_upload,
+                explicit_tool_name=decision.explicit_tool_name,
             )
         )
         if notice_context.notices:
-            req.system_prompt = (req.system_prompt or "") + "".join(
-                notice_context.notices
+            ordered_names, ordered_notices = (
+                self._prompt_context_service.order_notice_sections(
+                    section_names=notice_context.section_names,
+                    notices=notice_context.notices,
+                )
+            )
+            req.system_prompt = (req.system_prompt or "") + "".join(ordered_notices)
+            logger.debug(
+                "[文件管理] Prompt sections: %s",
+                self._prompt_context_service.build_section_trace(
+                    section_names=ordered_names,
+                    notices=ordered_notices,
+                ),
             )

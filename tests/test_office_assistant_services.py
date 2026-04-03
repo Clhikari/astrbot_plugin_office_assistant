@@ -11,12 +11,13 @@ import astrbot_plugin_office_assistant.utils as office_utils
 import mcp
 import pytest
 from astrbot_plugin_office_assistant.constants import (
-    DOC_COMMAND_TRIGGER_EVENT_KEY,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
+    DOC_COMMAND_TRIGGER_EVENT_KEY,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     OfficeType,
 )
+from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
     AccessPolicyService,
@@ -35,6 +36,9 @@ from astrbot_plugin_office_assistant.services import (
     WordReadService,
     WorkspaceService,
     build_plugin_runtime,
+)
+from astrbot_plugin_office_assistant.services.prompt_context_service import (
+    PromptContextService,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -896,6 +900,153 @@ async def test_request_hook_service_builds_default_tool_hooks():
     assert "create_document" not in tool_names
     assert "astrbot_execute_shell" not in tool_names
     assert "astrbot_execute_python" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_merges_multiple_uploaded_files_into_one_notice():
+    request = ProviderRequest(
+        prompt="根据上传文件整理内容",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event.message_obj.message = [
+        Comp.File(name="report.docx", file="report.docx"),
+        Comp.File(name="notes.txt", file="notes.txt"),
+    ]
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "type_desc": "Office文档 (Word/Excel/PPT)",
+                "is_supported": True,
+                "stored_name": "report_1.docx",
+                "source_path": "/AstrBot/data/temp/report.docx",
+            },
+            {
+                "original_name": "notes.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": "notes_1.txt",
+                "source_path": "/AstrBot/data/temp/notes.txt",
+            },
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=True,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    assert len(context.notices) == 2
+    assert "MUST 先调用 `read_file` 依次读取这些文件" in context.notices[0]
+    notice = context.notices[1]
+    assert notice.count("[System Notice] [ACTION REQUIRED] 已收到上传文件") == 1
+    assert "文件数量：2" in notice
+    assert "report.docx" in notice
+    assert "notes.txt" in notice
+    assert "report_1.docx" in notice
+    assert "notes_1.txt" in notice
+    assert context.section_names == [
+        "scene_uploaded_file",
+        "dynamic_upload_summary",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_appends_document_summary_for_existing_document():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+        get_document_prompt_summary=lambda document_id: {
+            "document_id": document_id,
+            "title": "季度经营复盘",
+            "status": "draft",
+            "block_count": 4,
+            "latest_block_types": ["heading", "table"],
+            "next_allowed_actions": ["add_blocks", "finalize_document"],
+        },
+    )
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt='继续完善 document_id="doc-1" 的内容',
+            system_prompt="base",
+            func_tool=ToolSet([_tool("create_document")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert len(context.notices) == 2
+    assert "文件工具使用指南" in context.notices[0]
+    assert "executive_brief" not in context.notices[0]
+    assert "当前文档状态摘要" in context.notices[1]
+    assert "document_id: doc-1" in context.notices[1]
+    assert "状态: draft" in context.notices[1]
+    assert "块数: 4" in context.notices[1]
+    assert "下一步: add_blocks, finalize_document" in context.notices[1]
+    assert "最近块类型" not in context.notices[1]
+    assert context.section_names == [
+        "static_document_tools",
+        "dynamic_document_summary",
+    ]
+
+
+def test_prompt_context_service_orders_notice_sections_by_stability():
+    service = PromptContextService(allow_external_input_files=False)
+
+    ordered_names, ordered_notices = service.order_notice_sections(
+        section_names=[
+            "dynamic_document_summary",
+            "scene_uploaded_file",
+            "static_document_tools",
+        ],
+        notices=[
+            "dynamic",
+            "scene",
+            "static",
+        ],
+    )
+
+    assert ordered_names == [
+        "static_document_tools",
+        "scene_uploaded_file",
+        "dynamic_document_summary",
+    ]
+    assert ordered_notices == ["static", "scene", "dynamic"]
+    trace = service.build_section_trace(
+        section_names=ordered_names,
+        notices=ordered_notices,
+    )
+    assert trace.startswith(
+        "static_document_tools, scene_uploaded_file, dynamic_document_summary"
+    )
+    assert (
+        "[len=static_document_tools:6, scene_uploaded_file:5, "
+        "dynamic_document_summary:7]" in trace
+    )
+    assert "[groups=static:6, scene:5, dynamic:7]" in trace
+    assert "[total=18]" in trace
 
 
 def test_upload_prompt_service_builds_instructional_notice_for_readable_files():

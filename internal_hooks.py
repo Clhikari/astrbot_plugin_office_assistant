@@ -14,6 +14,7 @@ class NoticeBuildContext:
     can_process_upload: bool
     explicit_tool_name: str | None
     notices: list[str] = field(default_factory=list)
+    section_names: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
