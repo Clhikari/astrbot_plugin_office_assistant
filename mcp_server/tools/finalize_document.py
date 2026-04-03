@@ -1,7 +1,11 @@
 from mcp.server.fastmcp import FastMCP
 
-from ..schemas import FinalizeDocumentRequest, ToolResult, build_document_summary
-from ..session_store import DocumentSessionStore
+from ...domain.document.session_store import DocumentSessionStore
+from ...domain.document.contracts import (
+    FinalizeDocumentRequest,
+    ToolResult,
+    build_document_summary,
+)
 
 
 def register_finalize_document_tool(
