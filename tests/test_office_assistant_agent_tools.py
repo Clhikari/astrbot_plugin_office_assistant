@@ -60,6 +60,7 @@ from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
     build_document_toolset_from_registry,
 )
 from astrbot_plugin_office_assistant.tools.registry import (
+    DocumentToolSpec,
     get_document_tool_specs,
 )
 from pydantic import ValidationError
@@ -322,6 +323,50 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
     assert [tool.name for tool in toolset.tools] == [
         spec.name for spec in get_document_tool_specs()
     ]
+
+
+def test_astrbot_toolset_passes_export_hooks_and_callback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_kwargs: dict[str, object] = {}
+    before_hooks = [MagicMock()]
+    after_hooks = [MagicMock()]
+
+    async def _after_export(_context, _path):
+        return None
+
+    base_specs = get_document_tool_specs()
+
+    def _record_export_factory(store, before_export_hooks, after_export_hooks, after_export):
+        captured_kwargs["store"] = store
+        captured_kwargs["before_export_hooks"] = before_export_hooks
+        captured_kwargs["after_export_hooks"] = after_export_hooks
+        captured_kwargs["after_export"] = after_export
+        return CreateDocumentTool(store=store, name="export_document")
+
+    patched_specs = base_specs[:-1] + (
+        DocumentToolSpec(
+            name="export_document",
+            astrbot_factory=_record_export_factory,
+            mcp_registrar=base_specs[-1].mcp_registrar,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.tools.astrbot_adapter.get_document_tool_specs",
+        lambda: patched_specs,
+    )
+
+    toolset = build_document_toolset_from_registry(
+        before_export_hooks=before_hooks,
+        after_export_hooks=after_hooks,
+        after_export=_after_export,
+    )
+
+    assert captured_kwargs["store"] is toolset.document_store
+    assert captured_kwargs["before_export_hooks"] is before_hooks
+    assert captured_kwargs["after_export_hooks"] is after_hooks
+    assert captured_kwargs["after_export"] is _after_export
 
 
 def test_mcp_document_tool_registration_matches_registry_order(

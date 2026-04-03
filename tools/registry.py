@@ -139,32 +139,33 @@ def _register_export_document_tool(
     )
 
 
+_DOCUMENT_TOOL_SPECS: tuple[DocumentToolSpec, ...] = (
+    DocumentToolSpec(
+        name="create_document",
+        astrbot_factory=_build_create_document_tool,
+        mcp_registrar=_register_create_document_tool,
+    ),
+    DocumentToolSpec(
+        name="add_blocks",
+        astrbot_factory=_build_add_blocks_tool,
+        mcp_registrar=_register_add_blocks_tool,
+    ),
+    DocumentToolSpec(
+        name="finalize_document",
+        astrbot_factory=_build_finalize_document_tool,
+        mcp_registrar=_register_finalize_document_tool,
+    ),
+    DocumentToolSpec(
+        name="export_document",
+        astrbot_factory=_build_export_document_tool,
+        mcp_registrar=_register_export_document_tool,
+    ),
+)
+
+
 def get_document_tool_specs() -> tuple[DocumentToolSpec, ...]:
-    return (
-        DocumentToolSpec(
-            name="create_document",
-            astrbot_factory=_build_create_document_tool,
-            mcp_registrar=_register_create_document_tool,
-        ),
-        DocumentToolSpec(
-            name="add_blocks",
-            astrbot_factory=_build_add_blocks_tool,
-            mcp_registrar=_register_add_blocks_tool,
-        ),
-        DocumentToolSpec(
-            name="finalize_document",
-            astrbot_factory=_build_finalize_document_tool,
-            mcp_registrar=_register_finalize_document_tool,
-        ),
-        DocumentToolSpec(
-            name="export_document",
-            astrbot_factory=_build_export_document_tool,
-            mcp_registrar=_register_export_document_tool,
-        ),
-    )
+    return _DOCUMENT_TOOL_SPECS
 
 
 def build_document_store(workspace_dir: Path | None = None) -> DocumentSessionStore:
-    from ..domain.document.session_store import DocumentSessionStore
-
     return DocumentSessionStore(workspace_dir=workspace_dir)
