@@ -5,14 +5,8 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import ToolSet
 from astrbot.core.astr_agent_context import AstrAgentContext
 
-from ..internal_hooks import AfterExportHook, BeforeExportHook
-from ..mcp_server.session_store import DocumentSessionStore
-from .document_tools import (
-    AddBlocksTool,
-    CreateDocumentTool,
-    ExportDocumentTool,
-    FinalizeDocumentTool,
-)
+from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..tools.astrbot_adapter import build_document_toolset_from_registry
 
 
 def build_document_toolset(
@@ -24,19 +18,11 @@ def build_document_toolset(
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
 ) -> ToolSet:
-    store = DocumentSessionStore(workspace_dir=workspace_dir)
-    return ToolSet(
-        [
-            CreateDocumentTool(store=store),
-            AddBlocksTool(store=store),
-            FinalizeDocumentTool(store=store),
-            ExportDocumentTool(
-                store=store,
-                before_export_hooks=before_export_hooks or [],
-                after_export_hooks=after_export_hooks or [],
-                after_export=after_export,
-            ),
-        ]
+    return build_document_toolset_from_registry(
+        workspace_dir=workspace_dir,
+        after_export=after_export,
+        before_export_hooks=before_export_hooks,
+        after_export_hooks=after_export_hooks,
     )
 
 

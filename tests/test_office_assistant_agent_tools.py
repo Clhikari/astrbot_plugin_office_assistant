@@ -3,6 +3,7 @@ import struct
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -21,6 +22,9 @@ from astrbot_plugin_office_assistant.document_core.builders.word_builder import 
 )
 from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
     build_summary_card_group,
+)
+from astrbot_plugin_office_assistant.domain.document.session_store import (
+    DocumentSessionStore,
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
@@ -46,11 +50,18 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     SectionTableInput,
     normalize_raw_block_payloads,
 )
-from astrbot_plugin_office_assistant.domain.document.session_store import (
-    DocumentSessionStore,
-)
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
+)
+from astrbot_plugin_office_assistant.tools.mcp_adapter import (
+    register_document_tools_from_registry,
+)
+from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
+    build_document_toolset_from_registry,
+)
+from astrbot_plugin_office_assistant.tools.registry import (
+    DocumentToolSpec,
+    get_document_tool_specs,
 )
 from pydantic import ValidationError
 
@@ -295,6 +306,142 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
         / "documents"
     )
     assert stores[0].workspace_dir == expected_workspace
+
+
+def test_document_tool_registry_keeps_document_tool_order():
+    assert [spec.name for spec in get_document_tool_specs()] == [
+        "create_document",
+        "add_blocks",
+        "finalize_document",
+        "export_document",
+    ]
+
+
+def test_astrbot_toolset_preserves_document_tool_registry_order():
+    toolset = build_document_toolset_from_registry()
+
+    assert [tool.name for tool in toolset.tools] == [
+        spec.name for spec in get_document_tool_specs()
+    ]
+
+
+def test_astrbot_toolset_passes_export_hooks_and_callback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_kwargs: dict[str, object] = {}
+    before_hooks = [MagicMock()]
+    after_hooks = [MagicMock()]
+
+    async def _after_export(_context, _path):
+        return None
+
+    base_specs = get_document_tool_specs()
+
+    def _record_export_factory(store, before_export_hooks, after_export_hooks, after_export):
+        captured_kwargs["store"] = store
+        captured_kwargs["before_export_hooks"] = before_export_hooks
+        captured_kwargs["after_export_hooks"] = after_export_hooks
+        captured_kwargs["after_export"] = after_export
+        return CreateDocumentTool(store=store, name="export_document")
+
+    patched_specs = base_specs[:-1] + (
+        DocumentToolSpec(
+            name="export_document",
+            astrbot_factory=_record_export_factory,
+            mcp_registrar=base_specs[-1].mcp_registrar,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.tools.astrbot_adapter.get_document_tool_specs",
+        lambda: patched_specs,
+    )
+
+    toolset = build_document_toolset_from_registry(
+        before_export_hooks=before_hooks,
+        after_export_hooks=after_hooks,
+        after_export=_after_export,
+    )
+
+    assert captured_kwargs["store"] is toolset.document_store
+    assert captured_kwargs["before_export_hooks"] is before_hooks
+    assert captured_kwargs["after_export_hooks"] is after_hooks
+    assert captured_kwargs["after_export"] is _after_export
+
+
+def test_mcp_document_tool_registration_matches_registry_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registered_names: list[str] = []
+
+    def _make_registrar(name: str):
+        def _record(*_args, **_kwargs):
+            registered_names.append(name)
+
+        return _record
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_document.register_create_document_tool",
+        _make_registrar("create_document"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        _make_registrar("add_blocks"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
+        _make_registrar("finalize_document"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_document.register_export_document_tool",
+        _make_registrar("export_document"),
+    )
+
+    register_document_tools_from_registry(
+        server=MagicMock(),
+        store=DocumentSessionStore(),
+    )
+
+    assert registered_names == [spec.name for spec in get_document_tool_specs()]
+
+
+def test_mcp_document_tool_registration_passes_export_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    export_call_kwargs: dict[str, object] = {}
+    before_hooks = [MagicMock()]
+    after_hooks = [MagicMock()]
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_document.register_create_document_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _record_export(*_args, **kwargs):
+        export_call_kwargs.update(kwargs)
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_document.register_export_document_tool",
+        _record_export,
+    )
+
+    register_document_tools_from_registry(
+        server=MagicMock(),
+        store=DocumentSessionStore(),
+        before_export_hooks=before_hooks,
+        after_export_hooks=after_hooks,
+    )
+
+    assert export_call_kwargs["before_export_hooks"] is before_hooks
+    assert export_call_kwargs["after_export_hooks"] is after_hooks
 
 
 def test_create_document_tool_schema_exposes_document_style():
@@ -3479,6 +3626,44 @@ def test_domain_document_session_store_accepts_summary_card_defaults_resolver():
     assert updated.blocks[0].blocks[1].items == ["First takeaway"]
 
 
+def test_domain_document_session_store_uses_legacy_summary_card_patch_point(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from astrbot_plugin_office_assistant.domain.document.session_store import (
+        DocumentSessionStore as DomainDocumentSessionStore,
+    )
+
+    store = DomainDocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Domain Summary"))
+
+    def _raise_defaults_error(_config):
+        raise RuntimeError("bad defaults")
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.session_store.summary_card_defaults_from_config",
+        _raise_defaults_error,
+    )
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    assert updated.blocks[0].blocks[0].text == "Conclusion"
+    assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
 def test_document_session_store_runs_internal_normalize_hooks():
     def _inject_heading(_context):
         return [
@@ -3804,8 +3989,6 @@ def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
     summary = DocumentSessionStore._build_prompt_summary_locked(document)
 
     assert summary["latest_block_types"] == ["unknown"]
-
-
 @pytest.mark.asyncio
 async def test_add_blocks_tool_ignores_blank_table_caption_when_absorbing_heading(
     workspace_root: Path,
