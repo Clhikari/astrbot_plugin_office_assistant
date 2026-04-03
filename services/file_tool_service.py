@@ -1,5 +1,9 @@
 import warnings
 
+from ..constants import (
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
+)
 from .file_delivery_service import FileDeliveryService
 from .file_read_service import FileReadService
 from .generated_file_delivery_service import GeneratedFileDeliveryService
@@ -31,8 +35,10 @@ class FileToolService:
         office_libs: dict | None = None,
         allow_external_input_files: bool = False,
         enable_docx_image_review: bool = True,
-        max_inline_docx_image_bytes: int = 0,
-        max_inline_docx_image_count: int = 0,
+        max_inline_docx_image_bytes: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_MB
+        * 1024
+        * 1024,
+        max_inline_docx_image_count: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
         is_group_feature_enabled=None,
         check_permission=None,
         group_feature_disabled_error=None,
