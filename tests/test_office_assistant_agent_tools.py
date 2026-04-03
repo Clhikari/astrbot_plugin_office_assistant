@@ -52,6 +52,9 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
 )
+from astrbot_plugin_office_assistant.tools.registry import (
+    get_document_tool_specs,
+)
 from pydantic import ValidationError
 
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
@@ -295,6 +298,15 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
         / "documents"
     )
     assert stores[0].workspace_dir == expected_workspace
+
+
+def test_document_tool_registry_keeps_document_tool_order():
+    assert [spec.name for spec in get_document_tool_specs()] == [
+        "create_document",
+        "add_blocks",
+        "finalize_document",
+        "export_document",
+    ]
 
 
 def test_create_document_tool_schema_exposes_document_style():
