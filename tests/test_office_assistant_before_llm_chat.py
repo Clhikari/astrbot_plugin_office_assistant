@@ -92,7 +92,7 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
         )
         req = ProviderRequest(
-            prompt="hello",
+            prompt="请生成一份 Word 报告，并导出给我。",
             system_prompt="base",
             func_tool=ToolSet(
                 [
@@ -115,6 +115,7 @@ async def test_before_llm_chat_injects_document_tools_per_request():
         }.issubset(tool_names)
         assert "generate_complex_word_document" not in tool_names
         assert "文件工具使用指南" in req.system_prompt
+        assert "文件工具细节指南" in req.system_prompt
         assert "executive_brief" in req.system_prompt
         assert "accent_color=RRGGBB" in req.system_prompt
         assert "document_style={brief, heading_color, title_align" in req.system_prompt
@@ -149,6 +150,41 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             in req.system_prompt
         )
         assert "所有面向用户的回复和过渡说明 MUST 使用中文" in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_skips_document_guide_for_generic_prompt():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = ProviderRequest(
+            prompt="hello",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("astrbot_execute_shell"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "astrbot_execute_shell" not in tool_names
+        assert {
+            "create_document",
+            "add_blocks",
+            "finalize_document",
+            "export_document",
+        }.issubset(tool_names)
+        assert "文件工具使用指南" not in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -663,7 +699,7 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
     )
     event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1")
     req = ProviderRequest(
-        prompt="hello",
+        prompt="请生成一份 Word 报告，并导出给我。",
         system_prompt="base",
         func_tool=ToolSet(
             [
@@ -674,13 +710,22 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
         ),
     )
 
-    await policy.apply(event, req)
+    with patch(
+        "astrbot_plugin_office_assistant.services.llm_request_policy.logger.debug"
+    ) as logger_debug:
+        await policy.apply(event, req)
 
     tool_names = set(req.func_tool.names())
     assert "create_document" in tool_names
     assert "existing_tool" in tool_names
     assert "astrbot_execute_shell" not in tool_names
     assert "文件工具使用指南" in req.system_prompt
+    assert any(
+        call.args
+        and call.args[0] == "[文件管理] Prompt sections: %s"
+        and "static_document_tools" in str(call.args[1])
+        for call in logger_debug.call_args_list
+    )
 
 
 def test_llm_request_policy_requires_hook_pairs():

@@ -13,8 +13,9 @@ from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star import star_map
 
+from .app.runtime import PluginRuntimeBundle
 from .message_buffer import BufferedMessage
-from .services import PluginRuntimeBundle, build_plugin_runtime
+from .services import build_plugin_runtime
 
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
 _on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)

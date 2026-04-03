@@ -1,3 +1,4 @@
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -9,8 +10,6 @@ from ..constants import (
     ALL_OFFICE_SUFFIXES,
     EXECUTION_TOOLS,
     FILE_TOOLS,
-    NOTICE_DOCUMENT_TOOLS_GUIDE,
-    NOTICE_UPLOADED_FILE_TEMPLATE,
     PDF_SUFFIX,
     TEXT_SUFFIXES,
 )
@@ -19,11 +18,37 @@ from ..internal_hooks import (
     NoticeBuildHook,
     ToolExposureContext,
     ToolExposureHook,
+    run_notice_hooks,
+    run_tool_exposure_hooks,
 )
-from .upload_prompt_service import UploadInfo
+from .prompt_context_service import PromptContextService
+from .upload_types import UploadInfo
 
 
 class RequestHookService:
+    _BUFFERED_USER_INSTRUCTION_RE = re.compile(
+        r"\[用户指令\]\s*(?P<instruction>.*?)(?:\n\s*\[|\Z)",
+        flags=re.DOTALL,
+    )
+    _DOCUMENT_ID_RE = re.compile(
+        r'document_id["`\']?\s*[:=]\s*["`\']?(?P<document_id>[A-Za-z0-9_-]+)',
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_WORKFLOW_HINT_RE = re.compile(
+        r"(create_document|add_blocks|finalize_document|export_document|"
+        r"document_id\b|正式汇报|正式报告|导出成\s*word|导出为\s*word|"
+        r"\bword\b|\bdocx\b|汇报|报告|"
+        r"生成\s*(?:word|docx|报告|汇报)|整理成\s*(?:word|docx|报告|汇报))",
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_DETAIL_HINT_RE = re.compile(
+        r"(create_document|正式汇报|正式报告|导出成\s*word|导出为\s*word|"
+        r"\bword\b|\bdocx\b|汇报|报告|"
+        r"生成\s*(?:word|docx|报告|汇报)|整理成\s*(?:word|docx|报告|汇报)|"
+        r"business_report|project_review|executive_brief|accent_color|document_style)",
+        flags=re.IGNORECASE,
+    )
+
     def __init__(
         self,
         *,
@@ -34,32 +59,141 @@ class RequestHookService:
         ],
         store_uploaded_file: Callable[[Path, str], Path],
         allow_external_input_files: bool,
+        get_document_prompt_summary: (
+            Callable[[str], dict[str, object] | None] | None
+        ) = None,
+        prompt_context_service: PromptContextService | None = None,
     ) -> None:
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
         self._extract_upload_source = extract_upload_source
         self._store_uploaded_file = store_uploaded_file
-        self._allow_external_input_files = allow_external_input_files
-
-    def build_notice_hooks(self) -> list[NoticeBuildHook]:
-        return [
+        self._get_document_prompt_summary = get_document_prompt_summary
+        self.prompt_context_service = prompt_context_service or PromptContextService(
+            allow_external_input_files=allow_external_input_files
+        )
+        self._notice_hooks = [
             self.append_document_tool_guide_notice,
             self.append_uploaded_file_notices,
         ]
-
-    def build_tool_exposure_hooks(self) -> list[ToolExposureHook]:
-        return [
+        self._tool_exposure_hooks = [
             self.apply_execution_tool_block,
             self.apply_explicit_file_tool_restriction,
         ]
+
+    def build_notice_hooks(self) -> list[NoticeBuildHook]:
+        return list(self._notice_hooks)
+
+    def build_tool_exposure_hooks(self) -> list[ToolExposureHook]:
+        return list(self._tool_exposure_hooks)
+
+    async def apply_tool_exposure_hooks(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        return await run_tool_exposure_hooks(self._tool_exposure_hooks, context)
+
+    async def apply_notice_hooks(
+        self,
+        context: NoticeBuildContext,
+    ) -> NoticeBuildContext:
+        return await run_notice_hooks(self._notice_hooks, context)
 
     async def append_document_tool_guide_notice(
         self,
         context: NoticeBuildContext,
     ) -> NoticeBuildContext:
-        if context.should_expose and context.request.func_tool:
-            context.notices.append(NOTICE_DOCUMENT_TOOLS_GUIDE)
+        if not (context.should_expose and context.request.func_tool):
+            return context
+
+        request_text = self._extract_prompt_text(str(context.request.prompt or ""))
+        document_id = self._extract_document_id(request_text)
+        should_inject = self._should_inject_document_tool_guide(
+            request_text=request_text,
+            document_id=document_id,
+        )
+        if not should_inject:
+            return context
+
+        self._append_prompt_section(
+            context,
+            self.prompt_context_service.build_document_tool_guide_section(),
+        )
+        if self._should_inject_document_tool_detail(
+            request_text=request_text,
+            document_id=document_id,
+        ):
+            self._append_prompt_section(
+                context,
+                self.prompt_context_service.build_document_tool_detail_section(),
+            )
+        if not (document_id and self._get_document_prompt_summary):
+            return context
+
+        summary = self._get_document_prompt_summary(document_id)
+        if summary:
+            self._append_prompt_section(
+                context,
+                self.prompt_context_service.build_document_summary_section(
+                    summary=summary
+                ),
+            )
         return context
+
+    @classmethod
+    def _extract_prompt_text(cls, prompt: str) -> str:
+        stripped_prompt = prompt.strip()
+        if not stripped_prompt:
+            return ""
+        match = cls._BUFFERED_USER_INSTRUCTION_RE.search(stripped_prompt)
+        if match:
+            return match.group("instruction").strip()
+        return stripped_prompt
+
+    @classmethod
+    def _extract_document_id(cls, prompt: str) -> str | None:
+        match = cls._DOCUMENT_ID_RE.search(prompt)
+        if not match:
+            return None
+        return match.group("document_id")
+
+    @classmethod
+    def _should_inject_document_tool_guide(
+        cls,
+        *,
+        request_text: str,
+        document_id: str | None,
+    ) -> bool:
+        if document_id:
+            return True
+        if not request_text:
+            return False
+        return bool(cls._DOCUMENT_WORKFLOW_HINT_RE.search(request_text))
+
+    @classmethod
+    def _should_inject_document_tool_detail(
+        cls,
+        *,
+        request_text: str,
+        document_id: str | None,
+    ) -> bool:
+        if not request_text:
+            return False
+        if document_id and not cls._DOCUMENT_DETAIL_HINT_RE.search(request_text):
+            return False
+        return bool(cls._DOCUMENT_DETAIL_HINT_RE.search(request_text))
+
+    @staticmethod
+    def _append_prompt_section(
+        context: NoticeBuildContext,
+        section,
+    ) -> None:
+        if not section or not section.content:
+            return
+        context.notices.append(section.content)
+        section_names = getattr(context, "section_names", None)
+        if isinstance(section_names, list):
+            section_names.append(section.name)
 
     async def append_uploaded_file_notices(
         self,
@@ -71,6 +205,7 @@ class RequestHookService:
         event = context.event
         req = context.request
         cached_upload_infos = iter(self._get_cached_upload_infos(event))
+        readable_upload_infos: list[UploadInfo] = []
         for component in getattr(event.message_obj, "message", None) or []:
             if not isinstance(component, Comp.File):
                 continue
@@ -130,23 +265,16 @@ class RequestHookService:
                     )
                     continue
 
-                prompt = NOTICE_UPLOADED_FILE_TEMPLATE.format(
-                    type_desc=type_desc,
-                    original_name=original_name,
-                    file_suffix=file_suffix,
-                    stored_name=stored_name,
-                    external_path_line=(
-                        f"- 外部绝对路径：{source_path_text}\n"
-                        if self._allow_external_input_files and source_path_text
-                        else ""
-                    ),
-                    external_path_rule=(
-                        f"如果需要使用工作区外路径，也可以直接使用绝对路径 `{source_path_text}`。"
-                        if self._allow_external_input_files and source_path_text
-                        else "当前未启用外部绝对路径，不要使用工作区外路径。"
-                    ),
+                readable_upload_infos.append(
+                    {
+                        "original_name": original_name,
+                        "file_suffix": file_suffix,
+                        "type_desc": type_desc,
+                        "is_supported": is_supported,
+                        "stored_name": stored_name,
+                        "source_path": source_path_text,
+                    }
                 )
-                context.notices.append(prompt)
                 logger.info(
                     "[文件管理] 收到文件 %s，已保存为 %s。",
                     original_name,
@@ -154,6 +282,37 @@ class RequestHookService:
                 )
             except Exception as exc:
                 logger.error(f"[文件管理] 处理上传文件失败: {exc}")
+
+        if not readable_upload_infos:
+            return context
+
+        self._append_prompt_section(
+            context,
+            self.prompt_context_service.build_uploaded_file_scene_section(
+                file_count=len(readable_upload_infos)
+            ),
+        )
+
+        if len(readable_upload_infos) == 1:
+            info = readable_upload_infos[0]
+            self._append_prompt_section(
+                context,
+                self.prompt_context_service.build_uploaded_file_notice_section(
+                    type_desc=info["type_desc"],
+                    original_name=info["original_name"],
+                    file_suffix=info["file_suffix"],
+                    stored_name=info["stored_name"],
+                    source_path=info["source_path"],
+                ),
+            )
+            return context
+
+        self._append_prompt_section(
+            context,
+            self.prompt_context_service.build_uploaded_file_summary_section(
+                upload_infos=readable_upload_infos
+            ),
+        )
         return context
 
     async def apply_execution_tool_block(
