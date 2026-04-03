@@ -1,14 +1,14 @@
 from mcp.server.fastmcp import FastMCP
 
 from ...document_core.builders.word_builder import WordDocumentBuilder
-from ...export_pipeline import export_document_via_pipeline
-from ...internal_hooks import AfterExportHook, BeforeExportHook
-from ..schemas import (
+from ...domain.document.export_pipeline import export_document_via_pipeline
+from ...domain.document.hooks import AfterExportHook, BeforeExportHook
+from ...domain.document.session_store import DocumentSessionStore
+from ...domain.document.contracts import (
     ExportDocumentRequest,
     ExportDocumentResult,
     build_document_summary,
 )
-from ..session_store import DocumentSessionStore
 
 
 def register_export_document_tool(

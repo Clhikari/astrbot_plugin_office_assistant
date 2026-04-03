@@ -1,7 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 
-from ...internal_hooks import AfterExportHook, BeforeExportHook
-from ..session_store import DocumentSessionStore
+from ...domain.document.hooks import AfterExportHook, BeforeExportHook
+from ...domain.document.session_store import DocumentSessionStore
 from .add_blocks import register_add_blocks_tool
 from .create_document import register_create_document_tool
 from .export_document import register_export_document_tool

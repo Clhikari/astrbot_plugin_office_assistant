@@ -4,8 +4,8 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from ..internal_hooks import AfterExportHook, BeforeExportHook
-from .session_store import DocumentSessionStore
+from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..domain.document.session_store import DocumentSessionStore
 from .tools import register_document_tools
 
 
