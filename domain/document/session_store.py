@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from importlib import import_module
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -9,6 +8,7 @@ from uuid import uuid4
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+from ...document_core.macros import summary_card_defaults_from_config
 from ...document_core.models.blocks import (
     ColumnBlock,
     ColumnsBlock,
@@ -42,9 +42,9 @@ from .contracts import (
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
+    SectionBreakInput,
     SectionCardInput,
     SectionListInput,
-    SectionBreakInput,
     SectionPageBreakInput,
     SectionParagraphInput,
     SectionTableInput,
@@ -80,13 +80,6 @@ def _is_within_workspace(path: Path, workspace_dir: Path) -> bool:
         return False
 
 
-def _resolve_summary_card_defaults_from_config():
-    legacy_module = import_module(
-        "astrbot_plugin_office_assistant.mcp_server.session_store"
-    )
-    return getattr(legacy_module, "summary_card_defaults_from_config")
-
-
 class DocumentSessionStore:
     def __init__(
         self,
@@ -95,6 +88,7 @@ class DocumentSessionStore:
         max_documents: int | None = 256,
         ttl: timedelta | None = None,
         normalize_block_hooks: list[BlockNormalizeHook] | None = None,
+        summary_card_defaults_resolver=summary_card_defaults_from_config,
     ) -> None:
         self._lock = RLock()
         self._documents: dict[str, DocumentModel] = {}
@@ -102,6 +96,7 @@ class DocumentSessionStore:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self._max_documents = max_documents
         self._ttl = ttl
+        self._summary_card_defaults_resolver = summary_card_defaults_resolver
         self._normalize_block_hooks = normalize_block_hooks or [
             self._drop_duplicate_document_title_headings,
             self._move_landscape_intro_paragraphs_before_section_break,
@@ -410,7 +405,7 @@ class DocumentSessionStore:
         document_style = getattr(document.metadata, "document_style", None)
         summary_card_config = getattr(document_style, "summary_card_defaults", None)
         try:
-            summary_card_defaults = _resolve_summary_card_defaults_from_config()(
+            summary_card_defaults = self._summary_card_defaults_resolver(
                 summary_card_config
             )
         except Exception:
@@ -597,7 +592,9 @@ class DocumentSessionStore:
 
     @staticmethod
     def _build_prompt_summary_locked(document: DocumentModel) -> dict[str, object]:
-        latest_block_types = [block.type for block in document.blocks[-3:]]
+        latest_block_types = [
+            getattr(block, "type", "unknown") for block in document.blocks[-3:]
+        ]
         next_allowed_actions: list[str]
         if document.status == DocumentStatus.DRAFT:
             next_allowed_actions = ["add_blocks", "finalize_document"]
