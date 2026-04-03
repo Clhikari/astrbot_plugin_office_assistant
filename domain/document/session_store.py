@@ -13,6 +13,7 @@ from ...document_core.macros import summary_card_defaults_from_config
 from ...document_core.models.blocks import (
     ColumnBlock,
     ColumnsBlock,
+    DocumentBlock,
     GroupBlock,
     HeadingBlock,
     ListBlock,
@@ -38,6 +39,7 @@ from .contracts import (
     AddSectionBundleRequest,
     AddSummaryCardRequest,
     AddTableRequest,
+    BlockInput,
     BlockColumnsInput,
     BlockGroupInput,
     BlockHeadingInput,
@@ -72,6 +74,7 @@ SummaryCardDefaultsResolver = Callable[
     [DocumentSummaryCardDefaults | None],
     dict[str, object | None],
 ]
+RuntimeBlock = DocumentBlock
 
 
 def _default_workspace_dir() -> Path:
@@ -314,7 +317,11 @@ class DocumentSessionStore:
 
         return normalized
 
-    def _build_runtime_block(self, block, document: DocumentModel):
+    def _build_runtime_block(
+        self,
+        block: BlockInput,
+        document: DocumentModel,
+    ) -> RuntimeBlock:
         if isinstance(block, BlockHeadingInput):
             return HeadingBlock(
                 text=block.text,
