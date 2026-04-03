@@ -2,11 +2,23 @@ import warnings
 
 from .file_delivery_service import FileDeliveryService
 from .file_read_service import FileReadService
+from .generated_file_delivery_service import GeneratedFileDeliveryService
 from .office_generate_service import OfficeGenerateService
 from .pdf_convert_service import PdfConvertService
+from .word_read_service import WordReadService
 
 
 class FileToolService:
+    @staticmethod
+    def _raise_missing_dependencies(
+        service_name: str,
+        dependencies: list[str],
+    ) -> None:
+        missing = ", ".join(dependencies)
+        raise ValueError(
+            f"{service_name} requires injected service or dependencies: {missing}"
+        )
+
     def __init__(
         self,
         *,
@@ -28,12 +40,37 @@ class FileToolService:
         office_generate_service=None,
         pdf_convert_service=None,
     ) -> None:
-        _ = (
-            delivery_service,
-            enable_docx_image_review,
-            max_inline_docx_image_bytes,
-            max_inline_docx_image_count,
-        )
+        if file_read_service is None:
+            if workspace_service is None:
+                self._raise_missing_dependencies(
+                    "file_read_service",
+                    ["workspace_service"],
+                )
+            if word_read_service is None:
+                word_read_service = WordReadService(
+                    workspace_service=workspace_service,
+                    enable_docx_image_review=enable_docx_image_review,
+                    max_inline_docx_image_bytes=max_inline_docx_image_bytes,
+                    max_inline_docx_image_count=max_inline_docx_image_count,
+                )
+
+        if office_generate_service is None or pdf_convert_service is None:
+            if generated_file_delivery_service is None:
+                missing_delivery_dependencies: list[str] = []
+                if workspace_service is None:
+                    missing_delivery_dependencies.append("workspace_service")
+                if delivery_service is None:
+                    missing_delivery_dependencies.append("delivery_service")
+                if missing_delivery_dependencies:
+                    self._raise_missing_dependencies(
+                        "generated_file_delivery_service",
+                        missing_delivery_dependencies,
+                    )
+                generated_file_delivery_service = GeneratedFileDeliveryService(
+                    workspace_service=workspace_service,
+                    delivery_service=delivery_service,
+                )
+
         generated_output_delivery_service = FileDeliveryService(
             generated_file_delivery_service=generated_file_delivery_service,
         )

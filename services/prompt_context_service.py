@@ -1,6 +1,8 @@
 import hashlib
 from dataclasses import dataclass
 
+from astrbot.api import logger
+
 from ..prompts.scenes.uploaded_file import (
     build_buffered_upload_prompt,
     build_uploaded_file_notice,
@@ -47,6 +49,11 @@ class PromptContextService:
         ordered_section_names = list(section_names)
         ordered_notices = list(notices)
         if len(ordered_section_names) != len(ordered_notices):
+            logger.debug(
+                "[文件管理] Prompt section mismatch: sections=%s notices=%s",
+                len(ordered_section_names),
+                len(ordered_notices),
+            )
             return ordered_section_names, ordered_notices
 
         indexed_sections = list(

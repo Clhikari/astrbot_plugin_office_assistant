@@ -146,6 +146,54 @@ def _build_file_tool_service(
     )
 
 
+def test_file_tool_service_builds_default_word_and_delivery_services():
+    workspace_service = MagicMock()
+    delivery_service = MagicMock()
+
+    service = FileToolService(
+        workspace_service=workspace_service,
+        office_generator=MagicMock(),
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+        generated_file_delivery_service=None,
+        word_read_service=None,
+        office_libs={},
+        allow_external_input_files=False,
+        enable_docx_image_review=False,
+        max_inline_docx_image_bytes=1024,
+        max_inline_docx_image_count=2,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    assert isinstance(service._file_read_service._word_read_service, WordReadService)
+    assert (
+        service._office_generate_service._file_delivery_service._generated_file_delivery_service
+        is not None
+    )
+
+
+def test_file_tool_service_requires_workspace_for_default_file_read_service():
+    with pytest.raises(
+        ValueError,
+        match="file_read_service requires injected service or dependencies: workspace_service",
+    ):
+        FileToolService(
+            workspace_service=None,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            generated_file_delivery_service=MagicMock(),
+            word_read_service=None,
+            office_libs={},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+
 def _rewrite_docx_document_xml(path: Path, transform) -> None:
     with zipfile.ZipFile(path, "r") as source_zip:
         file_map = {
@@ -1047,6 +1095,26 @@ def test_prompt_context_service_orders_notice_sections_by_stability():
     )
     assert "[groups=static:6, scene:5, dynamic:7]" in trace
     assert "[total=18]" in trace
+
+
+def test_prompt_context_service_logs_section_length_mismatch():
+    service = PromptContextService(allow_external_input_files=False)
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.prompt_context_service.logger.debug"
+    ) as logger_debug:
+        ordered_names, ordered_notices = service.order_notice_sections(
+            section_names=["static_document_tools"],
+            notices=["static", "dynamic"],
+        )
+
+    assert ordered_names == ["static_document_tools"]
+    assert ordered_notices == ["static", "dynamic"]
+    logger_debug.assert_called_once_with(
+        "[文件管理] Prompt section mismatch: sections=%s notices=%s",
+        1,
+        2,
+    )
 
 
 def test_upload_prompt_service_builds_instructional_notice_for_readable_files():

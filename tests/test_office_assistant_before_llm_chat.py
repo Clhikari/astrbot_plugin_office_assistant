@@ -728,6 +728,38 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
     )
 
 
+@pytest.mark.asyncio
+async def test_llm_request_policy_checks_permission_once_per_request():
+    permission_calls = 0
+
+    def _check_permission(_event):
+        nonlocal permission_calls
+        permission_calls += 1
+        return False
+
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=_check_permission,
+        is_bot_mentioned=lambda _event: False,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="hello",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("create_document"), _tool("existing_tool")]),
+    )
+
+    await policy.apply(event, req)
+
+    assert permission_calls == 1
+    assert "create_document" not in set(req.func_tool.names())
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+
+
 def test_llm_request_policy_requires_hook_pairs():
     with pytest.raises(ValueError, match="must be provided together"):
         LLMRequestPolicy(
