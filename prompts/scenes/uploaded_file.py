@@ -1,5 +1,7 @@
 from ...services.upload_types import UploadInfo
 
+MAX_DETAILED_UPLOAD_INFOS = 3
+
 
 def format_upload_file_info(
     info: UploadInfo,
@@ -68,21 +70,19 @@ def build_uploaded_file_summary_notice(
     if not readable_infos:
         return ""
 
-    file_info_list = [
-        format_upload_file_info(
-            info,
-            allow_external_input_files=allow_external_input_files,
-        )
-        for info in readable_infos
-    ]
+    file_info_list, omitted_count = _build_limited_file_info_list(
+        readable_infos,
+        allow_external_input_files=allow_external_input_files,
+    )
 
     return (
         "\n[System Notice] [ACTION REQUIRED] 已收到上传文件\n"
-        + f"- 文件数量：{len(file_info_list)}\n"
+        + f"- 文件数量：{len(readable_infos)}\n"
         + "- 状态：已保存到工作区\n"
         + "\n"
         + "[文件信息]\n"
         + "\n".join(f"- {info}" for info in file_info_list)
+        + _build_omitted_upload_info_line(omitted_count)
         + "\n\n"
         + "[路径提示]\n"
         + "- 若使用相对路径，请使用上面的工作区文件名。\n"
@@ -98,24 +98,23 @@ def build_buffered_upload_prompt(
     user_instruction: str,
     allow_external_input_files: bool,
 ) -> str:
-    file_info_list = [
-        format_upload_file_info(
-            info,
-            allow_external_input_files=allow_external_input_files,
-        )
-        for info in upload_infos
-    ]
+    file_info_list, omitted_count = _build_limited_file_info_list(
+        upload_infos,
+        allow_external_input_files=allow_external_input_files,
+    )
     has_readable_file = any(info["is_supported"] for info in upload_infos)
     relative_path_guidance = _build_relative_path_guidance(
         allow_external_input_files=allow_external_input_files
     )
+    omitted_info_line = _build_omitted_upload_info_line(omitted_count)
 
     if has_readable_file and user_instruction:
         return (
-            f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+            f"\n[System Notice] 用户上传了 {len(upload_infos)} 个文件\n"
             + "\n"
             + "[文件信息]\n"
             + "\n".join(f"- {info}" for info in file_info_list)
+            + omitted_info_line
             + "\n"
             + "\n"
             + "[用户指令]\n"
@@ -131,10 +130,11 @@ def build_buffered_upload_prompt(
 
     if has_readable_file:
         return (
-            f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+            f"\n[System Notice] 用户上传了 {len(upload_infos)} 个文件\n"
             + "\n"
             + "[文件信息]\n"
             + "\n".join(f"- {info}" for info in file_info_list)
+            + omitted_info_line
             + "\n"
             + "\n"
             + "[处理建议]\n"
@@ -145,9 +145,12 @@ def build_buffered_upload_prompt(
         )
 
     return (
-        f"\n[System Notice] 用户上传了 {len(file_info_list)} 个文件\n"
+        f"\n[System Notice] 用户上传了 {len(upload_infos)} 个文件\n"
         "\n"
-        "[文件信息]\n" + "\n".join(f"- {info}" for info in file_info_list) + "\n"
+        "[文件信息]\n"
+        + "\n".join(f"- {info}" for info in file_info_list)
+        + omitted_info_line
+        + "\n"
         "\n"
         "[操作要求]\n"
         "请根据用户要求处理这些文件，使用中文与用户沟通。"
@@ -193,3 +196,25 @@ def _build_multi_file_external_path_hint(*, allow_external_input_files: bool) ->
     if allow_external_input_files:
         return "- 已提供外部绝对路径时，也可以直接使用上面给出的绝对路径。\n"
     return "- 当前未启用外部绝对路径，不要使用工作区外路径。\n"
+
+
+def _build_limited_file_info_list(
+    upload_infos: list[UploadInfo],
+    *,
+    allow_external_input_files: bool,
+) -> tuple[list[str], int]:
+    limited_infos = upload_infos[:MAX_DETAILED_UPLOAD_INFOS]
+    file_info_list = [
+        format_upload_file_info(
+            info,
+            allow_external_input_files=allow_external_input_files,
+        )
+        for info in limited_infos
+    ]
+    return file_info_list, max(0, len(upload_infos) - len(limited_infos))
+
+
+def _build_omitted_upload_info_line(omitted_count: int) -> str:
+    if omitted_count <= 0:
+        return ""
+    return f"\n- 其余 {omitted_count} 个文件未展开详细信息"
