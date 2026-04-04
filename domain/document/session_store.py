@@ -601,6 +601,28 @@ class DocumentSessionStore:
             document = self.require_document(document_id)
             return self._build_prompt_summary_locked(document)
 
+    def build_latest_prompt_summary_for_session(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return None
+        with self._lock:
+            self._evict_expired_locked()
+            candidates = [
+                document
+                for document in self._documents.values()
+                if document.session_id == normalized_session_id
+                and document.status != DocumentStatus.EXPORTED
+            ]
+            if not candidates:
+                return None
+            latest_document = max(
+                candidates,
+                key=lambda document: document.metadata.updated_at,
+            )
+            return self._build_prompt_summary_locked(latest_document)
+
     @staticmethod
     def _build_prompt_summary_locked(document: DocumentModel) -> dict[str, object]:
         latest_block_types = [

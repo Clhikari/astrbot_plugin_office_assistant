@@ -15,6 +15,7 @@ from astrbot_plugin_office_assistant.constants import (
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
     DOC_COMMAND_TRIGGER_EVENT_KEY,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
+    ExposureLevel,
     OfficeType,
 )
 from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
@@ -1013,6 +1014,7 @@ async def test_request_hook_service_builds_default_tool_hooks():
         should_expose=True,
         can_process_upload=True,
         explicit_tool_name="read_file",
+        allowed_tool_names=("read_file", "create_document"),
     )
 
     for hook in service.build_tool_exposure_hooks():
@@ -1329,6 +1331,7 @@ async def test_request_hook_service_appends_document_summary_for_existing_docume
         should_expose=True,
         can_process_upload=True,
         explicit_tool_name=None,
+        exposure_level=ExposureLevel.DOCUMENT_FULL,
         notices=[],
     )
 

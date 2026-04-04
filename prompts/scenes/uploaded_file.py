@@ -45,18 +45,24 @@ def build_uploaded_file_scene_notice(
     *,
     file_count: int,
     allow_external_input_files: bool,
+    document_workflow: bool = False,
 ) -> str:
     file_requirement = (
         "MUST 先调用 `read_file` 读取此文件"
         if file_count == 1
         else "MUST 先调用 `read_file` 依次读取这些文件"
     )
+    follow_up_rule = (
+        "2. 如果用户目标明确是整理成文档、报告、汇报或 Word，读取成功后必须直接调用 `create_document`，随后继续完成直到 `export_document` 成功，不要停下来只回复过渡说明。\n"
+        if document_workflow
+        else "2. 如果用户意图明确，读取后按需处理；如果意图不清楚，读取后用中文追问用户。\n"
+    )
     return (
         "\n[操作要求]\n"
         f"1. {file_requirement}，不要自行猜测文件名，也不要列目录或调用 shell。"
         f"{_build_relative_path_rule(allow_external_input_files=allow_external_input_files)}"
         "在读取前 NEVER 创建新文档。\n"
-        "2. 如果用户意图明确，读取后按需处理；如果意图不清楚，读取后用中文追问用户。\n"
+        f"{follow_up_rule}"
         "3. 所有面向用户的回复 MUST 使用中文。\n"
     )
 
@@ -130,7 +136,7 @@ def build_buffered_upload_prompt(
             + "1. 优先围绕这些上传文件完成用户请求。\n"
             + "2. 先调用 `read_file` 读取文件，不要自行猜测文件名，也不要列目录或调用 shell。\n"
             + relative_path_guidance
-            + "4. 如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取后继续调用相应工具完成结果，不要停下来只回复过渡说明。\n"
+            + "4. 如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取成功后必须直接调用 `create_document`，随后继续完成直到 `export_document` 成功，不要停下来只回复过渡说明。\n"
             + "5. 所有面向用户的回复 MUST 使用中文。"
         )
 

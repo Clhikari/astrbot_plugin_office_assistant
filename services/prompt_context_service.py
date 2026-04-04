@@ -10,6 +10,7 @@ from ..prompts.scenes.uploaded_file import (
     build_uploaded_file_summary_notice,
 )
 from ..prompts.static import (
+    build_file_only_notice,
     build_document_tools_core_notice,
     build_document_tools_detail_notice,
     build_tools_denied_notice,
@@ -17,6 +18,7 @@ from ..prompts.static import (
 from .upload_types import UploadInfo
 
 SECTION_STATIC_ACCESS = "static_access"
+SECTION_STATIC_FILE_ONLY = "static_file_only"
 SECTION_STATIC_DOCUMENT_TOOLS = "static_document_tools"
 SECTION_STATIC_DOCUMENT_TOOLS_DETAIL = "static_document_tools_detail"
 SECTION_SCENE_UPLOADED_FILE = "scene_uploaded_file"
@@ -130,6 +132,15 @@ class PromptContextService:
     def build_tools_denied_notice(self) -> str:
         return self.render_sections(self.build_tools_denied_section())
 
+    def build_file_only_notice_section(self) -> PromptSection:
+        return PromptSection(
+            name=SECTION_STATIC_FILE_ONLY,
+            content=build_file_only_notice(),
+        )
+
+    def build_file_only_notice(self) -> str:
+        return self.render_sections(self.build_file_only_notice_section())
+
     def build_document_tool_guide_section(self) -> PromptSection:
         return PromptSection(
             name=SECTION_STATIC_DOCUMENT_TOOLS,
@@ -209,12 +220,14 @@ class PromptContextService:
         self,
         *,
         file_count: int,
+        document_workflow: bool = False,
     ) -> PromptSection:
         return PromptSection(
             name=SECTION_SCENE_UPLOADED_FILE,
             content=build_uploaded_file_scene_notice(
                 file_count=file_count,
                 allow_external_input_files=self._allow_external_input_files,
+                document_workflow=document_workflow,
             ),
         )
 

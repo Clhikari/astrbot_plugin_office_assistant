@@ -7,3 +7,13 @@ def build_tools_denied_notice() -> str:
         " 或 `astrbot_execute_ipython` 绕过限制。\n"
         "4. NEVER 尝试任何变通方案来绕过以上限制。"
     )
+
+
+def build_file_only_notice() -> str:
+    return (
+        "\n[System Notice] 文件处理规则\n"
+        "1. 需要读取内容时，先调用 `read_file`。\n"
+        "2. 不要猜测文件名，不要列目录，也不要调用 shell。\n"
+        "3. 只做文件读取或 PDF 转换时，不要擅自进入 Word 文档工具链。\n"
+        "4. 所有面向用户的回复 MUST 使用中文。"
+    )

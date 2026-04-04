@@ -9,6 +9,7 @@ from astrbot.api.event import AstrMessageEvent
 from ..constants import (
     ALL_OFFICE_SUFFIXES,
     EXECUTION_TOOLS,
+    ExposureLevel,
     FILE_TOOLS,
     PDF_SUFFIX,
     TEXT_SUFFIXES,
@@ -34,13 +35,6 @@ class RequestHookService:
         r'document_id["`\']?\s*[:=]\s*["`\']?(?P<document_id>[A-Za-z0-9_-]+)',
         flags=re.IGNORECASE,
     )
-    _DOCUMENT_WORKFLOW_HINT_RE = re.compile(
-        r"(create_document|add_blocks|finalize_document|export_document|"
-        r"document_id\b|正式汇报|正式报告|导出成\s*word|导出为\s*word|"
-        r"\bword\b|\bdocx\b|汇报|报告|"
-        r"生成\s*(?:word|docx|报告|汇报)|整理成\s*(?:word|docx|报告|汇报))",
-        flags=re.IGNORECASE,
-    )
     _DOCUMENT_DETAIL_HINT_RE = re.compile(
         r"(create_document|正式汇报|正式报告|导出成\s*word|导出为\s*word|"
         r"\bword\b|\bdocx\b|汇报|报告|"
@@ -62,6 +56,9 @@ class RequestHookService:
         get_document_prompt_summary: (
             Callable[[str], dict[str, object] | None] | None
         ) = None,
+        get_active_document_prompt_summary: (
+            Callable[[str], dict[str, object] | None] | None
+        ) = None,
         prompt_context_service: PromptContextService | None = None,
     ) -> None:
         self._auto_block_execution_tools = auto_block_execution_tools
@@ -69,6 +66,9 @@ class RequestHookService:
         self._extract_upload_source = extract_upload_source
         self._store_uploaded_file = store_uploaded_file
         self._get_document_prompt_summary = get_document_prompt_summary
+        self._get_active_document_prompt_summary = (
+            get_active_document_prompt_summary
+        )
         self.prompt_context_service = prompt_context_service or PromptContextService(
             allow_external_input_files=allow_external_input_files
         )
@@ -106,13 +106,22 @@ class RequestHookService:
         if not (context.should_expose and context.request.func_tool):
             return context
 
+        exposure_level = getattr(context, "exposure_level", ExposureLevel.NONE)
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
-        document_id = self._extract_document_id(request_text)
-        should_inject = self._should_inject_document_tool_guide(
+        document_summary = self._resolve_document_summary(
+            event=context.event,
             request_text=request_text,
-            document_id=document_id,
         )
-        if not should_inject:
+        document_id = str((document_summary or {}).get("document_id") or "").strip()
+
+        if exposure_level == ExposureLevel.NONE:
+            return context
+
+        if exposure_level == ExposureLevel.FILE_ONLY:
+            self._append_prompt_section(
+                context,
+                self.prompt_context_service.build_file_only_notice_section(),
+            )
             return context
 
         self._append_prompt_section(
@@ -121,21 +130,17 @@ class RequestHookService:
         )
         if self._should_inject_document_tool_detail(
             request_text=request_text,
-            document_id=document_id,
+            document_id=document_id or None,
         ):
             self._append_prompt_section(
                 context,
                 self.prompt_context_service.build_document_tool_detail_section(),
             )
-        if not (document_id and self._get_document_prompt_summary):
-            return context
-
-        summary = self._get_document_prompt_summary(document_id)
-        if summary:
+        if document_summary:
             self._append_prompt_section(
                 context,
                 self.prompt_context_service.build_document_summary_section(
-                    summary=summary
+                    summary=document_summary
                 ),
             )
         return context
@@ -158,19 +163,6 @@ class RequestHookService:
         return match.group("document_id")
 
     @classmethod
-    def _should_inject_document_tool_guide(
-        cls,
-        *,
-        request_text: str,
-        document_id: str | None,
-    ) -> bool:
-        if document_id:
-            return True
-        if not request_text:
-            return False
-        return bool(cls._DOCUMENT_WORKFLOW_HINT_RE.search(request_text))
-
-    @classmethod
     def _should_inject_document_tool_detail(
         cls,
         *,
@@ -182,6 +174,34 @@ class RequestHookService:
         if document_id and not cls._DOCUMENT_DETAIL_HINT_RE.search(request_text):
             return False
         return bool(cls._DOCUMENT_DETAIL_HINT_RE.search(request_text))
+
+    def get_cached_upload_infos(
+        self, event: AstrMessageEvent
+    ) -> list[UploadInfo]:
+        return list(self._get_cached_upload_infos(event))
+
+    def get_active_document_prompt_summary(
+        self, event: AstrMessageEvent
+    ) -> dict[str, object] | None:
+        if self._get_active_document_prompt_summary is None:
+            return None
+        session_id = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if not session_id:
+            return None
+        return self._get_active_document_prompt_summary(session_id)
+
+    def _resolve_document_summary(
+        self,
+        *,
+        event: AstrMessageEvent,
+        request_text: str,
+    ) -> dict[str, object] | None:
+        document_id = self._extract_document_id(request_text)
+        if document_id and self._get_document_prompt_summary:
+            summary = self._get_document_prompt_summary(document_id)
+            if summary:
+                return summary
+        return self.get_active_document_prompt_summary(event)
 
     @staticmethod
     def _append_prompt_section(
@@ -293,7 +313,11 @@ class RequestHookService:
             self._append_prompt_section(
                 context,
                 self.prompt_context_service.build_uploaded_file_scene_section(
-                    file_count=len(readable_upload_infos)
+                    file_count=len(readable_upload_infos),
+                    document_workflow=(
+                        getattr(context, "exposure_level", ExposureLevel.NONE)
+                        == ExposureLevel.DOCUMENT_FULL
+                    ),
                 ),
             )
 
@@ -352,8 +376,10 @@ class RequestHookService:
             context.should_expose
             and context.request.func_tool
             and context.explicit_tool_name
+            and context.explicit_tool_name
+            in set(getattr(context, "allowed_tool_names", ()))
         ):
-            for tool_name in FILE_TOOLS:
+            for tool_name in tuple(getattr(context, "allowed_tool_names", ())):
                 if tool_name != context.explicit_tool_name:
                     context.request.func_tool.remove_tool(tool_name)
             logger.info(

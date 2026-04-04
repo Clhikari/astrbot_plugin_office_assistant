@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from inspect import isawaitable
 from typing import Any
 
+from .constants import ExposureLevel
 from .domain.document.hooks import (
     AfterExportContext,
     AfterExportHook,
@@ -43,6 +44,8 @@ class NoticeBuildContext:
     should_expose: bool
     can_process_upload: bool
     explicit_tool_name: str | None
+    exposure_level: ExposureLevel = ExposureLevel.NONE
+    allowed_tool_names: tuple[str, ...] = ()
     notices: list[str] = field(default_factory=list)
     section_names: list[str] = field(default_factory=list)
 
@@ -54,6 +57,8 @@ class ToolExposureContext:
     should_expose: bool
     can_process_upload: bool
     explicit_tool_name: str | None
+    exposure_level: ExposureLevel = ExposureLevel.NONE
+    allowed_tool_names: tuple[str, ...] = ()
 
 
 NoticeBuildHook = Callable[

@@ -5,6 +5,12 @@
 from enum import Enum, auto
 
 
+class ExposureLevel(str, Enum):
+    NONE = "none"
+    FILE_ONLY = "file_only"
+    DOCUMENT_FULL = "document_full"
+
+
 class OfficeType(Enum):
     WORD = auto()
     EXCEL = auto()
@@ -91,6 +97,20 @@ FILE_TOOLS = (
     "export_document",
     "convert_to_pdf",
     "convert_from_pdf",
+)
+
+FILE_ONLY_TOOLS = (
+    "read_file",
+    "convert_to_pdf",
+    "convert_from_pdf",
+)
+
+DOCUMENT_FULL_TOOLS = (
+    *FILE_ONLY_TOOLS,
+    "create_document",
+    "add_blocks",
+    "finalize_document",
+    "export_document",
 )
 
 EXPLICIT_FILE_TOOL_EVENT_KEY = "office_assistant_explicit_file_tool_name"

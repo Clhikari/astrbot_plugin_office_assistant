@@ -73,6 +73,7 @@ def _build_event(
     event.unified_msg_origin = "session-1"
     event.message_str = ""
     event._buffer_reentry_count = 0
+    event._buffered = False
     event.set_extra.side_effect = lambda key, value: extras.__setitem__(key, value)
     event.get_extra.side_effect = lambda key=None, default=None: (
         dict(extras) if key is None else extras.get(key, default)
@@ -220,13 +221,169 @@ async def test_before_llm_chat_skips_document_guide_for_generic_prompt():
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
         assert "astrbot_execute_shell" not in tool_names
-        assert {
-            "create_document",
-            "add_blocks",
-            "finalize_document",
-            "export_document",
-        }.issubset(tool_names)
+        assert "create_document" not in tool_names
+        assert "read_file" not in tool_names
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
         assert "文件工具使用指南" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_keeps_document_full_for_active_document_session_short_follow_up():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        document_store = plugin._runtime.document_toolset.document_store
+        document_store.create_document(
+            CreateDocumentRequest(
+                session_id=event.unified_msg_origin,
+                title="季度经营复盘",
+            )
+        )
+        req = ProviderRequest(
+            prompt="继续",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "export_document" in tool_names
+        assert "当前文档状态摘要" in req.system_prompt
+        assert "文件工具使用指南" in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_keeps_document_full_for_active_document_session_add_section():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        document_store = plugin._runtime.document_toolset.document_store
+        document_store.create_document(
+            CreateDocumentRequest(
+                session_id=event.unified_msg_origin,
+                title="季度经营复盘",
+            )
+        )
+        req = ProviderRequest(
+            prompt="再加一章关于销售的",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "export_document" in tool_names
+        assert "当前文档状态摘要" in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_downgrades_active_document_session_for_unrelated_chat():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        document_store = plugin._runtime.document_toolset.document_store
+        document_store.create_document(
+            CreateDocumentRequest(
+                session_id=event.unified_msg_origin,
+                title="季度经营复盘",
+            )
+        )
+        req = ProviderRequest(
+            prompt="今天天气怎么样",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_document" not in tool_names
+        assert "add_blocks" not in tool_names
+        assert "read_file" not in tool_names
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "当前文档状态摘要" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_uses_file_only_for_uploaded_file_without_document_intent():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        source_path = Path(__file__).resolve()
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        event.message_obj.message = [
+            Comp.File(name="source.txt", file=str(source_path)),
+        ]
+
+        async def _fake_extract_upload_source(_component):
+            return source_path, "source.txt"
+
+        plugin._extract_upload_source = _fake_extract_upload_source
+        plugin._store_uploaded_file = lambda *_args, **_kwargs: Path("source_1.txt")
+
+        req = ProviderRequest(
+            prompt="先看看里面写了什么",
+            system_prompt="base",
+            func_tool=ToolSet([_tool("existing_tool"), _tool("read_file")]),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "read_file" in tool_names
+        assert "create_document" not in tool_names
+        assert "add_blocks" not in tool_names
+        assert "文件处理规则" in req.system_prompt
+        assert "文件工具使用指南" not in req.system_prompt
+        assert "工作区文件名：source_1.txt" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -376,7 +533,10 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
 
         await plugin.before_llm_chat(event, req)
 
-        assert "MUST 先调用 `read_file` 读取内容，再创建文档" in req.system_prompt
+        assert (
+            "MUST 先调用 `read_file` 读取内容；读取成功后立刻调用 `create_document`"
+            in req.system_prompt
+        )
         assert "MUST 先调用 `read_file` 读取此文件" in req.system_prompt
         assert "原始文件名：source.docx" in req.system_prompt
         assert "工作区文件名：source_1.docx" in req.system_prompt
@@ -390,25 +550,15 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("prompt", "expected_tool"),
+    "prompt",
     [
-        (
-            "调用 create_office_file，filename=report，content=hello，file_type=word",
-            "create_office_file",
-        ),
-        (
-            "reviewpr请求create_office_file，filename=report，content=hello，file_type=word",
-            "create_office_file",
-        ),
-        (
-            "please call `create_office_file` with filename=report, content=hello, file_type=word",
-            "create_office_file",
-        ),
+        "调用 create_office_file，filename=report，content=hello，file_type=word",
+        "reviewpr请求create_office_file，filename=report，content=hello，file_type=word",
+        "please call `create_office_file` with filename=report, content=hello, file_type=word",
     ],
 )
 async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call(
     prompt: str,
-    expected_tool: str,
 ):
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())
@@ -437,12 +587,12 @@ async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call(
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert expected_tool in tool_names
-        assert "create_document" not in tool_names
-        assert "add_blocks" not in tool_names
-        assert "finalize_document" not in tool_names
-        assert "export_document" not in tool_names
-        assert "read_file" not in tool_names
+        assert "create_office_file" not in tool_names
+        assert "create_document" in tool_names
+        assert "add_blocks" in tool_names
+        assert "finalize_document" in tool_names
+        assert "export_document" in tool_names
+        assert "read_file" in tool_names
     finally:
         await plugin.terminate()
 
@@ -508,9 +658,10 @@ async def test_before_llm_chat_does_not_restrict_for_question_style_tool_mention
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert "create_office_file" in tool_names
-        assert "create_document" in tool_names
-        assert "read_file" in tool_names
+        assert "create_office_file" not in tool_names
+        assert "create_document" not in tool_names
+        assert "read_file" not in tool_names
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -550,9 +701,10 @@ async def test_before_llm_chat_does_not_restrict_for_non_explicit_tool_mentions(
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert "create_office_file" in tool_names
-        assert "create_document" in tool_names
-        assert "read_file" in tool_names
+        assert "create_office_file" not in tool_names
+        assert "create_document" not in tool_names
+        assert "read_file" not in tool_names
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -568,7 +720,7 @@ async def test_before_llm_chat_does_not_treat_system_notice_as_explicit_tool_cal
         )
         event.message_str = "[System Notice] 用户上传了文件，请先调用 `read_file` 读取内容，再继续处理。"
         req = ProviderRequest(
-            prompt="",
+            prompt="请根据文件整理成 Word 报告",
             system_prompt="base",
             func_tool=ToolSet(
                 [
@@ -738,7 +890,7 @@ async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
     )
     event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1")
     req = ProviderRequest(
-        prompt="hello",
+        prompt="请生成一份 Word 报告",
         system_prompt="base",
         func_tool=ToolSet([_tool("create_document"), _tool("existing_tool")]),
     )
@@ -1213,7 +1365,7 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_and_follow_thr
     assert "先调用 `read_file` 读取文件" in prompt_text
     assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
     assert (
-        "如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取后继续调用相应工具完成结果"
+        "如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取成功后必须直接调用 `create_document`"
         in prompt_text
     )
     assert not queued_event.message_str.startswith("/")

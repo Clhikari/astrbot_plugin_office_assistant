@@ -2,6 +2,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.platform.message_type import MessageType
@@ -9,9 +10,12 @@ from astrbot.core.provider.entities import ProviderRequest
 
 from ..constants import (
     DOC_COMMAND_TRIGGER_EVENT_KEY,
+    DOCUMENT_FULL_TOOLS,
     EXECUTION_TOOLS,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
+    ExposureLevel,
     FILE_TOOLS,
+    FILE_ONLY_TOOLS,
 )
 from ..internal_hooks import (
     NoticeBuildContext,
@@ -30,6 +34,32 @@ class LLMRequestPolicy:
         r"(?:不要|别|勿|不用|无需|do\s+not|don't|not)\s*(?:调用|使用|call|use|invoke)?\s*$",
         flags=re.IGNORECASE,
     )
+    _DOCUMENT_ID_RE = re.compile(
+        r'document_id["`\']?\s*[:=]\s*["`\']?(?P<document_id>[A-Za-z0-9_-]+)',
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_INTENT_RE = re.compile(
+        r"(create_document|add_blocks|finalize_document|export_document|"
+        r"document_id\b|整理成\s*(?:文档|报告|汇报|word|docx)|"
+        r"导出成\s*word|导出为\s*word|生成\s*(?:文档|报告|汇报|word|docx)|"
+        r"\bword\b|\bdocx\b|文档|报告|汇报)",
+        flags=re.IGNORECASE,
+    )
+    _FILE_INTENT_RE = re.compile(
+        r"(read_file|convert_to_pdf|convert_from_pdf|"
+        r"读取.*文件|查看.*文件|看看.*文件|读取内容|读取这个|"
+        r"\bpdf\b|转成\s*pdf|转换成\s*pdf|导出成\s*pdf|导出为\s*pdf|"
+        r"pdf转word|pdf转excel)",
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_FOLLOWUP_RE = re.compile(
+        r"(继续|接着|再加|加一章|加一节|补充|完善|导出|发给我)",
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_FOLLOWUP_ACTION_RE = re.compile(
+        r"(导出|发给我|加一章|加一节|补充|再加)",
+        flags=re.IGNORECASE,
+    )
     _BUFFERED_USER_INSTRUCTION_RE = re.compile(
         r"\[用户指令\]\s*(?P<instruction>.*?)(?:\n\s*\[|\Z)",
         flags=re.DOTALL,
@@ -41,6 +71,10 @@ class LLMRequestPolicy:
         has_permission: bool
         can_process_upload: bool
         should_expose: bool
+        exposure_level: ExposureLevel
+        allowed_tool_names: tuple[str, ...]
+        active_document_summary: dict[str, object] | None
+        denied_reason: str | None
 
     def __init__(
         self,
@@ -187,6 +221,76 @@ class LLMRequestPolicy:
             ),
         )
 
+    @staticmethod
+    def _extract_document_id(text: str) -> str | None:
+        if not text:
+            return None
+        match = LLMRequestPolicy._DOCUMENT_ID_RE.search(text)
+        if not match:
+            return None
+        return match.group("document_id")
+
+    @staticmethod
+    def _has_uploaded_file_component(event: AstrMessageEvent) -> bool:
+        return any(
+            isinstance(component, Comp.File)
+            for component in (getattr(event.message_obj, "message", None) or [])
+        )
+
+    def _get_cached_upload_infos(self, event: AstrMessageEvent) -> list[dict[str, object]]:
+        if self._request_hook_service is None:
+            return []
+        return self._request_hook_service.get_cached_upload_infos(event)
+
+    def _get_active_document_summary(
+        self, event: AstrMessageEvent
+    ) -> dict[str, object] | None:
+        if self._request_hook_service is None:
+            return None
+        return self._request_hook_service.get_active_document_prompt_summary(event)
+
+    @classmethod
+    def _looks_like_document_followup(cls, text: str) -> bool:
+        normalized_text = str(text or "").strip()
+        if not normalized_text:
+            return False
+        if not cls._DOCUMENT_FOLLOWUP_RE.search(normalized_text):
+            return False
+        if len(normalized_text) <= 24:
+            return True
+        return bool(cls._DOCUMENT_FOLLOWUP_ACTION_RE.search(normalized_text))
+
+    @staticmethod
+    def _allowed_tool_names_for_level(
+        exposure_level: ExposureLevel,
+    ) -> tuple[str, ...]:
+        if exposure_level == ExposureLevel.FILE_ONLY:
+            return tuple(FILE_ONLY_TOOLS)
+        if exposure_level == ExposureLevel.DOCUMENT_FULL:
+            return tuple(DOCUMENT_FULL_TOOLS)
+        return ()
+
+    def _apply_allowed_file_tools(
+        self,
+        req: ProviderRequest,
+        *,
+        exposure_level: ExposureLevel,
+    ) -> tuple[str, ...]:
+        if not req.func_tool:
+            return ()
+
+        allowed_tool_names = self._allowed_tool_names_for_level(exposure_level)
+        if exposure_level == ExposureLevel.DOCUMENT_FULL:
+            for tool in self._document_toolset.tools:
+                if tool.name in allowed_tool_names:
+                    req.func_tool.add_tool(tool)
+
+        allowed_tool_set = set(allowed_tool_names)
+        for tool_name in FILE_TOOLS:
+            if tool_name not in allowed_tool_set:
+                req.func_tool.remove_tool(tool_name)
+        return allowed_tool_names
+
     def _resolve_exposure_decision(
         self,
         event: AstrMessageEvent,
@@ -195,9 +299,8 @@ class LLMRequestPolicy:
         is_group: bool,
         is_friend: bool,
     ) -> ExposureDecision:
-        explicit_tool_name = self._detect_explicit_file_tool(
-            self._extract_explicit_tool_text(event, req)
-        )
+        request_text = self._extract_explicit_tool_text(event, req)
+        explicit_tool_name = self._detect_explicit_file_tool(request_text)
         has_permission = self._check_permission(event)
         can_process_upload = has_permission or event.is_admin()
         get_extra = getattr(event, "get_extra", None)
@@ -212,14 +315,74 @@ class LLMRequestPolicy:
             or self._is_bot_mentioned(event)
             or doc_command_triggered
         )
-        should_expose = (is_friend and event.is_admin()) or (
-            has_permission and meets_group_trigger
+        if not self._is_group_feature_enabled(event):
+            return self.ExposureDecision(
+                explicit_tool_name=explicit_tool_name,
+                has_permission=has_permission,
+                can_process_upload=can_process_upload,
+                should_expose=False,
+                exposure_level=ExposureLevel.NONE,
+                allowed_tool_names=(),
+                active_document_summary=None,
+                denied_reason="group_feature_disabled",
+            )
+        if not ((is_friend and event.is_admin()) or has_permission):
+            return self.ExposureDecision(
+                explicit_tool_name=explicit_tool_name,
+                has_permission=has_permission,
+                can_process_upload=can_process_upload,
+                should_expose=False,
+                exposure_level=ExposureLevel.NONE,
+                allowed_tool_names=(),
+                active_document_summary=None,
+                denied_reason="missing_permission",
+            )
+        if not ((is_friend and event.is_admin()) or meets_group_trigger):
+            return self.ExposureDecision(
+                explicit_tool_name=explicit_tool_name,
+                has_permission=has_permission,
+                can_process_upload=can_process_upload,
+                should_expose=False,
+                exposure_level=ExposureLevel.NONE,
+                allowed_tool_names=(),
+                active_document_summary=None,
+                denied_reason="missing_group_trigger",
+            )
+
+        has_uploaded_files = self._has_uploaded_file_component(event)
+        has_cached_uploads = bool(self._get_cached_upload_infos(event))
+        active_document_summary = self._get_active_document_summary(event)
+        has_active_document = bool(active_document_summary)
+        has_document_id = bool(self._extract_document_id(request_text))
+        has_document_intent = bool(
+            has_document_id or self._DOCUMENT_INTENT_RE.search(request_text)
         )
+        has_file_intent = bool(self._FILE_INTENT_RE.search(request_text))
+
+        if has_document_id:
+            exposure_level = ExposureLevel.DOCUMENT_FULL
+        elif has_active_document and self._looks_like_document_followup(request_text):
+            exposure_level = ExposureLevel.DOCUMENT_FULL
+        elif (has_uploaded_files or has_cached_uploads) and has_document_intent:
+            exposure_level = ExposureLevel.DOCUMENT_FULL
+        elif has_document_intent:
+            exposure_level = ExposureLevel.DOCUMENT_FULL
+        elif has_uploaded_files or has_cached_uploads or has_file_intent:
+            exposure_level = ExposureLevel.FILE_ONLY
+        else:
+            exposure_level = ExposureLevel.NONE
+
+        allowed_tool_names = self._allowed_tool_names_for_level(exposure_level)
+        should_expose = exposure_level != ExposureLevel.NONE
         return self.ExposureDecision(
             explicit_tool_name=explicit_tool_name,
             has_permission=has_permission,
             can_process_upload=can_process_upload,
             should_expose=should_expose,
+            exposure_level=exposure_level,
+            allowed_tool_names=allowed_tool_names,
+            active_document_summary=active_document_summary,
+            denied_reason=None if should_expose else "no_relevant_intent",
         )
 
     async def apply(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
@@ -237,18 +400,15 @@ class LLMRequestPolicy:
             decision.explicit_tool_name,
         )
 
-        if not self._is_group_feature_enabled(event):
-            self._remove_file_tools(req)
-            self._remove_execution_tools(req)
-            self._append_tools_denied_notice(req)
-            logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
-            return
-
         if not decision.should_expose:
-            if not decision.has_permission:
+            if decision.denied_reason == "group_feature_disabled":
+                logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
+            elif decision.denied_reason == "missing_permission":
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 无文件权限，已隐藏文件工具"
                 )
+            elif decision.denied_reason == "no_relevant_intent":
+                logger.debug("[文件管理] 当前请求无文件相关意图，已隐藏文件工具")
             else:
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 未满足群聊触发条件，已隐藏文件工具"
@@ -258,9 +418,15 @@ class LLMRequestPolicy:
             self._append_tools_denied_notice(req)
             return
 
-        if decision.should_expose and req.func_tool:
-            for tool in self._document_toolset.tools:
-                req.func_tool.add_tool(tool)
+        allowed_tool_names = self._apply_allowed_file_tools(
+            req,
+            exposure_level=decision.exposure_level,
+        )
+        logger.debug(
+            "[文件管理] exposure_level=%s | allowed_tools=%s",
+            decision.exposure_level.value,
+            ",".join(allowed_tool_names) or "none",
+        )
 
         await self._run_before_expose_tools(
             ToolExposureContext(
@@ -269,6 +435,8 @@ class LLMRequestPolicy:
                 should_expose=decision.should_expose,
                 can_process_upload=decision.can_process_upload,
                 explicit_tool_name=decision.explicit_tool_name,
+                exposure_level=decision.exposure_level,
+                allowed_tool_names=allowed_tool_names,
             )
         )
 
@@ -279,6 +447,8 @@ class LLMRequestPolicy:
                 should_expose=decision.should_expose,
                 can_process_upload=decision.can_process_upload,
                 explicit_tool_name=decision.explicit_tool_name,
+                exposure_level=decision.exposure_level,
+                allowed_tool_names=allowed_tool_names,
             )
         )
         if notice_context.notices:
@@ -291,8 +461,12 @@ class LLMRequestPolicy:
             req.system_prompt = (req.system_prompt or "") + "".join(ordered_notices)
             logger.debug(
                 "[文件管理] Prompt sections: %s",
-                self._prompt_context_service.build_section_trace(
-                    section_names=ordered_names,
-                    notices=ordered_notices,
+                (
+                    self._prompt_context_service.build_section_trace(
+                        section_names=ordered_names,
+                        notices=ordered_notices,
+                    )
+                    + f" | exposure_level={decision.exposure_level.value}"
+                    + f" | allowed_tools={','.join(allowed_tool_names) or 'none'}"
                 ),
             )

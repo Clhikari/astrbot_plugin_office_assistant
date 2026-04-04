@@ -209,6 +209,13 @@ def _build_request_pipeline_services(
         except KeyError:
             return None
 
+    def _get_active_document_prompt_summary(
+        session_id: str,
+    ) -> dict[str, object] | None:
+        if document_store is None:
+            return None
+        return document_store.build_latest_prompt_summary_for_session(session_id)
+
     request_hook_service = RequestHookService(
         auto_block_execution_tools=settings.auto_block_execution_tools,
         get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
@@ -216,6 +223,7 @@ def _build_request_pipeline_services(
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,
         get_document_prompt_summary=_get_document_prompt_summary,
+        get_active_document_prompt_summary=_get_active_document_prompt_summary,
         prompt_context_service=prompt_context_service,
     )
     llm_request_policy = LLMRequestPolicy(
