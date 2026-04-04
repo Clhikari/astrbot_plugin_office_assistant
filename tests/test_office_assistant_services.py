@@ -24,8 +24,8 @@ from astrbot_plugin_office_assistant.services import (
     CommandService,
     DeliveryService,
     ErrorHookService,
-    FileReadService,
     ExportHookService,
+    FileReadService,
     FileToolService,
     GeneratedFileDeliveryService,
     IncomingMessageService,
@@ -39,11 +39,11 @@ from astrbot_plugin_office_assistant.services import (
     build_plugin_runtime,
 )
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
-    PromptContextService,
     SECTION_DYNAMIC_DOCUMENT_SUMMARY,
     SECTION_DYNAMIC_UPLOAD_SUMMARY,
     SECTION_SCENE_UPLOADED_FILE,
     SECTION_STATIC_DOCUMENT_TOOLS,
+    PromptContextService,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -1262,6 +1262,47 @@ async def test_request_hook_service_shows_compact_paths_for_omitted_files():
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_items():
+    request = ProviderRequest(
+        prompt="根据上传文件整理内容",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event.message_obj.message = [
+        Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
+    ]
+    upload_infos = _build_upload_infos(5)
+    upload_infos[3]["source_path"] = "/tmp/file_3.txt"
+    upload_infos[4]["source_path"] = ""
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: upload_infos,
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=True,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    notice = context.notices[1]
+    assert "其余 2 个文件：" in notice
+    assert "file_3.txt -> /tmp/file_3.txt" in notice
+    assert "file_4.txt" in notice
+    assert "file_4.txt ->" not in notice
+    assert "其余 1 个文件：" not in notice
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_appends_document_summary_for_existing_document():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1508,6 +1549,24 @@ def test_upload_prompt_service_shows_compact_paths_for_omitted_files():
     assert "file_4.txt -> /tmp/file_4.txt" in prompt_text
     assert "其余 2 个文件：" in prompt_text
     assert "未展开详细信息" in prompt_text
+
+
+def test_upload_prompt_service_keeps_omitted_count_aligned_with_mixed_path_items():
+    service = UploadPromptService(allow_external_input_files=True)
+    upload_infos = _build_upload_infos(5)
+    upload_infos[3]["source_path"] = "/tmp/file_3.txt"
+    upload_infos[4]["source_path"] = ""
+
+    prompt_text = service.build_prompt(
+        upload_infos=upload_infos,
+        user_instruction="整理成报告",
+    )
+
+    assert "其余 2 个文件：" in prompt_text
+    assert "file_3.txt -> /tmp/file_3.txt" in prompt_text
+    assert "file_4.txt" in prompt_text
+    assert "file_4.txt ->" not in prompt_text
+    assert "其余 1 个文件：" not in prompt_text
 
 
 def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
