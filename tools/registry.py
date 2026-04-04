@@ -3,18 +3,21 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from mcp.server.fastmcp import FastMCP
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
 from ..domain.document.session_store import DocumentSessionStore
 
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
+
 
 class AstrBotDocumentTool(Protocol):
     name: str
+
 
 AfterExportCallback = Callable[
     [ContextWrapper[AstrAgentContext], str], Awaitable[str | None]
@@ -29,7 +32,7 @@ AstrBotToolFactory = Callable[
     AstrBotDocumentTool,
 ]
 McpToolRegistrar = Callable[
-    [FastMCP, DocumentSessionStore, list[BeforeExportHook], list[AfterExportHook]],
+    ["FastMCP", DocumentSessionStore, list[BeforeExportHook], list[AfterExportHook]],
     None,
 ]
 

@@ -1,9 +1,12 @@
+import builtins
+import importlib
 import json
 import struct
+import sys
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -323,6 +326,33 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
     assert [tool.name for tool in toolset.tools] == [
         spec.name for spec in get_document_tool_specs()
     ]
+
+
+def test_registry_import_does_not_require_fastmcp_at_runtime():
+    module_name = "astrbot_plugin_office_assistant.tools.registry"
+    cached_module = sys.modules.pop(module_name, None)
+    original_import = builtins.__import__
+
+    def _guard_fastmcp_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "mcp.server.fastmcp":
+            raise ModuleNotFoundError("fastmcp unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    try:
+        with patch("builtins.__import__", side_effect=_guard_fastmcp_import):
+            imported = importlib.import_module(module_name)
+        assert [spec.name for spec in imported.get_document_tool_specs()] == [
+            "create_document",
+            "add_blocks",
+            "finalize_document",
+            "export_document",
+        ]
+    finally:
+        sys.modules.pop(module_name, None)
+        if cached_module is not None:
+            sys.modules[module_name] = cached_module
+        else:
+            importlib.import_module(module_name)
 
 
 def test_astrbot_toolset_passes_export_hooks_and_callback(
