@@ -587,12 +587,50 @@ async def test_before_llm_chat_restricts_file_tools_for_explicit_tool_call(
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert "create_office_file" not in tool_names
+        assert "create_office_file" in tool_names
+        assert "create_document" not in tool_names
+        assert "add_blocks" not in tool_names
+        assert "finalize_document" not in tool_names
+        assert "export_document" not in tool_names
+        assert "read_file" not in tool_names
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_keeps_create_office_file_for_excel_intent():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        req = ProviderRequest(
+            prompt="帮我创建一个 Excel 表格",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("create_office_file"),
+                    _tool("create_document"),
+                    _tool("add_blocks"),
+                    _tool("finalize_document"),
+                    _tool("export_document"),
+                    _tool("read_file"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "create_office_file" in tool_names
         assert "create_document" in tool_names
         assert "add_blocks" in tool_names
-        assert "finalize_document" in tool_names
         assert "export_document" in tool_names
-        assert "read_file" in tool_names
+        assert "文件工具使用指南" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -1062,6 +1100,98 @@ async def test_llm_request_policy_returns_after_tools_denied_notice():
     assert "existing_tool" in set(req.func_tool.names())
     assert "read_file" not in set(req.func_tool.names())
     assert "astrbot_execute_shell" not in set(req.func_tool.names())
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_does_not_upgrade_plain_chat_from_cached_uploads():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/tmp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(
+            tools=[_tool("create_office_file"), _tool("create_document")]
+        ),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="今天天气怎么样",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("create_office_file"),
+                _tool("create_document"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    tool_names = set(req.func_tool.names())
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "read_file" not in tool_names
+    assert "create_office_file" not in tool_names
+    assert "create_document" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "existing_tool" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_keeps_execution_tools_when_no_file_intent_and_auto_block_disabled():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=False,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="hello",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    tool_names = set(req.func_tool.names())
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "read_file" not in tool_names
+    assert "existing_tool" in tool_names
+    assert "astrbot_execute_shell" in tool_names
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,9 @@ class LLMRequestPolicy:
         r"(create_document|add_blocks|finalize_document|export_document|"
         r"document_id\b|整理成\s*(?:文档|报告|汇报|word|docx)|"
         r"导出成\s*word|导出为\s*word|生成\s*(?:文档|报告|汇报|word|docx)|"
-        r"\bword\b|\bdocx\b|文档|报告|汇报)",
+        r"生成\s*(?:excel|xlsx|表格|powerpoint|ppt|幻灯片)|"
+        r"\bword\b|\bdocx\b|\bexcel\b|\bxlsx\b|\bpowerpoint\b|\bppt\b|"
+        r"文档|报告|汇报|表格|幻灯片)",
         flags=re.IGNORECASE,
     )
     _FILE_INTENT_RE = re.compile(
@@ -237,11 +239,6 @@ class LLMRequestPolicy:
             for component in (getattr(event.message_obj, "message", None) or [])
         )
 
-    def _get_cached_upload_infos(self, event: AstrMessageEvent) -> list[dict[str, object]]:
-        if self._request_hook_service is None:
-            return []
-        return self._request_hook_service.get_cached_upload_infos(event)
-
     def _get_active_document_summary(
         self, event: AstrMessageEvent
     ) -> dict[str, object] | None:
@@ -350,7 +347,8 @@ class LLMRequestPolicy:
             )
 
         has_uploaded_files = self._has_uploaded_file_component(event)
-        has_cached_uploads = bool(self._get_cached_upload_infos(event))
+        has_buffered_upload = bool(getattr(event, "_buffered", False))
+        has_current_upload = has_uploaded_files or has_buffered_upload
         active_document_summary = self._get_active_document_summary(event)
         has_active_document = bool(active_document_summary)
         has_document_id = bool(self._extract_document_id(request_text))
@@ -358,16 +356,25 @@ class LLMRequestPolicy:
             has_document_id or self._DOCUMENT_INTENT_RE.search(request_text)
         )
         has_file_intent = bool(self._FILE_INTENT_RE.search(request_text))
+        has_explicit_document_tool = explicit_tool_name in {
+            "create_office_file",
+            "create_document",
+            "add_blocks",
+            "finalize_document",
+            "export_document",
+        }
 
         if has_document_id:
             exposure_level = ExposureLevel.DOCUMENT_FULL
+        elif has_explicit_document_tool:
+            exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_active_document and self._looks_like_document_followup(request_text):
             exposure_level = ExposureLevel.DOCUMENT_FULL
-        elif (has_uploaded_files or has_cached_uploads) and has_document_intent:
+        elif has_current_upload and has_document_intent:
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_document_intent:
             exposure_level = ExposureLevel.DOCUMENT_FULL
-        elif has_uploaded_files or has_cached_uploads or has_file_intent:
+        elif has_current_upload or has_file_intent:
             exposure_level = ExposureLevel.FILE_ONLY
         else:
             exposure_level = ExposureLevel.NONE
@@ -414,7 +421,20 @@ class LLMRequestPolicy:
                     f"[文件管理] 用户 {event.get_sender_id()} 未满足群聊触发条件，已隐藏文件工具"
                 )
             self._remove_file_tools(req)
-            self._remove_execution_tools(req)
+            if decision.denied_reason == "no_relevant_intent":
+                await self._run_before_expose_tools(
+                    ToolExposureContext(
+                        event=event,
+                        request=req,
+                        should_expose=False,
+                        can_process_upload=decision.can_process_upload,
+                        explicit_tool_name=decision.explicit_tool_name,
+                        exposure_level=decision.exposure_level,
+                        allowed_tool_names=decision.allowed_tool_names,
+                    )
+                )
+            else:
+                self._remove_execution_tools(req)
             self._append_tools_denied_notice(req)
             return
 

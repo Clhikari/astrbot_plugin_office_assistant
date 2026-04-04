@@ -201,6 +201,7 @@ class RequestHookService:
             summary = self._get_document_prompt_summary(document_id)
             if summary:
                 return summary
+            return None
         return self.get_active_document_prompt_summary(event)
 
     @staticmethod
@@ -358,11 +359,7 @@ class RequestHookService:
         self,
         context: ToolExposureContext,
     ) -> ToolExposureContext:
-        if (
-            context.should_expose
-            and context.request.func_tool
-            and self._auto_block_execution_tools
-        ):
+        if context.request.func_tool and self._auto_block_execution_tools:
             for tool_name in EXECUTION_TOOLS:
                 context.request.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")

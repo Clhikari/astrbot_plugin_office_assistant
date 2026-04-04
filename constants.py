@@ -107,6 +107,7 @@ FILE_ONLY_TOOLS = (
 
 DOCUMENT_FULL_TOOLS = (
     *FILE_ONLY_TOOLS,
+    "create_office_file",
     "create_document",
     "add_blocks",
     "finalize_document",
