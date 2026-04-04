@@ -286,12 +286,16 @@ class RequestHookService:
         if not readable_upload_infos:
             return context
 
-        self._append_prompt_section(
-            context,
-            self.prompt_context_service.build_uploaded_file_scene_section(
-                file_count=len(readable_upload_infos)
-            ),
-        )
+        if self._should_append_uploaded_file_scene_notice(
+            event=event,
+            prompt=str(req.prompt or ""),
+        ):
+            self._append_prompt_section(
+                context,
+                self.prompt_context_service.build_uploaded_file_scene_section(
+                    file_count=len(readable_upload_infos)
+                ),
+            )
 
         if len(readable_upload_infos) == 1:
             info = readable_upload_infos[0]
@@ -314,6 +318,17 @@ class RequestHookService:
             ),
         )
         return context
+
+    @classmethod
+    def _should_append_uploaded_file_scene_notice(
+        cls,
+        *,
+        event: AstrMessageEvent,
+        prompt: str,
+    ) -> bool:
+        if getattr(event, "_buffered", False) is not True:
+            return True
+        return cls._BUFFERED_USER_INSTRUCTION_RE.search(prompt.strip()) is not None
 
     async def apply_execution_tool_block(
         self,

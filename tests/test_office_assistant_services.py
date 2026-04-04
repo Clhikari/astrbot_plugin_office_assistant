@@ -1107,8 +1107,160 @@ async def test_request_hook_service_limits_multi_file_notice_details():
     assert "文件数量：5" in notice
     assert "file-0.txt" in notice
     assert "file-2.txt" in notice
-    assert "file-3.txt" not in notice
-    assert "其余 2 个文件未展开详细信息" in notice
+    assert "file_3.txt" in notice
+    assert "file_4.txt" in notice
+    assert "其余 2 个文件：" in notice
+    assert "未展开详细信息" in notice
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_prompt():
+    request = ProviderRequest(
+        prompt=(
+            "\n[System Notice] 用户上传了 2 个文件\n\n"
+            "[文件信息]\n"
+            "- 原始文件名: file-0.txt (类型: .txt)\n"
+            "  工作区文件名: file_0.txt\n"
+        ),
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event._buffered = True
+    event.message_obj.message = [
+        Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(2)
+    ]
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": f"file-{idx}.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": f"file_{idx}.txt",
+                "source_path": "",
+            }
+            for idx in range(2)
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    assert len(context.notices) == 1
+    assert context.section_names == [SECTION_DYNAMIC_UPLOAD_SUMMARY]
+    assert "文件数量：2" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_scene_notice_for_buffered_prompt_with_instruction():
+    request = ProviderRequest(
+        prompt=(
+            "\n[System Notice] 用户上传了 1 个文件\n\n"
+            "[文件信息]\n"
+            "- 原始文件名: report.docx (类型: .docx)\n"
+            "  工作区文件名: report_1.docx\n\n"
+            "[用户指令]\n"
+            "根据文件整理成正式汇报\n"
+        ),
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event._buffered = True
+    event.message_obj.message = [Comp.File(name="report.docx", file="report.docx")]
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "type_desc": "Office文档 (Word/Excel/PPT)",
+                "is_supported": True,
+                "stored_name": "report_1.docx",
+                "source_path": "",
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    assert len(context.notices) == 2
+    assert context.section_names == [
+        SECTION_SCENE_UPLOADED_FILE,
+        SECTION_DYNAMIC_UPLOAD_SUMMARY,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_shows_compact_paths_for_omitted_files():
+    request = ProviderRequest(
+        prompt="根据上传文件整理内容",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event.message_obj.message = [
+        Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
+    ]
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": f"file-{idx}.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": f"file_{idx}.txt",
+                "source_path": f"/tmp/file_{idx}.txt",
+            }
+            for idx in range(5)
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=True,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    notice = context.notices[1]
+    assert "file_3.txt -> /tmp/file_3.txt" in notice
+    assert "file_4.txt -> /tmp/file_4.txt" in notice
+    assert "其余 2 个文件：" in notice
+    assert "未展开详细信息" in notice
 
 
 @pytest.mark.asyncio
@@ -1346,8 +1498,33 @@ def test_upload_prompt_service_limits_file_details_for_many_uploads():
     assert "用户上传了 5 个文件" in prompt_text
     assert "file-0.txt" in prompt_text
     assert "file-2.txt" in prompt_text
-    assert "file-3.txt" not in prompt_text
-    assert "其余 2 个文件未展开详细信息" in prompt_text
+    assert "file_3.txt" in prompt_text
+    assert "file_4.txt" in prompt_text
+    assert "其余 2 个文件：" in prompt_text
+    assert "未展开详细信息" in prompt_text
+
+
+def test_upload_prompt_service_shows_compact_paths_for_omitted_files():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": f"file-{idx}.txt",
+                "file_suffix": ".txt",
+                "stored_name": f"file_{idx}.txt",
+                "source_path": f"/tmp/file_{idx}.txt",
+                "is_supported": True,
+            }
+            for idx in range(5)
+        ],
+        user_instruction="整理成报告",
+    )
+
+    assert "file_3.txt -> /tmp/file_3.txt" in prompt_text
+    assert "file_4.txt -> /tmp/file_4.txt" in prompt_text
+    assert "其余 2 个文件：" in prompt_text
+    assert "未展开详细信息" in prompt_text
 
 
 def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():

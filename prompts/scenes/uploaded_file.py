@@ -70,7 +70,7 @@ def build_uploaded_file_summary_notice(
     if not readable_infos:
         return ""
 
-    file_info_list, omitted_count = _build_limited_file_info_list(
+    file_info_list, omitted_infos = _build_limited_file_info_list(
         readable_infos,
         allow_external_input_files=allow_external_input_files,
     )
@@ -82,7 +82,10 @@ def build_uploaded_file_summary_notice(
         + "\n"
         + "[文件信息]\n"
         + "\n".join(f"- {info}" for info in file_info_list)
-        + _build_omitted_upload_info_line(omitted_count)
+        + _build_omitted_upload_info_line(
+            omitted_infos,
+            allow_external_input_files=allow_external_input_files,
+        )
         + "\n\n"
         + "[路径提示]\n"
         + "- 若使用相对路径，请使用上面的工作区文件名。\n"
@@ -98,7 +101,7 @@ def build_buffered_upload_prompt(
     user_instruction: str,
     allow_external_input_files: bool,
 ) -> str:
-    file_info_list, omitted_count = _build_limited_file_info_list(
+    file_info_list, omitted_infos = _build_limited_file_info_list(
         upload_infos,
         allow_external_input_files=allow_external_input_files,
     )
@@ -106,7 +109,10 @@ def build_buffered_upload_prompt(
     relative_path_guidance = _build_relative_path_guidance(
         allow_external_input_files=allow_external_input_files
     )
-    omitted_info_line = _build_omitted_upload_info_line(omitted_count)
+    omitted_info_line = _build_omitted_upload_info_line(
+        omitted_infos,
+        allow_external_input_files=allow_external_input_files,
+    )
 
     if has_readable_file and user_instruction:
         return (
@@ -202,8 +208,9 @@ def _build_limited_file_info_list(
     upload_infos: list[UploadInfo],
     *,
     allow_external_input_files: bool,
-) -> tuple[list[str], int]:
+) -> tuple[list[str], list[UploadInfo]]:
     limited_infos = upload_infos[:MAX_DETAILED_UPLOAD_INFOS]
+    omitted_infos = upload_infos[MAX_DETAILED_UPLOAD_INFOS:]
     file_info_list = [
         format_upload_file_info(
             info,
@@ -211,10 +218,50 @@ def _build_limited_file_info_list(
         )
         for info in limited_infos
     ]
-    return file_info_list, max(0, len(upload_infos) - len(limited_infos))
+    return file_info_list, omitted_infos
 
 
-def _build_omitted_upload_info_line(omitted_count: int) -> str:
-    if omitted_count <= 0:
+def _build_omitted_upload_info_line(
+    omitted_infos: list[UploadInfo],
+    *,
+    allow_external_input_files: bool,
+) -> str:
+    if not omitted_infos:
         return ""
+    omitted_count = len(omitted_infos)
+    if allow_external_input_files:
+        path_items = [
+            compact_path
+            for info in omitted_infos
+            if (compact_path := _build_compact_upload_path_item(info))
+        ]
+        if path_items:
+            return (
+                f"\n- 其余 {omitted_count} 个文件："
+                + "；".join(path_items)
+                + "（未展开详细信息）"
+            )
+    display_names = [
+        display_name
+        for info in omitted_infos
+        if (display_name := _display_upload_name(info))
+    ]
+    if display_names:
+        return (
+            f"\n- 其余 {omitted_count} 个文件："
+            + "、".join(display_names)
+            + "（未展开详细信息）"
+        )
     return f"\n- 其余 {omitted_count} 个文件未展开详细信息"
+
+
+def _display_upload_name(info: UploadInfo) -> str:
+    return info.get("stored_name") or info.get("original_name") or ""
+
+
+def _build_compact_upload_path_item(info: UploadInfo) -> str:
+    display_name = _display_upload_name(info)
+    source_path = info.get("source_path") or ""
+    if display_name and source_path:
+        return f"{display_name} -> {source_path}"
+    return display_name
