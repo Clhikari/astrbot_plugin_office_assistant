@@ -2,18 +2,20 @@ import importlib
 import tempfile
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from ..agent_tools import build_document_toolset
+from ..app.runtime import (
+    AdminUsersResolver,
+    FileProcessingServices,
+    PluginRuntimeBundle,
+    RequestPipelineServices,
+)
+from ..app.settings import PluginSettings, load_plugin_settings
 from ..constants import (
-    DEFAULT_MAX_FILE_SIZE_MB,
-    DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
-    DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
     MSG_DOCUMENT_EXPORTED,
     OFFICE_LIBS,
 )
@@ -25,75 +27,20 @@ from .access_policy_service import AccessPolicyService
 from .command_service import CommandService
 from .delivery_service import DeliveryService
 from .error_hook_service import ErrorHookService
+from .file_delivery_service import FileDeliveryService
+from .file_read_service import FileReadService
 from .file_tool_service import FileToolService
 from .generated_file_delivery_service import GeneratedFileDeliveryService
 from .incoming_message_service import IncomingMessageService
 from .llm_request_policy import LLMRequestPolicy
+from .office_generate_service import OfficeGenerateService
+from .pdf_convert_service import PdfConvertService
 from .post_export_hook_service import PostExportHookService
+from .prompt_context_service import PromptContextService
 from .request_hook_service import RequestHookService
 from .upload_session_service import UploadSessionService
 from .word_read_service import WordReadService
 from .workspace_service import WorkspaceService
-
-
-@dataclass(slots=True)
-class PluginSettings:
-    auto_delete: bool
-    max_file_size: int
-    enable_docx_image_review: bool
-    max_inline_docx_image_bytes: int
-    max_inline_docx_image_count: int
-    buffer_wait: int
-    reply_to_user: bool
-    require_at_in_group: bool
-    enable_features_in_group: bool
-    auto_block_execution_tools: bool
-    enable_preview: bool
-    preview_dpi: int
-    allow_external_input_files: bool
-    feature_settings: dict
-    recent_text_ttl_seconds: int
-    upload_session_ttl_seconds: int
-    recent_text_max_entries: int
-    recent_text_cleanup_interval_seconds: int
-    upload_session_cleanup_interval_seconds: int
-
-
-@dataclass(slots=True)
-class PluginRuntimeBundle:
-    settings: PluginSettings
-    temp_dir: tempfile.TemporaryDirectory | None
-    plugin_data_path: Path
-    executor: ThreadPoolExecutor
-    office_gen: OfficeGenerator
-    pdf_converter: PDFConverter
-    preview_gen: PreviewGenerator
-    office_libs: dict
-    workspace_service: WorkspaceService
-    access_policy_service: AccessPolicyService
-    upload_session_service: UploadSessionService
-    document_toolset: Any
-    llm_request_policy: LLMRequestPolicy
-    delivery_service: DeliveryService
-    post_export_hook_service: PostExportHookService
-    file_tool_service: FileToolService
-    command_service: CommandService
-    error_hook_service: ErrorHookService
-    message_buffer: MessageBuffer
-    incoming_message_service: IncomingMessageService
-
-
-@dataclass(slots=True)
-class AdminUsersResolver:
-    context: object
-    admin_users: set[str]
-
-    def __call__(self) -> set[str]:
-        return set(self.admin_users)
-
-    def refresh(self) -> set[str]:
-        self.admin_users = _extract_admin_users(_resolve_root_config(self.context))
-        return self()
 
 
 def build_plugin_runtime(
@@ -105,7 +52,7 @@ def build_plugin_runtime(
     extract_upload_source,
     store_uploaded_file,
 ) -> PluginRuntimeBundle:
-    settings = _load_settings(config)
+    settings = load_plugin_settings(config)
     root_config = _resolve_root_config(context)
     admin_users = _extract_admin_users(root_config)
     get_admin_users = _build_admin_users_resolver(
@@ -166,44 +113,22 @@ def build_plugin_runtime(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
     )
-    request_hook_service = RequestHookService(
-        auto_block_execution_tools=settings.auto_block_execution_tools,
-        get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
+    request_pipeline_services = _build_request_pipeline_services(
+        settings=settings,
+        upload_session_service=upload_session_service,
+        access_policy_service=access_policy_service,
+        document_toolset=document_toolset,
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
-        allow_external_input_files=settings.allow_external_input_files,
     )
-    llm_request_policy = LLMRequestPolicy(
-        document_toolset=document_toolset,
-        require_at_in_group=settings.require_at_in_group,
-        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
-        check_permission=access_policy_service.check_permission,
-        is_bot_mentioned=access_policy_service.is_bot_mentioned,
-        request_hook_service=request_hook_service,
-    )
-    file_tool_service = FileToolService(
+    file_processing_services = _build_file_processing_services(
+        settings=settings,
         workspace_service=workspace_service,
-        office_generator=office_gen,
-        pdf_converter=pdf_converter,
         delivery_service=delivery_service,
-        generated_file_delivery_service=GeneratedFileDeliveryService(
-            workspace_service=workspace_service,
-            delivery_service=delivery_service,
-        ),
-        word_read_service=WordReadService(
-            workspace_service=workspace_service,
-            enable_docx_image_review=settings.enable_docx_image_review,
-            max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
-            max_inline_docx_image_count=settings.max_inline_docx_image_count,
-        ),
+        office_gen=office_gen,
+        pdf_converter=pdf_converter,
         office_libs=office_libs,
-        allow_external_input_files=settings.allow_external_input_files,
-        enable_docx_image_review=settings.enable_docx_image_review,
-        max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
-        max_inline_docx_image_count=settings.max_inline_docx_image_count,
-        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
-        check_permission=access_policy_service.check_permission,
-        group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+        access_policy_service=access_policy_service,
     )
     command_service = CommandService(
         workspace_service=workspace_service,
@@ -244,14 +169,147 @@ def build_plugin_runtime(
         access_policy_service=access_policy_service,
         upload_session_service=upload_session_service,
         document_toolset=document_toolset,
-        llm_request_policy=llm_request_policy,
+        llm_request_policy=request_pipeline_services.llm_request_policy,
+        prompt_context_service=request_pipeline_services.prompt_context_service,
         delivery_service=delivery_service,
+        generated_file_delivery_service=file_processing_services.generated_file_delivery_service,
+        file_delivery_service=file_processing_services.file_delivery_service,
+        word_read_service=file_processing_services.word_read_service,
+        file_read_service=file_processing_services.file_read_service,
+        office_generate_service=file_processing_services.office_generate_service,
+        pdf_convert_service=file_processing_services.pdf_convert_service,
         post_export_hook_service=post_export_hook_service,
-        file_tool_service=file_tool_service,
+        file_tool_service=file_processing_services.file_tool_service,
         command_service=command_service,
         error_hook_service=error_hook_service,
         message_buffer=message_buffer,
         incoming_message_service=incoming_message_service,
+    )
+
+
+def _build_request_pipeline_services(
+    *,
+    settings: PluginSettings,
+    upload_session_service: UploadSessionService,
+    access_policy_service: AccessPolicyService,
+    document_toolset,
+    extract_upload_source,
+    store_uploaded_file,
+) -> RequestPipelineServices:
+    prompt_context_service = PromptContextService(
+        allow_external_input_files=settings.allow_external_input_files
+    )
+    document_store = getattr(document_toolset, "document_store", None)
+
+    def _get_document_prompt_summary(document_id: str) -> dict[str, object] | None:
+        if document_store is None:
+            return None
+        try:
+            return document_store.build_prompt_summary(document_id)
+        except KeyError:
+            return None
+
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=settings.auto_block_execution_tools,
+        get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
+        extract_upload_source=extract_upload_source,
+        store_uploaded_file=store_uploaded_file,
+        allow_external_input_files=settings.allow_external_input_files,
+        get_document_prompt_summary=_get_document_prompt_summary,
+        prompt_context_service=prompt_context_service,
+    )
+    llm_request_policy = LLMRequestPolicy(
+        document_toolset=document_toolset,
+        require_at_in_group=settings.require_at_in_group,
+        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
+        check_permission=access_policy_service.check_permission,
+        is_bot_mentioned=access_policy_service.is_bot_mentioned,
+        request_hook_service=request_hook_service,
+        prompt_context_service=prompt_context_service,
+    )
+    return RequestPipelineServices(
+        prompt_context_service=prompt_context_service,
+        request_hook_service=request_hook_service,
+        llm_request_policy=llm_request_policy,
+    )
+
+
+def _build_file_processing_services(
+    *,
+    settings: PluginSettings,
+    workspace_service: WorkspaceService,
+    delivery_service: DeliveryService,
+    office_gen: OfficeGenerator,
+    pdf_converter: PDFConverter,
+    office_libs: dict,
+    access_policy_service: AccessPolicyService,
+) -> FileProcessingServices:
+    generated_file_delivery_service = GeneratedFileDeliveryService(
+        workspace_service=workspace_service,
+        delivery_service=delivery_service,
+    )
+    file_delivery_service = FileDeliveryService(
+        generated_file_delivery_service=generated_file_delivery_service,
+    )
+    word_read_service = WordReadService(
+        workspace_service=workspace_service,
+        enable_docx_image_review=settings.enable_docx_image_review,
+        max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
+        max_inline_docx_image_count=settings.max_inline_docx_image_count,
+    )
+    file_read_service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=word_read_service,
+        allow_external_input_files=settings.allow_external_input_files,
+        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
+        check_permission=access_policy_service.check_permission,
+        group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+    )
+    office_generate_service = OfficeGenerateService(
+        workspace_service=workspace_service,
+        office_generator=office_gen,
+        file_delivery_service=file_delivery_service,
+        office_libs=office_libs,
+        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
+        check_permission=access_policy_service.check_permission,
+        group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+    )
+    pdf_convert_service = PdfConvertService(
+        workspace_service=workspace_service,
+        pdf_converter=pdf_converter,
+        file_delivery_service=file_delivery_service,
+        allow_external_input_files=settings.allow_external_input_files,
+        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
+        check_permission=access_policy_service.check_permission,
+        group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+    )
+    file_tool_service = FileToolService(
+        workspace_service=workspace_service,
+        office_generator=office_gen,
+        pdf_converter=pdf_converter,
+        delivery_service=delivery_service,
+        generated_file_delivery_service=generated_file_delivery_service,
+        word_read_service=word_read_service,
+        office_libs=office_libs,
+        allow_external_input_files=settings.allow_external_input_files,
+        enable_docx_image_review=settings.enable_docx_image_review,
+        max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
+        max_inline_docx_image_count=settings.max_inline_docx_image_count,
+        is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
+        check_permission=access_policy_service.check_permission,
+        group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+        file_read_service=file_read_service,
+        office_generate_service=office_generate_service,
+        pdf_convert_service=pdf_convert_service,
+    )
+    return FileProcessingServices(
+        generated_file_delivery_service=generated_file_delivery_service,
+        file_delivery_service=file_delivery_service,
+        word_read_service=word_read_service,
+        file_read_service=file_read_service,
+        office_generate_service=office_generate_service,
+        pdf_convert_service=pdf_convert_service,
+        file_tool_service=file_tool_service,
     )
 
 
@@ -287,75 +345,6 @@ def _build_admin_users_resolver(context, *, initial_admin_users: set[str]):
     return AdminUsersResolver(
         context=context,
         admin_users=set(initial_admin_users),
-    )
-
-
-def _load_settings(config) -> PluginSettings:
-    file_settings = config.get("file_settings", {})
-    trigger_settings = config.get("trigger_settings", {})
-    preview_settings = config.get("preview_settings", {})
-    path_settings = config.get("path_settings", {})
-
-    auto_delete = file_settings.get("auto_delete_files", True)
-    max_file_size = (
-        file_settings.get("max_file_size_mb", DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024
-    )
-    enable_docx_image_review = file_settings.get("enable_docx_image_review", True)
-    max_inline_docx_image_bytes = (
-        file_settings.get("max_inline_docx_image_mb", DEFAULT_MAX_INLINE_DOCX_IMAGE_MB)
-        * 1024
-        * 1024
-    )
-    max_inline_docx_image_count = file_settings.get(
-        "max_inline_docx_image_count",
-        DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
-    )
-    buffer_wait = file_settings.get("message_buffer_seconds", 4)
-    reply_to_user = trigger_settings.get("reply_to_user", True)
-    require_at_in_group = trigger_settings.get("require_at_in_group", True)
-    enable_features_in_group = trigger_settings.get("enable_features_in_group", False)
-    auto_block_execution_tools = trigger_settings.get(
-        "auto_block_execution_tools", True
-    )
-    enable_preview = preview_settings.get("enable", True)
-    preview_dpi = preview_settings.get("dpi", 150)
-    allow_external_input_files = path_settings.get("allow_external_input_files", False)
-    feature_settings = config.get("feature_settings", {})
-    recent_text_ttl_seconds = max(
-        20,
-        int(file_settings.get("recent_text_ttl_seconds", int(buffer_wait) + 10)),
-    )
-    upload_session_ttl_seconds = max(
-        60,
-        int(file_settings.get("upload_session_ttl_seconds", 600)),
-    )
-    recent_text_max_entries = 512
-    recent_text_cleanup_interval_seconds = max(5, min(60, recent_text_ttl_seconds))
-    upload_session_cleanup_interval_seconds = max(
-        10,
-        min(300, upload_session_ttl_seconds),
-    )
-
-    return PluginSettings(
-        auto_delete=auto_delete,
-        max_file_size=max_file_size,
-        enable_docx_image_review=enable_docx_image_review,
-        max_inline_docx_image_bytes=max_inline_docx_image_bytes,
-        max_inline_docx_image_count=max_inline_docx_image_count,
-        buffer_wait=buffer_wait,
-        reply_to_user=reply_to_user,
-        require_at_in_group=require_at_in_group,
-        enable_features_in_group=enable_features_in_group,
-        auto_block_execution_tools=auto_block_execution_tools,
-        enable_preview=enable_preview,
-        preview_dpi=preview_dpi,
-        allow_external_input_files=allow_external_input_files,
-        feature_settings=feature_settings,
-        recent_text_ttl_seconds=recent_text_ttl_seconds,
-        upload_session_ttl_seconds=upload_session_ttl_seconds,
-        recent_text_max_entries=recent_text_max_entries,
-        recent_text_cleanup_interval_seconds=recent_text_cleanup_interval_seconds,
-        upload_session_cleanup_interval_seconds=upload_session_cleanup_interval_seconds,
     )
 
 

@@ -1,8 +1,12 @@
+import builtins
+import importlib
 import json
 import struct
+import sys
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -22,6 +26,9 @@ from astrbot_plugin_office_assistant.document_core.builders.word_builder import 
 from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
     build_summary_card_group,
 )
+from astrbot_plugin_office_assistant.domain.document.session_store import (
+    DocumentSessionStore,
+)
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
     ColumnBlock,
@@ -35,21 +42,33 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     TableBlock,
     TocBlock,
 )
-from astrbot_plugin_office_assistant.mcp_server.schemas import (
+from astrbot_plugin_office_assistant.domain.document.contracts import (
     AddBlocksRequest,
+    AddHeadingRequest,
+    AddListRequest,
+    AddParagraphRequest,
     AddTableRequest,
     BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
-    normalize_raw_block_payloads,
+    FinalizeDocumentRequest,
+    SectionListInput,
     SectionParagraphInput,
     SectionTableInput,
+    normalize_raw_block_payloads,
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
 )
-from astrbot_plugin_office_assistant.mcp_server.session_store import (
-    DocumentSessionStore,
+from astrbot_plugin_office_assistant.tools.mcp_adapter import (
+    register_document_tools_from_registry,
+)
+from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
+    build_document_toolset_from_registry,
+)
+from astrbot_plugin_office_assistant.tools.registry import (
+    DocumentToolSpec,
+    get_document_tool_specs,
 )
 from pydantic import ValidationError
 
@@ -294,6 +313,171 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
         / "documents"
     )
     assert stores[0].workspace_dir == expected_workspace
+
+
+def test_document_tool_registry_keeps_document_tool_order():
+    assert [spec.name for spec in get_document_tool_specs()] == [
+        "create_document",
+        "add_blocks",
+        "finalize_document",
+        "export_document",
+    ]
+
+
+def test_astrbot_toolset_preserves_document_tool_registry_order():
+    toolset = build_document_toolset_from_registry()
+
+    assert [tool.name for tool in toolset.tools] == [
+        spec.name for spec in get_document_tool_specs()
+    ]
+
+
+def test_registry_import_does_not_require_fastmcp_at_runtime():
+    module_name = "astrbot_plugin_office_assistant.tools.registry"
+    cached_module = sys.modules.pop(module_name, None)
+    original_import = builtins.__import__
+
+    def _guard_fastmcp_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "mcp.server.fastmcp":
+            raise ModuleNotFoundError("fastmcp unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    try:
+        with patch("builtins.__import__", side_effect=_guard_fastmcp_import):
+            imported = importlib.import_module(module_name)
+        assert [spec.name for spec in imported.get_document_tool_specs()] == [
+            "create_document",
+            "add_blocks",
+            "finalize_document",
+            "export_document",
+        ]
+    finally:
+        sys.modules.pop(module_name, None)
+        if cached_module is not None:
+            sys.modules[module_name] = cached_module
+        else:
+            importlib.import_module(module_name)
+
+
+def test_astrbot_toolset_passes_export_hooks_and_callback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_kwargs: dict[str, object] = {}
+    before_hooks = [MagicMock()]
+    after_hooks = [MagicMock()]
+
+    async def _after_export(_context, _path):
+        return None
+
+    base_specs = get_document_tool_specs()
+
+    def _record_export_factory(
+        store, before_export_hooks, after_export_hooks, after_export
+    ):
+        captured_kwargs["store"] = store
+        captured_kwargs["before_export_hooks"] = before_export_hooks
+        captured_kwargs["after_export_hooks"] = after_export_hooks
+        captured_kwargs["after_export"] = after_export
+        return CreateDocumentTool(store=store, name="export_document")
+
+    patched_specs = base_specs[:-1] + (
+        DocumentToolSpec(
+            name="export_document",
+            astrbot_factory=_record_export_factory,
+            mcp_registrar=base_specs[-1].mcp_registrar,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.tools.astrbot_adapter.get_document_tool_specs",
+        lambda: patched_specs,
+    )
+
+    toolset = build_document_toolset_from_registry(
+        before_export_hooks=before_hooks,
+        after_export_hooks=after_hooks,
+        after_export=_after_export,
+    )
+
+    assert captured_kwargs["store"] is toolset.document_store
+    assert captured_kwargs["before_export_hooks"] is before_hooks
+    assert captured_kwargs["after_export_hooks"] is after_hooks
+    assert captured_kwargs["after_export"] is _after_export
+
+
+def test_mcp_document_tool_registration_matches_registry_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registered_names: list[str] = []
+
+    def _make_registrar(name: str):
+        def _record(*_args, **_kwargs):
+            registered_names.append(name)
+
+        return _record
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_document.register_create_document_tool",
+        _make_registrar("create_document"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        _make_registrar("add_blocks"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
+        _make_registrar("finalize_document"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_document.register_export_document_tool",
+        _make_registrar("export_document"),
+    )
+
+    register_document_tools_from_registry(
+        server=MagicMock(),
+        store=DocumentSessionStore(),
+    )
+
+    assert registered_names == [spec.name for spec in get_document_tool_specs()]
+
+
+def test_mcp_document_tool_registration_passes_export_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    export_call_kwargs: dict[str, object] = {}
+    before_hooks = [MagicMock()]
+    after_hooks = [MagicMock()]
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_document.register_create_document_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _record_export(*_args, **kwargs):
+        export_call_kwargs.update(kwargs)
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_document.register_export_document_tool",
+        _record_export,
+    )
+
+    register_document_tools_from_registry(
+        server=MagicMock(),
+        store=DocumentSessionStore(),
+        before_export_hooks=before_hooks,
+        after_export_hooks=after_hooks,
+    )
+
+    assert export_call_kwargs["before_export_hooks"] is before_hooks
+    assert export_call_kwargs["after_export_hooks"] is after_hooks
 
 
 def test_create_document_tool_schema_exposes_document_style():
@@ -603,6 +787,40 @@ def test_normalize_raw_block_payloads_repairs_section_toc_and_table_aliases():
     assert normalized[6]["style"]["font_scale"] == pytest.approx(2.0)
     assert normalized[6]["layout"]["spacing_before"] == pytest.approx(72.0)
     assert normalized[6]["layout"]["spacing_after"] == pytest.approx(0.0)
+
+
+def test_normalize_raw_block_payloads_strips_markdown_table_edge_pipes():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "table",
+                "items": ["| 单元格1 | 单元格2 | 单元格3 |"],
+            }
+        ]
+    )
+
+    assert normalized[0]["rows"] == [["单元格1", "单元格2", "单元格3"]]
+
+
+def test_normalize_raw_block_payloads_rejects_excessive_nesting():
+    nested_block: dict[str, object] = {"type": "paragraph", "text": "leaf"}
+    for _ in range(34):
+        nested_block = {"type": "group", "blocks": [nested_block]}
+
+    with pytest.raises(ValueError, match="nesting exceeds limit"):
+        normalize_raw_block_payloads([nested_block])
+
+
+def test_create_document_request_normalizes_separator_only_output_name():
+    request = CreateDocumentRequest(output_name="//")
+
+    assert request.output_name == "document.docx"
+
+
+def test_export_document_request_normalizes_dot_only_output_name():
+    request = ExportDocumentRequest(document_id="doc-1", output_name=".")
+
+    assert request.output_name == "document.docx"
 
 
 def test_paragraph_schema_requires_text_or_runs():
@@ -3122,6 +3340,78 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
 
 
 @pytest.mark.asyncio
+async def test_document_toolset_exports_regular_blocks_in_portrait(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.section import WD_ORIENT
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-portrait-export"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="哲学知识回顾",
+            output_name="philosophy-review.docx",
+            theme_name="business_report",
+        )
+    )
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[
+                {"type": "toc", "title": "目录", "levels": 2},
+                {"type": "heading", "text": "一、哲学的含义", "level": 1},
+                {
+                    "type": "paragraph",
+                    "text": "哲学是系统化、理论化的世界观，也是世界观和方法论的统一。",
+                },
+                {"type": "heading", "text": "二、哲学的基本问题", "level": 1},
+                {
+                    "type": "table",
+                    "caption": "哲学基本问题分类",
+                    "headers": ["方面", "核心内容", "主要派别"],
+                    "rows": [
+                        [
+                            "第一方面（第一性）",
+                            "思维和存在何者为第一性",
+                            "唯物主义、唯心主义",
+                        ],
+                        [
+                            "第二方面（同一性）",
+                            "思维能否正确认识存在",
+                            "可知论、不可知论",
+                        ],
+                    ],
+                },
+                {"type": "heading", "text": "三、其他相关知识", "level": 1},
+                {"type": "paragraph", "text": "马克思主义哲学是科学的世界观和方法论。"},
+            ],
+        )
+    )
+    assert add_blocks_result["success"] is True
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.sections) == 1
+    assert all(
+        section.orientation == WD_ORIENT.PORTRAIT for section in loaded_doc.sections
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
     workspace_root: Path,
 ):
@@ -3418,11 +3708,75 @@ def test_document_session_store_applies_summary_card_defaults():
     assert list_block.layout.spacing_after == pytest.approx(8)
 
 
-def test_document_session_store_tolerates_summary_card_default_resolution_errors(
+def test_document_session_store_tolerates_summary_card_default_resolution_errors():
+    def _raise_defaults_error(_config):
+        raise RuntimeError("bad defaults")
+
+    store = DocumentSessionStore(summary_card_defaults_resolver=_raise_defaults_error)
+    document = store.create_document(CreateDocumentRequest(title="Summary Fallback"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    assert updated.blocks[0].blocks[0].text == "Conclusion"
+    assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_domain_document_session_store_accepts_summary_card_defaults_resolver():
+    from astrbot_plugin_office_assistant.domain.document.session_store import (
+        DocumentSessionStore as DomainDocumentSessionStore,
+    )
+
+    def _raise_defaults_error(_config):
+        raise RuntimeError("bad defaults")
+
+    store = DomainDocumentSessionStore(
+        summary_card_defaults_resolver=_raise_defaults_error
+    )
+    document = store.create_document(CreateDocumentRequest(title="Domain Summary"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "summary_card",
+                    "title": "Conclusion",
+                    "items": ["First takeaway"],
+                    "variant": "conclusion",
+                }
+            ],
+        )
+    )
+
+    assert len(updated.blocks) == 1
+    assert isinstance(updated.blocks[0], GroupBlock)
+    assert updated.blocks[0].blocks[0].text == "Conclusion"
+    assert updated.blocks[0].blocks[1].items == ["First takeaway"]
+
+
+def test_domain_document_session_store_uses_legacy_summary_card_patch_point(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    store = DocumentSessionStore()
-    document = store.create_document(CreateDocumentRequest(title="Summary Fallback"))
+    from astrbot_plugin_office_assistant.domain.document.session_store import (
+        DocumentSessionStore as DomainDocumentSessionStore,
+    )
+
+    store = DomainDocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="Domain Summary"))
 
     def _raise_defaults_error(_config):
         raise RuntimeError("bad defaults")
@@ -3710,6 +4064,107 @@ def test_document_session_store_add_table_preserves_grouped_headers():
     assert table.header_groups[1].span == 1
     assert table.header_fill == "1F4E79"
     assert table.border_style == "strong"
+
+
+def test_document_session_store_add_helpers_build_typed_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = DocumentSessionStore()
+    captured: dict[str, AddBlocksRequest] = {}
+
+    def _capture_add_blocks(self, request: AddBlocksRequest):
+        captured["request"] = request
+        return MagicMock()
+
+    monkeypatch.setattr(DocumentSessionStore, "add_blocks", _capture_add_blocks)
+
+    store.add_heading(AddHeadingRequest(document_id="doc-1", text="标题", level=2))
+    assert isinstance(captured["request"].blocks[0], BlockHeadingInput)
+
+    store.add_paragraph(
+        AddParagraphRequest(document_id="doc-1", text="正文", title="摘要")
+    )
+    assert isinstance(captured["request"].blocks[0], SectionParagraphInput)
+
+    store.add_list(AddListRequest(document_id="doc-1", items=["要点 1"]))
+    assert isinstance(captured["request"].blocks[0], SectionListInput)
+
+    store.add_table(
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["区域"],
+            rows=[["华东"]],
+            title="表格标题",
+        )
+    )
+    assert isinstance(captured["request"].blocks[0], SectionTableInput)
+
+
+def test_document_session_store_builds_prompt_summary_for_draft_documents():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="季度复盘"))
+
+    store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {"type": "heading", "text": "概览", "level": 1},
+                {"type": "paragraph", "text": "营收稳定增长。"},
+                {
+                    "type": "table",
+                    "headers": ["区域", "完成率"],
+                    "rows": [["华东", "98%"]],
+                },
+            ],
+        )
+    )
+
+    summary = store.build_prompt_summary(document.document_id)
+
+    assert summary == {
+        "document_id": document.document_id,
+        "title": "季度复盘",
+        "status": "draft",
+        "block_count": 3,
+        "latest_block_types": ["heading", "paragraph", "table"],
+        "next_allowed_actions": ["add_blocks", "finalize_document"],
+    }
+
+
+def test_document_session_store_builds_prompt_summary_for_later_states():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="经营复盘"))
+
+    draft_summary = store.build_prompt_summary(document.document_id)
+    assert draft_summary["latest_block_types"] == []
+    assert draft_summary["next_allowed_actions"] == [
+        "add_blocks",
+        "finalize_document",
+    ]
+
+    store.finalize_document(FinalizeDocumentRequest(document_id=document.document_id))
+    finalized_summary = store.build_prompt_summary(document.document_id)
+    assert finalized_summary["status"] == "finalized"
+    assert finalized_summary["next_allowed_actions"] == ["export_document"]
+
+    store.complete_export(document.document_id)
+    exported_summary = store.build_prompt_summary(document.document_id)
+    assert exported_summary["status"] == "exported"
+    assert exported_summary["next_allowed_actions"] == []
+
+
+def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="兼容块测试"))
+
+    class _UnknownBlock:
+        pass
+
+    document.blocks.extend([_UnknownBlock()])
+
+    summary = DocumentSessionStore._build_prompt_summary_locked(document)
+
+    assert summary["latest_block_types"] == ["unknown"]
 
 
 @pytest.mark.asyncio

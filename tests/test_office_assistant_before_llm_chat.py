@@ -4,6 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from astrbot_plugin_office_assistant.constants import DOC_COMMAND_TRIGGER_EVENT_KEY
+from astrbot_plugin_office_assistant.domain.document.contracts import (
+    CreateDocumentRequest,
+)
 from astrbot_plugin_office_assistant.internal_hooks import (
     NoticeBuildContext,
     ToolExposureContext,
@@ -15,6 +18,9 @@ from astrbot_plugin_office_assistant.services.llm_request_policy import (
 )
 from astrbot_plugin_office_assistant.services.request_hook_service import (
     RequestHookService,
+)
+from astrbot_plugin_office_assistant.services.prompt_context_service import (
+    SECTION_STATIC_DOCUMENT_TOOLS,
 )
 from astrbot_plugin_office_assistant.services.upload_session_service import (
     UploadSessionService,
@@ -92,7 +98,7 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
         )
         req = ProviderRequest(
-            prompt="hello",
+            prompt="请生成一份 Word 报告，并导出给我。",
             system_prompt="base",
             func_tool=ToolSet(
                 [
@@ -115,6 +121,7 @@ async def test_before_llm_chat_injects_document_tools_per_request():
         }.issubset(tool_names)
         assert "generate_complex_word_document" not in tool_names
         assert "文件工具使用指南" in req.system_prompt
+        assert "文件工具细节指南" in req.system_prompt
         assert "executive_brief" in req.system_prompt
         assert "accent_color=RRGGBB" in req.system_prompt
         assert "document_style={brief, heading_color, title_align" in req.system_prompt
@@ -149,6 +156,124 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             in req.system_prompt
         )
         assert "所有面向用户的回复和过渡说明 MUST 使用中文" in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_keeps_document_id_follow_up_prompt_lightweight():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = ProviderRequest(
+            prompt='继续完善 document_id="doc-1" 的内容',
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("create_document"),
+                ]
+            ),
+        )
+        document_store = plugin._runtime.document_toolset.document_store
+        document = document_store.create_document(
+            CreateDocumentRequest(title="季度经营复盘")
+        )
+
+        req.prompt = f'继续完善 document_id="{document.document_id}" 的内容'
+
+        await plugin.before_llm_chat(event, req)
+
+        assert "文件工具使用指南" in req.system_prompt
+        assert "当前文档状态摘要" in req.system_prompt
+        assert "executive_brief" not in req.system_prompt
+        assert "accent_color=RRGGBB" not in req.system_prompt
+        assert "文件工具细节指南" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_skips_document_guide_for_generic_prompt():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = ProviderRequest(
+            prompt="hello",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("astrbot_execute_shell"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "astrbot_execute_shell" not in tool_names
+        assert {
+            "create_document",
+            "add_blocks",
+            "finalize_document",
+            "export_document",
+        }.issubset(tool_names)
+        assert "文件工具使用指南" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_injects_document_guide_for_buffered_word_instruction():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        event._buffered = True
+        req = ProviderRequest(
+            prompt=(
+                "[System Notice] 用户上传了 1 个文件\n\n"
+                "[文件信息]\n"
+                "- 原始文件名: source.docx (类型: .docx)\n"
+                "  工作区文件名: source_1.docx\n\n"
+                "[用户指令]\n"
+                "请根据我刚上传的文档整理成正式汇报，并导出成 Word 发给我。\n\n"
+                "[处理建议]\n"
+                "1. 先调用 `read_file` 读取文件。\n"
+            ),
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("astrbot_execute_shell"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "astrbot_execute_shell" not in tool_names
+        assert {
+            "create_document",
+            "add_blocks",
+            "finalize_document",
+            "export_document",
+        }.issubset(tool_names)
+        assert "文件工具使用指南" in req.system_prompt
+        assert "文件工具细节指南" in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -212,7 +337,7 @@ async def test_before_llm_chat_warns_when_group_feature_disabled():
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert "astrbot_execute_python" in tool_names
+        assert "astrbot_execute_python" not in tool_names
         assert "read_file" not in tool_names
         assert "create_document" not in tool_names
         assert "add_blocks" not in tool_names
@@ -663,7 +788,7 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
     )
     event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1")
     req = ProviderRequest(
-        prompt="hello",
+        prompt="请生成一份 Word 报告，并导出给我。",
         system_prompt="base",
         func_tool=ToolSet(
             [
@@ -674,13 +799,54 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
         ),
     )
 
-    await policy.apply(event, req)
+    with patch(
+        "astrbot_plugin_office_assistant.services.llm_request_policy.logger.debug"
+    ) as logger_debug:
+        await policy.apply(event, req)
 
     tool_names = set(req.func_tool.names())
     assert "create_document" in tool_names
     assert "existing_tool" in tool_names
     assert "astrbot_execute_shell" not in tool_names
     assert "文件工具使用指南" in req.system_prompt
+    assert any(
+        call.args
+        and call.args[0] == "[文件管理] Prompt sections: %s"
+        and SECTION_STATIC_DOCUMENT_TOOLS in str(call.args[1])
+        for call in logger_debug.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_checks_permission_once_per_request():
+    permission_calls = 0
+
+    def _check_permission(_event):
+        nonlocal permission_calls
+        permission_calls += 1
+        return False
+
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=_check_permission,
+        is_bot_mentioned=lambda _event: False,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="hello",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("create_document"), _tool("existing_tool")]),
+    )
+
+    await policy.apply(event, req)
+
+    assert permission_calls == 1
+    assert "create_document" not in set(req.func_tool.names())
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
 
 
 def test_llm_request_policy_requires_hook_pairs():
@@ -694,6 +860,94 @@ def test_llm_request_policy_requires_hook_pairs():
             notice_hooks=[],
             tool_exposure_hooks=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_returns_after_tools_denied_notice():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "/tmp/report.docx",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: False,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    event.message_obj.message = [
+        Comp.File(name="report.docx", file="/tmp/report.docx"),
+    ]
+    req = ProviderRequest(
+        prompt="根据上传文件整理一下",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "已收到上传文件" not in req.system_prompt
+    assert "existing_tool" in set(req.func_tool.names())
+    assert "read_file" not in set(req.func_tool.names())
+    assert "astrbot_execute_shell" not in set(req.func_tool.names())
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_group_switch_off_hides_execution_tools():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: False,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.GROUP_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="根据上传文件整理一下",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "read_file" not in set(req.func_tool.names())
+    assert "astrbot_execute_shell" not in set(req.func_tool.names())
+    assert "existing_tool" in set(req.func_tool.names())
 
 
 @pytest.mark.asyncio

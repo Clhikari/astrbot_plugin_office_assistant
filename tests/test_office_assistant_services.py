@@ -11,18 +11,20 @@ import astrbot_plugin_office_assistant.utils as office_utils
 import mcp
 import pytest
 from astrbot_plugin_office_assistant.constants import (
-    DOC_COMMAND_TRIGGER_EVENT_KEY,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
+    DOC_COMMAND_TRIGGER_EVENT_KEY,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     OfficeType,
 )
+from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
     AccessPolicyService,
     CommandService,
     DeliveryService,
     ErrorHookService,
+    FileReadService,
     ExportHookService,
     FileToolService,
     GeneratedFileDeliveryService,
@@ -35,6 +37,13 @@ from astrbot_plugin_office_assistant.services import (
     WordReadService,
     WorkspaceService,
     build_plugin_runtime,
+)
+from astrbot_plugin_office_assistant.services.prompt_context_service import (
+    PromptContextService,
+    SECTION_DYNAMIC_DOCUMENT_SUMMARY,
+    SECTION_DYNAMIC_UPLOAD_SUMMARY,
+    SECTION_SCENE_UPLOADED_FILE,
+    SECTION_STATIC_DOCUMENT_TOOLS,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -140,6 +149,99 @@ def _build_file_tool_service(
         group_feature_disabled_error=group_feature_disabled_error
         or (lambda: "group disabled"),
     )
+
+
+def test_file_tool_service_builds_default_word_and_delivery_services():
+    workspace_service = MagicMock()
+    delivery_service = MagicMock()
+
+    service = FileToolService(
+        workspace_service=workspace_service,
+        office_generator=MagicMock(),
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+        generated_file_delivery_service=None,
+        word_read_service=None,
+        office_libs={},
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    assert isinstance(service._file_read_service._word_read_service, WordReadService)
+    assert (
+        service._file_read_service._word_read_service._max_inline_docx_image_bytes
+        == DEFAULT_MAX_INLINE_DOCX_IMAGE_MB * 1024 * 1024
+    )
+    assert (
+        service._file_read_service._word_read_service._max_inline_docx_image_count
+        == DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT
+    )
+    assert (
+        service._office_generate_service._file_delivery_service._generated_file_delivery_service
+        is not None
+    )
+
+
+def test_file_tool_service_requires_workspace_for_default_file_read_service():
+    with pytest.raises(
+        ValueError,
+        match="file_read_service requires injected service or dependencies: workspace_service",
+    ):
+        FileToolService(
+            workspace_service=None,
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            generated_file_delivery_service=MagicMock(),
+            word_read_service=None,
+            office_libs={},
+            allow_external_input_files=False,
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+        )
+
+
+def test_file_tool_service_requires_permission_callbacks_for_default_services():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "permission callbacks requires injected service or dependencies: "
+            "is_group_feature_enabled, check_permission, group_feature_disabled_error"
+        ),
+    ):
+        FileToolService(
+            workspace_service=MagicMock(),
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            generated_file_delivery_service=MagicMock(),
+            word_read_service=MagicMock(),
+            office_libs={},
+            allow_external_input_files=False,
+        )
+
+
+def test_file_tool_service_allows_missing_callbacks_when_all_services_injected():
+    service = FileToolService(
+        workspace_service=None,
+        office_generator=None,
+        pdf_converter=None,
+        delivery_service=None,
+        generated_file_delivery_service=None,
+        word_read_service=None,
+        office_libs={},
+        allow_external_input_files=False,
+        file_read_service=MagicMock(),
+        office_generate_service=MagicMock(),
+        pdf_convert_service=MagicMock(),
+    )
+
+    assert service._file_read_service is not None
+    assert service._office_generate_service is not None
+    assert service._pdf_convert_service is not None
 
 
 def _rewrite_docx_document_xml(path: Path, transform) -> None:
@@ -896,6 +998,192 @@ async def test_request_hook_service_builds_default_tool_hooks():
     assert "create_document" not in tool_names
     assert "astrbot_execute_shell" not in tool_names
     assert "astrbot_execute_python" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_merges_multiple_uploaded_files_into_one_notice():
+    request = ProviderRequest(
+        prompt="根据上传文件整理内容",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event.message_obj.message = [
+        Comp.File(name="report.docx", file="report.docx"),
+        Comp.File(name="notes.txt", file="notes.txt"),
+    ]
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "type_desc": "Office文档 (Word/Excel/PPT)",
+                "is_supported": True,
+                "stored_name": "report_1.docx",
+                "source_path": "/AstrBot/data/temp/report.docx",
+            },
+            {
+                "original_name": "notes.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": "notes_1.txt",
+                "source_path": "/AstrBot/data/temp/notes.txt",
+            },
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=True,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    assert len(context.notices) == 2
+    assert "MUST 先调用 `read_file` 依次读取这些文件" in context.notices[0]
+    notice = context.notices[1]
+    assert notice.count("[System Notice] [ACTION REQUIRED] 已收到上传文件") == 1
+    assert "文件数量：2" in notice
+    assert "report.docx" in notice
+    assert "notes.txt" in notice
+    assert "report_1.docx" in notice
+    assert "notes_1.txt" in notice
+    assert context.section_names == [
+        SECTION_SCENE_UPLOADED_FILE,
+        SECTION_DYNAMIC_UPLOAD_SUMMARY,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_appends_document_summary_for_existing_document():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+        get_document_prompt_summary=lambda document_id: {
+            "document_id": document_id,
+            "title": "季度经营复盘",
+            "status": "draft",
+            "block_count": 4,
+            "latest_block_types": ["heading", "table"],
+            "next_allowed_actions": ["add_blocks", "finalize_document"],
+        },
+    )
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt='继续完善 document_id="doc-1" 的内容',
+            system_prompt="base",
+            func_tool=ToolSet([_tool("create_document")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert len(context.notices) == 2
+    assert "文件工具使用指南" in context.notices[0]
+    assert "executive_brief" not in context.notices[0]
+    assert "当前文档状态摘要" in context.notices[1]
+    assert "document_id: doc-1" in context.notices[1]
+    assert "状态: draft" in context.notices[1]
+    assert "块数: 4" in context.notices[1]
+    assert "下一步: add_blocks, finalize_document" in context.notices[1]
+    assert "最近块类型" not in context.notices[1]
+    assert context.section_names == [
+        SECTION_STATIC_DOCUMENT_TOOLS,
+        SECTION_DYNAMIC_DOCUMENT_SUMMARY,
+    ]
+
+
+def test_prompt_context_service_orders_notice_sections_by_stability():
+    service = PromptContextService(allow_external_input_files=False)
+
+    ordered_names, ordered_notices = service.order_notice_sections(
+        section_names=[
+            SECTION_DYNAMIC_DOCUMENT_SUMMARY,
+            SECTION_SCENE_UPLOADED_FILE,
+            SECTION_STATIC_DOCUMENT_TOOLS,
+        ],
+        notices=[
+            "dynamic",
+            "scene",
+            "static",
+        ],
+    )
+
+    assert ordered_names == [
+        SECTION_STATIC_DOCUMENT_TOOLS,
+        SECTION_SCENE_UPLOADED_FILE,
+        SECTION_DYNAMIC_DOCUMENT_SUMMARY,
+    ]
+    assert ordered_notices == ["static", "scene", "dynamic"]
+    trace = service.build_section_trace(
+        section_names=ordered_names,
+        notices=ordered_notices,
+    )
+    assert trace.startswith(
+        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_FILE}, {SECTION_DYNAMIC_DOCUMENT_SUMMARY}"
+    )
+    assert (
+        f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:6, {SECTION_SCENE_UPLOADED_FILE}:5, "
+        f"{SECTION_DYNAMIC_DOCUMENT_SUMMARY}:7]" in trace
+    )
+    assert "[groups=static:6, scene:5, dynamic:7]" in trace
+    assert "[total=18]" in trace
+
+
+def test_prompt_context_service_logs_section_length_mismatch():
+    service = PromptContextService(allow_external_input_files=False)
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.prompt_context_service.logger.debug"
+    ) as logger_debug:
+        ordered_names, ordered_notices = service.order_notice_sections(
+            section_names=[SECTION_STATIC_DOCUMENT_TOOLS],
+            notices=["static", "dynamic"],
+        )
+
+    assert ordered_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert ordered_notices == ["static", "dynamic"]
+    logger_debug.assert_called_once_with(
+        "[文件管理] Prompt section mismatch: sections=%s notices=%s",
+        1,
+        2,
+    )
+
+
+def test_prompt_context_service_build_section_trace_tolerates_length_mismatch():
+    service = PromptContextService(allow_external_input_files=False)
+
+    trace = service.build_section_trace(
+        section_names=[
+            SECTION_STATIC_DOCUMENT_TOOLS,
+            SECTION_SCENE_UPLOADED_FILE,
+        ],
+        notices=["static only"],
+    )
+
+    assert trace.startswith(
+        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_FILE}"
+    )
+    assert f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:11]" in trace
+    assert "[groups=static:11]" in trace
+    assert "[total=11]" in trace
 
 
 def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
@@ -2872,6 +3160,101 @@ async def test_file_tool_service_returns_local_guidance_for_missing_file():
     assert "错误：文件 'CLAUDE.md' 不存在。" in result
     assert "不要联网搜索" in result
     assert "重新上传文件或提供正确的本地路径" in result
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_error_when_precheck_lacks_resolved_path():
+    event = _build_event()
+    workspace_service = MagicMock()
+    workspace_service.pre_check.return_value = (True, None, None)
+    workspace_service.get_max_file_size.return_value = 1024 * 1024
+    service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=MagicMock(),
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    results = [
+        result async for result in service.iter_read_file_tool_results(event, "a.txt")
+    ]
+
+    assert results == ["错误：文件路径解析失败"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_error_when_stat_fails():
+    event = _build_event()
+    workspace_service = MagicMock()
+    broken_path = Path("missing.txt")
+    workspace_service.pre_check.return_value = (True, broken_path, None)
+    workspace_service.display_name.return_value = "missing.txt"
+    service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=MagicMock(),
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.file_read_service.asyncio.to_thread",
+        side_effect=FileNotFoundError("gone"),
+    ):
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, "missing.txt"
+            )
+        ]
+
+    assert results == ["错误：无法读取文件信息 (missing.txt)"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_offloads_office_text_extraction_to_thread():
+    event = _build_event()
+    workspace_service = MagicMock()
+    resolved_path = Path("report.xlsx")
+    workspace_service.pre_check.return_value = (True, resolved_path, None)
+    workspace_service.display_name.return_value = "report.xlsx"
+    workspace_service.get_max_file_size.return_value = 1024 * 1024
+    workspace_service.format_file_result.return_value = "formatted"
+    service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=MagicMock(),
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        if (
+            getattr(func, "__self__", None) == resolved_path
+            and getattr(func, "__name__", "") == "stat"
+        ):
+            return SimpleNamespace(st_size=16)
+        if func is workspace_service.extract_office_text:
+            return "sheet text"
+        raise AssertionError(f"unexpected function: {func}")
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.file_read_service.asyncio.to_thread",
+        side_effect=_fake_to_thread,
+    ) as to_thread:
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, "report.xlsx"
+            )
+        ]
+
+    assert results == ["formatted"]
+    assert to_thread.await_count == 2
 
 
 @pytest.mark.asyncio
