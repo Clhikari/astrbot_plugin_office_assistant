@@ -89,6 +89,31 @@ def _tool(name: str) -> FunctionTool:
     )
 
 
+def _build_upload_infos(
+    count: int,
+    *,
+    original_name_template: str = "file-{idx}.txt",
+    stored_name_template: str = "file_{idx}.txt",
+    source_path_template: str = "",
+    file_suffix: str = ".txt",
+    type_desc: str = "文本/代码文件",
+    is_supported: bool = True,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "original_name": original_name_template.format(idx=idx),
+            "file_suffix": file_suffix,
+            "type_desc": type_desc,
+            "is_supported": is_supported,
+            "stored_name": stored_name_template.format(idx=idx),
+            "source_path": source_path_template.format(idx=idx)
+            if source_path_template
+            else "",
+        }
+        for idx in range(count)
+    ]
+
+
 def _make_workspace(name: str) -> Path:
     workspace_base = Path(__file__).resolve().parent / ".tmp_services"
     workspace_base.mkdir(parents=True, exist_ok=True)
@@ -1076,17 +1101,7 @@ async def test_request_hook_service_limits_multi_file_notice_details():
     ]
     service = RequestHookService(
         auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [
-            {
-                "original_name": f"file-{idx}.txt",
-                "file_suffix": ".txt",
-                "type_desc": "文本/代码文件",
-                "is_supported": True,
-                "stored_name": f"file_{idx}.txt",
-                "source_path": "",
-            }
-            for idx in range(5)
-        ],
+        get_cached_upload_infos=lambda _event: _build_upload_infos(5),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
         allow_external_input_files=False,
@@ -1132,17 +1147,7 @@ async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_pr
     ]
     service = RequestHookService(
         auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [
-            {
-                "original_name": f"file-{idx}.txt",
-                "file_suffix": ".txt",
-                "type_desc": "文本/代码文件",
-                "is_supported": True,
-                "stored_name": f"file_{idx}.txt",
-                "source_path": "",
-            }
-            for idx in range(2)
-        ],
+        get_cached_upload_infos=lambda _event: _build_upload_infos(2),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
         allow_external_input_files=False,
@@ -1229,17 +1234,10 @@ async def test_request_hook_service_shows_compact_paths_for_omitted_files():
     ]
     service = RequestHookService(
         auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [
-            {
-                "original_name": f"file-{idx}.txt",
-                "file_suffix": ".txt",
-                "type_desc": "文本/代码文件",
-                "is_supported": True,
-                "stored_name": f"file_{idx}.txt",
-                "source_path": f"/tmp/file_{idx}.txt",
-            }
-            for idx in range(5)
-        ],
+        get_cached_upload_infos=lambda _event: _build_upload_infos(
+            5,
+            source_path_template="/tmp/file_{idx}.txt",
+        ),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
         allow_external_input_files=True,
@@ -1482,16 +1480,7 @@ def test_upload_prompt_service_limits_file_details_for_many_uploads():
     service = UploadPromptService(allow_external_input_files=False)
 
     prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": f"file-{idx}.txt",
-                "file_suffix": ".txt",
-                "stored_name": f"file_{idx}.txt",
-                "source_path": "",
-                "is_supported": True,
-            }
-            for idx in range(5)
-        ],
+        upload_infos=_build_upload_infos(5),
         user_instruction="整理成报告",
     )
 
@@ -1508,16 +1497,10 @@ def test_upload_prompt_service_shows_compact_paths_for_omitted_files():
     service = UploadPromptService(allow_external_input_files=True)
 
     prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": f"file-{idx}.txt",
-                "file_suffix": ".txt",
-                "stored_name": f"file_{idx}.txt",
-                "source_path": f"/tmp/file_{idx}.txt",
-                "is_supported": True,
-            }
-            for idx in range(5)
-        ],
+        upload_infos=_build_upload_infos(
+            5,
+            source_path_template="/tmp/file_{idx}.txt",
+        ),
         user_instruction="整理成报告",
     )
 
