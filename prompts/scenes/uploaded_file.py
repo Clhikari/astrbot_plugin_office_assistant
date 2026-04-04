@@ -232,11 +232,7 @@ def _build_omitted_upload_info_line(
         rendered_items = [
             rendered_item
             for info in omitted_infos
-            if (
-                rendered_item := (
-                    _build_compact_upload_path_item(info) or _display_upload_name(info)
-                )
-            )
+            if (rendered_item := _build_compact_upload_path_item(info))
         ]
         if rendered_items:
             return (
