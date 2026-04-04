@@ -228,17 +228,16 @@ def _build_omitted_upload_info_line(
 ) -> str:
     if not omitted_infos:
         return ""
-    omitted_count = len(omitted_infos)
     if allow_external_input_files:
-        path_items = [
-            compact_path
+        rendered_items = [
+            rendered_item
             for info in omitted_infos
-            if (compact_path := _build_compact_upload_path_item(info))
+            if (rendered_item := _build_compact_upload_path_item(info))
         ]
-        if path_items:
+        if rendered_items:
             return (
-                f"\n- 其余 {omitted_count} 个文件："
-                + "；".join(path_items)
+                f"\n- 其余 {len(rendered_items)} 个文件："
+                + "；".join(rendered_items)
                 + "（未展开详细信息）"
             )
     display_names = [
@@ -248,11 +247,11 @@ def _build_omitted_upload_info_line(
     ]
     if display_names:
         return (
-            f"\n- 其余 {omitted_count} 个文件："
+            f"\n- 其余 {len(display_names)} 个文件："
             + "、".join(display_names)
             + "（未展开详细信息）"
         )
-    return f"\n- 其余 {omitted_count} 个文件未展开详细信息"
+    return f"\n- 其余 {len(omitted_infos)} 个文件未展开详细信息"
 
 
 def _display_upload_name(info: UploadInfo) -> str:

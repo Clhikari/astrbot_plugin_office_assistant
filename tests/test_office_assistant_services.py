@@ -24,8 +24,8 @@ from astrbot_plugin_office_assistant.services import (
     CommandService,
     DeliveryService,
     ErrorHookService,
-    FileReadService,
     ExportHookService,
+    FileReadService,
     FileToolService,
     GeneratedFileDeliveryService,
     IncomingMessageService,
@@ -39,11 +39,11 @@ from astrbot_plugin_office_assistant.services import (
     build_plugin_runtime,
 )
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
-    PromptContextService,
     SECTION_DYNAMIC_DOCUMENT_SUMMARY,
     SECTION_DYNAMIC_UPLOAD_SUMMARY,
     SECTION_SCENE_UPLOADED_FILE,
     SECTION_STATIC_DOCUMENT_TOOLS,
+    PromptContextService,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -495,10 +495,69 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.upload_session_ttl_seconds == 600
         assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.settings.upload_session_cleanup_interval_seconds == 300
+        assert runtime.settings.word_render_backend == "node"
+        assert runtime.settings.word_render_fallback_enabled is True
+        assert runtime.settings.ppt_render_backend == "node"
+        assert runtime.settings.excel_render_backend == "python"
+        assert runtime.settings.js_renderer_entry == ""
+        export_tool = next(
+            tool
+            for tool in runtime.document_toolset.tools
+            if getattr(tool, "name", "") == "export_document"
+        )
+        assert [backend.name for backend in export_tool.render_backends] == [
+            "node",
+            "python",
+        ]
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
         assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
         assert runtime.incoming_message_service is not None
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_allows_python_render_backend_override():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
+    config = {
+        "render_settings": {
+            "word_render_backend": "python",
+            "word_render_fallback_enabled": False,
+            "ppt_render_backend": "node",
+            "excel_render_backend": "python",
+            "js_renderer_entry": "D:/custom/js-renderer.js",
+        }
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        export_tool = next(
+            tool
+            for tool in runtime.document_toolset.tools
+            if getattr(tool, "name", "") == "export_document"
+        )
+        assert runtime.settings.word_render_backend == "python"
+        assert runtime.settings.word_render_fallback_enabled is False
+        assert runtime.settings.ppt_render_backend == "node"
+        assert runtime.settings.excel_render_backend == "python"
+        assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
+        assert runtime.settings.node_renderer_entry == "D:/custom/js-renderer.js"
+        assert [backend.name for backend in export_tool.render_backends] == ["python"]
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()
@@ -1262,6 +1321,47 @@ async def test_request_hook_service_shows_compact_paths_for_omitted_files():
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_items():
+    request = ProviderRequest(
+        prompt="根据上传文件整理内容",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event.message_obj.message = [
+        Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
+    ]
+    upload_infos = _build_upload_infos(5)
+    upload_infos[3]["source_path"] = "/tmp/file_3.txt"
+    upload_infos[4]["source_path"] = ""
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: upload_infos,
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=True,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    notice = context.notices[1]
+    assert "其余 2 个文件：" in notice
+    assert "file_3.txt -> /tmp/file_3.txt" in notice
+    assert "file_4.txt" in notice
+    assert "file_4.txt ->" not in notice
+    assert "其余 1 个文件：" not in notice
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_appends_document_summary_for_existing_document():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1510,6 +1610,24 @@ def test_upload_prompt_service_shows_compact_paths_for_omitted_files():
     assert "未展开详细信息" in prompt_text
 
 
+def test_upload_prompt_service_keeps_omitted_count_aligned_with_mixed_path_items():
+    service = UploadPromptService(allow_external_input_files=True)
+    upload_infos = _build_upload_infos(5)
+    upload_infos[3]["source_path"] = "/tmp/file_3.txt"
+    upload_infos[4]["source_path"] = ""
+
+    prompt_text = service.build_prompt(
+        upload_infos=upload_infos,
+        user_instruction="整理成报告",
+    )
+
+    assert "其余 2 个文件：" in prompt_text
+    assert "file_3.txt -> /tmp/file_3.txt" in prompt_text
+    assert "file_4.txt" in prompt_text
+    assert "file_4.txt ->" not in prompt_text
+    assert "其余 1 个文件：" not in prompt_text
+
+
 def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
     service = UploadPromptService(allow_external_input_files=False)
 
@@ -1527,7 +1645,7 @@ def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
     )
 
     assert "[操作要求]" in prompt_text
-    assert "使用中文与用户沟通" in prompt_text
+    assert "使用中文与用户沟通；文件内容遵循用户指定语言" in prompt_text
     assert "[用户指令]" not in prompt_text
     assert "工作区文件名" not in prompt_text
 

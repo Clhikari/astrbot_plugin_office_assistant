@@ -19,6 +19,7 @@ from ..constants import (
     MSG_DOCUMENT_EXPORTED,
     OFFICE_LIBS,
 )
+from ..domain.document.render_backends import DocumentRenderBackendConfig
 from ..message_buffer import MessageBuffer
 from ..office_generator import OfficeGenerator
 from ..pdf_converter import PDFConverter
@@ -112,6 +113,7 @@ def build_plugin_runtime(
     document_toolset = build_document_toolset(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
+        render_backend_config=_build_word_render_backend_config(settings),
     )
     request_pipeline_services = _build_request_pipeline_services(
         settings=settings,
@@ -187,6 +189,18 @@ def build_plugin_runtime(
     )
 
 
+def _build_word_render_backend_config(
+    settings: PluginSettings,
+) -> DocumentRenderBackendConfig:
+    return DocumentRenderBackendConfig(
+        preferred_backend=settings.word_render_backend,
+        fallback_enabled=settings.word_render_fallback_enabled,
+        ppt_preferred_backend=settings.ppt_render_backend,
+        excel_preferred_backend=settings.excel_render_backend,
+        node_renderer_entry=settings.js_renderer_entry,
+    )
+
+
 def _build_request_pipeline_services(
     *,
     settings: PluginSettings,
@@ -195,7 +209,7 @@ def _build_request_pipeline_services(
     document_toolset,
     extract_upload_source,
     store_uploaded_file,
-) -> RequestPipelineServices:
+    ) -> RequestPipelineServices:
     prompt_context_service = PromptContextService(
         allow_external_input_files=settings.allow_external_input_files
     )
