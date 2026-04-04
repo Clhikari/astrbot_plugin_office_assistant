@@ -44,11 +44,15 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
 )
 from astrbot_plugin_office_assistant.domain.document.contracts import (
     AddBlocksRequest,
+    AddHeadingRequest,
+    AddListRequest,
+    AddParagraphRequest,
     AddTableRequest,
     BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
+    SectionListInput,
     SectionParagraphInput,
     SectionTableInput,
     normalize_raw_block_payloads,
@@ -4060,6 +4064,40 @@ def test_document_session_store_add_table_preserves_grouped_headers():
     assert table.header_groups[1].span == 1
     assert table.header_fill == "1F4E79"
     assert table.border_style == "strong"
+
+
+def test_document_session_store_add_helpers_build_typed_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = DocumentSessionStore()
+    captured: dict[str, AddBlocksRequest] = {}
+
+    def _capture_add_blocks(self, request: AddBlocksRequest):
+        captured["request"] = request
+        return MagicMock()
+
+    monkeypatch.setattr(DocumentSessionStore, "add_blocks", _capture_add_blocks)
+
+    store.add_heading(AddHeadingRequest(document_id="doc-1", text="标题", level=2))
+    assert isinstance(captured["request"].blocks[0], BlockHeadingInput)
+
+    store.add_paragraph(
+        AddParagraphRequest(document_id="doc-1", text="正文", title="摘要")
+    )
+    assert isinstance(captured["request"].blocks[0], SectionParagraphInput)
+
+    store.add_list(AddListRequest(document_id="doc-1", items=["要点 1"]))
+    assert isinstance(captured["request"].blocks[0], SectionListInput)
+
+    store.add_table(
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["区域"],
+            rows=[["华东"]],
+            title="表格标题",
+        )
+    )
+    assert isinstance(captured["request"].blocks[0], SectionTableInput)
 
 
 def test_document_session_store_builds_prompt_summary_for_draft_documents():

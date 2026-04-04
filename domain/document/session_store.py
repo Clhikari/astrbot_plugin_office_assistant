@@ -476,13 +476,12 @@ class DocumentSessionStore:
             AddBlocksRequest(
                 document_id=request.document_id,
                 blocks=[
-                    {
-                        "type": BLOCK_TYPE_HEADING,
-                        "text": request.text,
-                        "level": request.level,
-                        "style": request.style.model_dump(exclude_none=True),
-                        "layout": request.layout.model_dump(exclude_none=True),
-                    }
+                    BlockHeadingInput(
+                        text=request.text,
+                        level=request.level,
+                        style=request.style.model_copy(deep=True),
+                        layout=request.layout.model_copy(deep=True),
+                    )
                 ],
             )
         )
@@ -492,17 +491,14 @@ class DocumentSessionStore:
             AddBlocksRequest(
                 document_id=request.document_id,
                 blocks=[
-                    {
-                        "type": BLOCK_TYPE_PARAGRAPH,
-                        "text": request.text,
-                        "variant": request.variant,
-                        "title": request.title,
-                        "runs": [
-                            run.model_dump(exclude_none=True) for run in request.runs
-                        ],
-                        "style": request.style.model_dump(exclude_none=True),
-                        "layout": request.layout.model_dump(exclude_none=True),
-                    }
+                    SectionParagraphInput(
+                        text=request.text,
+                        variant=request.variant,
+                        title=request.title,
+                        runs=[run.model_copy(deep=True) for run in request.runs],
+                        style=request.style.model_copy(deep=True),
+                        layout=request.layout.model_copy(deep=True),
+                    )
                 ],
             )
         )
@@ -512,13 +508,12 @@ class DocumentSessionStore:
             AddBlocksRequest(
                 document_id=request.document_id,
                 blocks=[
-                    {
-                        "type": BLOCK_TYPE_LIST,
-                        "items": request.items,
-                        "ordered": request.ordered,
-                        "style": request.style.model_dump(exclude_none=True),
-                        "layout": request.layout.model_dump(exclude_none=True),
-                    }
+                    SectionListInput(
+                        items=list(request.items),
+                        ordered=request.ordered,
+                        style=request.style.model_copy(deep=True),
+                        layout=request.layout.model_copy(deep=True),
+                    )
                 ],
             )
         )
@@ -528,29 +523,28 @@ class DocumentSessionStore:
             AddBlocksRequest(
                 document_id=request.document_id,
                 blocks=[
-                    {
-                        "type": BLOCK_TYPE_TABLE,
-                        "headers": request.headers,
-                        "rows": request.rows,
-                        "header_groups": [
-                            group.model_dump(exclude_none=True)
+                    SectionTableInput(
+                        headers=[*request.headers],
+                        rows=[[*row] for row in request.rows],
+                        header_groups=[
+                            group.model_copy(deep=True)
                             for group in request.header_groups
                         ],
-                        "table_style": request.table_style,
-                        "caption": request.caption or request.title,
-                        "column_widths": request.column_widths,
-                        "numeric_columns": request.numeric_columns,
-                        "header_fill": request.header_fill,
-                        "header_text_color": request.header_text_color,
-                        "banded_rows": request.banded_rows,
-                        "banded_row_fill": request.banded_row_fill,
-                        "first_column_bold": request.first_column_bold,
-                        "table_align": request.table_align,
-                        "border_style": request.border_style,
-                        "caption_emphasis": request.caption_emphasis,
-                        "style": request.style.model_dump(exclude_none=True),
-                        "layout": request.layout.model_dump(exclude_none=True),
-                    }
+                        table_style=request.table_style,
+                        caption=request.caption or request.title,
+                        column_widths=[*request.column_widths],
+                        numeric_columns=[*request.numeric_columns],
+                        header_fill=request.header_fill,
+                        header_text_color=request.header_text_color,
+                        banded_rows=request.banded_rows,
+                        banded_row_fill=request.banded_row_fill,
+                        first_column_bold=request.first_column_bold,
+                        table_align=request.table_align,
+                        border_style=request.border_style,
+                        caption_emphasis=request.caption_emphasis,
+                        style=request.style.model_copy(deep=True),
+                        layout=request.layout.model_copy(deep=True),
+                    )
                 ],
             )
         )
