@@ -24,6 +24,7 @@ from astrbot_plugin_office_assistant.services import (
     CommandService,
     DeliveryService,
     ErrorHookService,
+    FileReadService,
     ExportHookService,
     FileToolService,
     GeneratedFileDeliveryService,
@@ -1124,6 +1125,25 @@ def test_prompt_context_service_logs_section_length_mismatch():
         1,
         2,
     )
+
+
+def test_prompt_context_service_build_section_trace_tolerates_length_mismatch():
+    service = PromptContextService(allow_external_input_files=False)
+
+    trace = service.build_section_trace(
+        section_names=[
+            SECTION_STATIC_DOCUMENT_TOOLS,
+            SECTION_SCENE_UPLOADED_FILE,
+        ],
+        notices=["static only"],
+    )
+
+    assert trace.startswith(
+        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_FILE}"
+    )
+    assert f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:11]" in trace
+    assert "[groups=static:11]" in trace
+    assert "[total=11]" in trace
 
 
 def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
@@ -3100,6 +3120,28 @@ async def test_file_tool_service_returns_local_guidance_for_missing_file():
     assert "错误：文件 'CLAUDE.md' 不存在。" in result
     assert "不要联网搜索" in result
     assert "重新上传文件或提供正确的本地路径" in result
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_returns_error_when_precheck_lacks_resolved_path():
+    event = _build_event()
+    workspace_service = MagicMock()
+    workspace_service.pre_check.return_value = (True, None, None)
+    workspace_service.get_max_file_size.return_value = 1024 * 1024
+    service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=MagicMock(),
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    results = [
+        result async for result in service.iter_read_file_tool_results(event, "a.txt")
+    ]
+
+    assert results == ["错误：文件路径解析失败"]
 
 
 @pytest.mark.asyncio

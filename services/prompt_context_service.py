@@ -90,20 +90,14 @@ class PromptContextService:
         )
         if not ordered_section_names:
             return "none"
+        paired_sections = list(zip(ordered_section_names, ordered_notices))
+        if not paired_sections:
+            return ", ".join(ordered_section_names) or "none"
         group_totals: dict[str, int] = {}
         length_trace = ", ".join(
-            f"{section_name}:{len(notice)}"
-            for section_name, notice in zip(
-                ordered_section_names,
-                ordered_notices,
-                strict=True,
-            )
+            f"{section_name}:{len(notice)}" for section_name, notice in paired_sections
         )
-        for section_name, notice in zip(
-            ordered_section_names,
-            ordered_notices,
-            strict=True,
-        ):
+        for section_name, notice in paired_sections:
             group_name, _, _ = section_name.partition("_")
             group_totals[group_name] = group_totals.get(group_name, 0) + len(notice)
         group_trace = ", ".join(
@@ -113,12 +107,7 @@ class PromptContextService:
         )
         total_length = sum(len(notice) for notice in ordered_notices)
         digest_source = "|".join(
-            f"{section_name}:{len(notice)}"
-            for section_name, notice in zip(
-                ordered_section_names,
-                ordered_notices,
-                strict=True,
-            )
+            f"{section_name}:{len(notice)}" for section_name, notice in paired_sections
         )
         digest = hashlib.sha1(digest_source.encode("utf-8")).hexdigest()[:8]
         return (

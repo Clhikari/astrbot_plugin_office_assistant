@@ -49,7 +49,9 @@ class FileReadService:
             yield err or "错误：未知错误"
             return
 
-        assert resolved_path is not None
+        if resolved_path is None:
+            yield "错误：文件路径解析失败"
+            return
         display_name = self._workspace_service.display_name(resolved_path)
         file_size = resolved_path.stat().st_size
         max_size = self._workspace_service.get_max_file_size()
