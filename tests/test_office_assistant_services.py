@@ -1064,6 +1064,54 @@ async def test_request_hook_service_merges_multiple_uploaded_files_into_one_noti
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_limits_multi_file_notice_details():
+    request = ProviderRequest(
+        prompt="根据上传文件整理内容",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    event.message_obj.message = [
+        Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
+    ]
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": f"file-{idx}.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": f"file_{idx}.txt",
+                "source_path": "",
+            }
+            for idx in range(5)
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    notice = context.notices[1]
+    assert "文件数量：5" in notice
+    assert "file-0.txt" in notice
+    assert "file-2.txt" in notice
+    assert "file-3.txt" not in notice
+    assert "其余 2 个文件未展开详细信息" in notice
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_appends_document_summary_for_existing_document():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1276,6 +1324,30 @@ def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
     assert "外部绝对路径: /AstrBot/data/temp/readable.txt" in prompt_text
     assert "外部绝对路径: /AstrBot/data/temp/unreadable.bin" in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
+
+
+def test_upload_prompt_service_limits_file_details_for_many_uploads():
+    service = UploadPromptService(allow_external_input_files=False)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": f"file-{idx}.txt",
+                "file_suffix": ".txt",
+                "stored_name": f"file_{idx}.txt",
+                "source_path": "",
+                "is_supported": True,
+            }
+            for idx in range(5)
+        ],
+        user_instruction="整理成报告",
+    )
+
+    assert "用户上传了 5 个文件" in prompt_text
+    assert "file-0.txt" in prompt_text
+    assert "file-2.txt" in prompt_text
+    assert "file-3.txt" not in prompt_text
+    assert "其余 2 个文件未展开详细信息" in prompt_text
 
 
 def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
