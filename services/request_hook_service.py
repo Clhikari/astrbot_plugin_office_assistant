@@ -326,7 +326,7 @@ class RequestHookService:
         event: AstrMessageEvent,
         prompt: str,
     ) -> bool:
-        if getattr(event, "_buffered", False) is not True:
+        if not getattr(event, "_buffered", False):
             return True
         return cls._BUFFERED_USER_INSTRUCTION_RE.search(prompt.strip()) is not None
 
