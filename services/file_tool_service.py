@@ -27,6 +27,17 @@ class FileToolService:
             f"{service_name} requires injected service or dependencies: {missing}"
         )
 
+    @classmethod
+    def _require_permission_callbacks(cls) -> None:
+        cls._raise_missing_dependencies(
+            "permission callbacks",
+            [
+                "is_group_feature_enabled",
+                "check_permission",
+                "group_feature_disabled_error",
+            ],
+        )
+
     def __init__(
         self,
         *,
@@ -50,6 +61,17 @@ class FileToolService:
         office_generate_service=None,
         pdf_convert_service=None,
     ) -> None:
+        if (
+            file_read_service is None
+            or office_generate_service is None
+            or pdf_convert_service is None
+        ) and (
+            is_group_feature_enabled is None
+            or check_permission is None
+            or group_feature_disabled_error is None
+        ):
+            self._require_permission_callbacks()
+
         if file_read_service is None:
             if workspace_service is None:
                 self._raise_missing_dependencies(

@@ -204,6 +204,46 @@ def test_file_tool_service_requires_workspace_for_default_file_read_service():
         )
 
 
+def test_file_tool_service_requires_permission_callbacks_for_default_services():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "permission callbacks requires injected service or dependencies: "
+            "is_group_feature_enabled, check_permission, group_feature_disabled_error"
+        ),
+    ):
+        FileToolService(
+            workspace_service=MagicMock(),
+            office_generator=MagicMock(),
+            pdf_converter=MagicMock(),
+            delivery_service=MagicMock(),
+            generated_file_delivery_service=MagicMock(),
+            word_read_service=MagicMock(),
+            office_libs={},
+            allow_external_input_files=False,
+        )
+
+
+def test_file_tool_service_allows_missing_callbacks_when_all_services_injected():
+    service = FileToolService(
+        workspace_service=None,
+        office_generator=None,
+        pdf_converter=None,
+        delivery_service=None,
+        generated_file_delivery_service=None,
+        word_read_service=None,
+        office_libs={},
+        allow_external_input_files=False,
+        file_read_service=MagicMock(),
+        office_generate_service=MagicMock(),
+        pdf_convert_service=MagicMock(),
+    )
+
+    assert service._file_read_service is not None
+    assert service._office_generate_service is not None
+    assert service._pdf_convert_service is not None
+
+
 def _rewrite_docx_document_xml(path: Path, transform) -> None:
     with zipfile.ZipFile(path, "r") as source_zip:
         file_map = {
