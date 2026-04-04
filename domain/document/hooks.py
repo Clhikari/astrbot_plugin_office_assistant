@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from inspect import isawaitable
 from typing import Any, TypeVar
 
+from astrbot.api import logger
+
 from .contracts import BlockInput
 
 
@@ -66,6 +68,13 @@ async def run_before_export_hooks(
     hooks: Sequence[BeforeExportHook],
     context: ExportPreparationContext,
 ) -> ExportPreparationContext:
+    logger.debug(
+        "[office-assistant] running %d before_export hooks for document=%s source=%s output=%s",
+        len(hooks),
+        getattr(context.document, "document_id", ""),
+        context.source,
+        context.output_path,
+    )
     return await _run_async_hooks(hooks, context)
 
 
@@ -73,6 +82,13 @@ async def run_after_export_hooks(
     hooks: Sequence[AfterExportHook],
     context: AfterExportContext,
 ) -> AfterExportContext:
+    logger.debug(
+        "[office-assistant] running %d after_export hooks for document=%s source=%s output=%s",
+        len(hooks),
+        getattr(context.document, "document_id", ""),
+        context.source,
+        context.output_path,
+    )
     return await _run_async_hooks(hooks, context)
 
 
@@ -82,11 +98,21 @@ async def _run_async_hooks(
 ) -> HookContextT:
     current = context
     for hook in hooks:
+        logger.debug(
+            "[office-assistant] executing hook=%s context=%s",
+            getattr(hook, "__name__", hook.__class__.__name__),
+            type(current).__name__,
+        )
         result = hook(current)
         if isawaitable(result):
             result = await result
         if result is not None:
             current = result
+    logger.debug(
+        "[office-assistant] completed %d hooks for context=%s",
+        len(hooks),
+        type(current).__name__,
+    )
     return current
 
 

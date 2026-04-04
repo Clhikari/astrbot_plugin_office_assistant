@@ -170,7 +170,9 @@ def _normalize_table_row_alias(block: dict) -> None:
         if not text:
             continue
         if "|" in text:
-            normalized_rows.append([cell.strip() for cell in text.split("|")])
+            normalized_rows.append(
+                [cell.strip() for cell in text.strip("|").split("|")]
+            )
         else:
             normalized_rows.append([text])
 
@@ -288,7 +290,8 @@ def _normalize_docx_filename(
     value: str,
     default: str = DEFAULT_DOCX_FILENAME,
 ) -> str:
-    candidate = _split_path_parts(value)[-1] if value.strip() else default
+    parts = _split_path_parts(value)
+    candidate = parts[-1] if parts else default
     candidate = candidate or default
     if not candidate.lower().endswith(".docx"):
         candidate = f"{candidate}.docx"

@@ -337,7 +337,9 @@ def test_astrbot_toolset_passes_export_hooks_and_callback(
 
     base_specs = get_document_tool_specs()
 
-    def _record_export_factory(store, before_export_hooks, after_export_hooks, after_export):
+    def _record_export_factory(
+        store, before_export_hooks, after_export_hooks, after_export
+    ):
         captured_kwargs["store"] = store
         captured_kwargs["before_export_hooks"] = before_export_hooks
         captured_kwargs["after_export_hooks"] = after_export_hooks
@@ -751,6 +753,31 @@ def test_normalize_raw_block_payloads_repairs_section_toc_and_table_aliases():
     assert normalized[6]["style"]["font_scale"] == pytest.approx(2.0)
     assert normalized[6]["layout"]["spacing_before"] == pytest.approx(72.0)
     assert normalized[6]["layout"]["spacing_after"] == pytest.approx(0.0)
+
+
+def test_normalize_raw_block_payloads_strips_markdown_table_edge_pipes():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "table",
+                "items": ["| 单元格1 | 单元格2 | 单元格3 |"],
+            }
+        ]
+    )
+
+    assert normalized[0]["rows"] == [["单元格1", "单元格2", "单元格3"]]
+
+
+def test_create_document_request_normalizes_separator_only_output_name():
+    request = CreateDocumentRequest(output_name="//")
+
+    assert request.output_name == "document.docx"
+
+
+def test_export_document_request_normalizes_dot_only_output_name():
+    request = ExportDocumentRequest(document_id="doc-1", output_name=".")
+
+    assert request.output_name == "document.docx"
 
 
 def test_paragraph_schema_requires_text_or_runs():
@@ -3270,6 +3297,78 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
 
 
 @pytest.mark.asyncio
+async def test_document_toolset_exports_regular_blocks_in_portrait(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+    from docx.enum.section import WD_ORIENT
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-portrait-export"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="哲学知识回顾",
+            output_name="philosophy-review.docx",
+            theme_name="business_report",
+        )
+    )
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[
+                {"type": "toc", "title": "目录", "levels": 2},
+                {"type": "heading", "text": "一、哲学的含义", "level": 1},
+                {
+                    "type": "paragraph",
+                    "text": "哲学是系统化、理论化的世界观，也是世界观和方法论的统一。",
+                },
+                {"type": "heading", "text": "二、哲学的基本问题", "level": 1},
+                {
+                    "type": "table",
+                    "caption": "哲学基本问题分类",
+                    "headers": ["方面", "核心内容", "主要派别"],
+                    "rows": [
+                        [
+                            "第一方面（第一性）",
+                            "思维和存在何者为第一性",
+                            "唯物主义、唯心主义",
+                        ],
+                        [
+                            "第二方面（同一性）",
+                            "思维能否正确认识存在",
+                            "可知论、不可知论",
+                        ],
+                    ],
+                },
+                {"type": "heading", "text": "三、其他相关知识", "level": 1},
+                {"type": "paragraph", "text": "马克思主义哲学是科学的世界观和方法论。"},
+            ],
+        )
+    )
+    assert add_blocks_result["success"] is True
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    assert len(loaded_doc.sections) == 1
+    assert all(
+        section.orientation == WD_ORIENT.PORTRAIT for section in loaded_doc.sections
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
     workspace_root: Path,
 ):
@@ -3989,6 +4088,8 @@ def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
     summary = DocumentSessionStore._build_prompt_summary_locked(document)
 
     assert summary["latest_block_types"] == ["unknown"]
+
+
 @pytest.mark.asyncio
 async def test_add_blocks_tool_ignores_blank_table_caption_when_absorbing_heading(
     workspace_root: Path,

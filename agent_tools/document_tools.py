@@ -587,10 +587,21 @@ class ExportDocumentTool(DocumentToolBase):
         delivery_handled = False
         if self.after_export is not None and context is not None:
             try:
+                logger.debug(
+                    "[office-assistant] invoking after_export callback for document=%s output=%s",
+                    document.document_id,
+                    output_path,
+                )
                 callback_message = (
                     await self.after_export(context, str(output_path)) or ""
                 )
                 delivery_handled = True
+                logger.debug(
+                    "[office-assistant] after_export callback completed for document=%s output=%s delivered=%s",
+                    document.document_id,
+                    output_path,
+                    delivery_handled,
+                )
             except Exception as exc:
                 logger.warning(
                     "[office-assistant] after_export callback failed for %s: %s",

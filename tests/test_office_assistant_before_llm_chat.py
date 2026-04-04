@@ -337,7 +337,7 @@ async def test_before_llm_chat_warns_when_group_feature_disabled():
 
         tool_names = set(req.func_tool.names())
         assert "existing_tool" in tool_names
-        assert "astrbot_execute_python" in tool_names
+        assert "astrbot_execute_python" not in tool_names
         assert "read_file" not in tool_names
         assert "create_document" not in tool_names
         assert "add_blocks" not in tool_names
@@ -894,7 +894,13 @@ async def test_llm_request_policy_returns_after_tools_denied_notice():
     req = ProviderRequest(
         prompt="根据上传文件整理一下",
         system_prompt="base",
-        func_tool=ToolSet([_tool("read_file"), _tool("existing_tool")]),
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
     )
 
     await policy.apply(event, req)
@@ -903,6 +909,45 @@ async def test_llm_request_policy_returns_after_tools_denied_notice():
     assert "已收到上传文件" not in req.system_prompt
     assert "existing_tool" in set(req.func_tool.names())
     assert "read_file" not in set(req.func_tool.names())
+    assert "astrbot_execute_shell" not in set(req.func_tool.names())
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_group_switch_off_hides_execution_tools():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[_tool("create_document")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: False,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.GROUP_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="根据上传文件整理一下",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "read_file" not in set(req.func_tool.names())
+    assert "astrbot_execute_shell" not in set(req.func_tool.names())
+    assert "existing_tool" in set(req.func_tool.names())
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from astrbot.api import logger
+
 from ...document_core.builders.word_builder import WordDocumentBuilder
 from ...document_core.models.document import DocumentModel
 from .contracts import ExportDocumentRequest
@@ -26,6 +28,12 @@ async def export_document_via_pipeline(
     source: str,
 ) -> tuple[DocumentModel, Path]:
     document, output_path = store.prepare_export_path(request)
+    logger.debug(
+        "[office-assistant] export pipeline prepared document=%s source=%s output=%s",
+        document.document_id,
+        source,
+        output_path,
+    )
     export_context = ExportPreparationContext(
         document=document,
         output_path=output_path,
@@ -36,7 +44,17 @@ async def export_document_via_pipeline(
             before_export_hooks,
             export_context,
         )
+        logger.debug(
+            "[office-assistant] before_export hooks completed for document=%s output=%s",
+            export_context.document.document_id,
+            export_context.output_path,
+        )
     builder.build(export_context.document, export_context.output_path)
+    logger.debug(
+        "[office-assistant] document build completed for document=%s output=%s",
+        export_context.document.document_id,
+        export_context.output_path,
+    )
     document = store.complete_export(request.document_id)
     after_context = AfterExportContext(
         document=document,
@@ -48,8 +66,18 @@ async def export_document_via_pipeline(
             after_export_hooks,
             after_context,
         )
+        logger.debug(
+            "[office-assistant] after_export hooks completed for document=%s output=%s",
+            after_context.document.document_id,
+            after_context.output_path,
+        )
     document.output_path = str(after_context.output_path)
     document.touch()
+    logger.debug(
+        "[office-assistant] export pipeline finished document=%s output=%s",
+        document.document_id,
+        after_context.output_path,
+    )
     return document, after_context.output_path
 
 

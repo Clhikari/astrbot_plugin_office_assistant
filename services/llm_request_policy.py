@@ -9,6 +9,7 @@ from astrbot.core.provider.entities import ProviderRequest
 
 from ..constants import (
     DOC_COMMAND_TRIGGER_EVENT_KEY,
+    EXECUTION_TOOLS,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     FILE_TOOLS,
 )
@@ -163,6 +164,12 @@ class LLMRequestPolicy:
             for tool_name in FILE_TOOLS:
                 req.func_tool.remove_tool(tool_name)
 
+    @staticmethod
+    def _remove_execution_tools(req: ProviderRequest) -> None:
+        if req.func_tool:
+            for tool_name in EXECUTION_TOOLS:
+                req.func_tool.remove_tool(tool_name)
+
     def _append_tools_denied_notice(self, req: ProviderRequest) -> None:
         denied_section = self._prompt_context_service.build_tools_denied_section()
         ordered_names, ordered_notices = (
@@ -232,6 +239,7 @@ class LLMRequestPolicy:
 
         if not self._is_group_feature_enabled(event):
             self._remove_file_tools(req)
+            self._remove_execution_tools(req)
             self._append_tools_denied_notice(req)
             logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
             return
@@ -246,6 +254,7 @@ class LLMRequestPolicy:
                     f"[文件管理] 用户 {event.get_sender_id()} 未满足群聊触发条件，已隐藏文件工具"
                 )
             self._remove_file_tools(req)
+            self._remove_execution_tools(req)
             self._append_tools_denied_notice(req)
             return
 
