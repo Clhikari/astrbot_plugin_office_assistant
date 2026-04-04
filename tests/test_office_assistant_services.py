@@ -3145,6 +3145,79 @@ async def test_file_tool_service_returns_error_when_precheck_lacks_resolved_path
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_returns_error_when_stat_fails():
+    event = _build_event()
+    workspace_service = MagicMock()
+    broken_path = Path("missing.txt")
+    workspace_service.pre_check.return_value = (True, broken_path, None)
+    workspace_service.display_name.return_value = "missing.txt"
+    service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=MagicMock(),
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.file_read_service.asyncio.to_thread",
+        side_effect=FileNotFoundError("gone"),
+    ):
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, "missing.txt"
+            )
+        ]
+
+    assert results == ["错误：无法读取文件信息 (missing.txt)"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_offloads_office_text_extraction_to_thread():
+    event = _build_event()
+    workspace_service = MagicMock()
+    resolved_path = Path("report.xlsx")
+    workspace_service.pre_check.return_value = (True, resolved_path, None)
+    workspace_service.display_name.return_value = "report.xlsx"
+    workspace_service.get_max_file_size.return_value = 1024 * 1024
+    workspace_service.format_file_result.return_value = "formatted"
+    service = FileReadService(
+        workspace_service=workspace_service,
+        word_read_service=MagicMock(),
+        allow_external_input_files=False,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        group_feature_disabled_error=lambda: "group disabled",
+    )
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        if (
+            getattr(func, "__self__", None) == resolved_path
+            and getattr(func, "__name__", "") == "stat"
+        ):
+            return SimpleNamespace(st_size=16)
+        if func is workspace_service.extract_office_text:
+            return "sheet text"
+        raise AssertionError(f"unexpected function: {func}")
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.file_read_service.asyncio.to_thread",
+        side_effect=_fake_to_thread,
+    ) as to_thread:
+        results = [
+            result
+            async for result in service.iter_read_file_tool_results(
+                event, "report.xlsx"
+            )
+        ]
+
+    assert results == ["formatted"]
+    assert to_thread.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_creates_office_file_via_generator_and_delivery():
     workspace_dir = Path(__file__).resolve().parent
     executor = ThreadPoolExecutor(max_workers=1)

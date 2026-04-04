@@ -1,4 +1,8 @@
+from collections.abc import AsyncGenerator
 import warnings
+
+import mcp
+from astrbot.api.event import AstrMessageEvent
 
 from ..constants import (
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
@@ -112,9 +116,9 @@ class FileToolService:
 
     async def iter_read_file_tool_results(
         self,
-        event,
+        event: AstrMessageEvent,
         filename: str = "",
-    ):
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
         async for result in self._file_read_service.iter_read_file_tool_results(
             event,
             filename,

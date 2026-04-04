@@ -798,6 +798,15 @@ def test_normalize_raw_block_payloads_strips_markdown_table_edge_pipes():
     assert normalized[0]["rows"] == [["单元格1", "单元格2", "单元格3"]]
 
 
+def test_normalize_raw_block_payloads_rejects_excessive_nesting():
+    nested_block: dict[str, object] = {"type": "paragraph", "text": "leaf"}
+    for _ in range(34):
+        nested_block = {"type": "group", "blocks": [nested_block]}
+
+    with pytest.raises(ValueError, match="nesting exceeds limit"):
+        normalize_raw_block_payloads([nested_block])
+
+
 def test_create_document_request_normalizes_separator_only_output_name():
     request = CreateDocumentRequest(output_name="//")
 

@@ -1,4 +1,8 @@
-from collections.abc import AsyncGenerator
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncGenerator, Callable
+from typing import TYPE_CHECKING
 
 import mcp
 
@@ -8,17 +12,21 @@ from astrbot.api.event import AstrMessageEvent
 from ..constants import PDF_SUFFIX, SUFFIX_TO_OFFICE_TYPE, TEXT_SUFFIXES, OfficeType
 from ..utils import format_file_size, safe_error_message
 
+if TYPE_CHECKING:
+    from .word_read_service import WordReadService
+    from .workspace_service import WorkspaceService
+
 
 class FileReadService:
     def __init__(
         self,
         *,
-        workspace_service,
-        word_read_service,
+        workspace_service: WorkspaceService,
+        word_read_service: WordReadService,
         allow_external_input_files: bool,
-        is_group_feature_enabled,
-        check_permission,
-        group_feature_disabled_error,
+        is_group_feature_enabled: Callable[[AstrMessageEvent], bool],
+        check_permission: Callable[[AstrMessageEvent], bool],
+        group_feature_disabled_error: Callable[[], str],
     ) -> None:
         self._workspace_service = workspace_service
         self._word_read_service = word_read_service
@@ -53,7 +61,12 @@ class FileReadService:
             yield "错误：文件路径解析失败"
             return
         display_name = self._workspace_service.display_name(resolved_path)
-        file_size = resolved_path.stat().st_size
+        try:
+            file_size = (await asyncio.to_thread(resolved_path.stat)).st_size
+        except OSError as exc:
+            logger.error(f"获取文件状态失败: {exc}")
+            yield f"错误：无法读取文件信息 ({display_name})"
+            return
         max_size = self._workspace_service.get_max_file_size()
         if file_size > max_size:
             size_str = format_file_size(file_size)
@@ -89,8 +102,10 @@ class FileReadService:
                     ):
                         yield result
                     return
-                extracted = self._workspace_service.extract_office_text(
-                    resolved_path, office_type
+                extracted = await asyncio.to_thread(
+                    self._workspace_service.extract_office_text,
+                    resolved_path,
+                    office_type,
                 )
                 if extracted:
                     yield self._workspace_service.format_file_result(
@@ -101,7 +116,10 @@ class FileReadService:
                 return
 
             if suffix == PDF_SUFFIX:
-                extracted = self._workspace_service.extract_pdf_text(resolved_path)
+                extracted = await asyncio.to_thread(
+                    self._workspace_service.extract_pdf_text,
+                    resolved_path,
+                )
                 if extracted:
                     yield self._workspace_service.format_file_result(
                         display_name, suffix, file_size, extracted

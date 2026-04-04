@@ -37,6 +37,7 @@ SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 DEFAULT_DOCX_FILENAME = "document.docx"
+MAX_BLOCK_NORMALIZE_DEPTH = 32
 
 _HEADER_FOOTER_SCHEMA_PROPERTIES = {
     "header_text": {
@@ -229,7 +230,15 @@ def _extract_compat_section_break(block: dict) -> dict | None:
     return section_break if has_section_fields else None
 
 
-def normalize_raw_block_payloads(blocks: list[object]) -> list[object]:
+def normalize_raw_block_payloads(
+    blocks: list[object],
+    *,
+    _depth: int = 0,
+) -> list[object]:
+    if _depth > MAX_BLOCK_NORMALIZE_DEPTH:
+        raise ValueError(
+            f"block payload nesting exceeds limit ({MAX_BLOCK_NORMALIZE_DEPTH})"
+        )
     normalized_blocks: list[object] = []
     for raw_block in blocks:
         block = _copy_raw_block(raw_block)
@@ -239,7 +248,10 @@ def normalize_raw_block_payloads(blocks: list[object]) -> list[object]:
 
         block_type = block.get("type")
         if block_type == "group" and isinstance(block.get("blocks"), list):
-            block["blocks"] = normalize_raw_block_payloads(block["blocks"])
+            block["blocks"] = normalize_raw_block_payloads(
+                block["blocks"],
+                _depth=_depth + 1,
+            )
         elif block_type == "columns" and isinstance(block.get("columns"), list):
             normalized_columns: list[object] = []
             for column in block["columns"]:
@@ -248,7 +260,8 @@ def normalize_raw_block_payloads(blocks: list[object]) -> list[object]:
                     normalized_column.get("blocks"), list
                 ):
                     normalized_column["blocks"] = normalize_raw_block_payloads(
-                        normalized_column["blocks"]
+                        normalized_column["blocks"],
+                        _depth=_depth + 1,
                     )
                 normalized_columns.append(normalized_column)
             block["columns"] = normalized_columns
