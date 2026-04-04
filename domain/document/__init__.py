@@ -22,6 +22,9 @@ __all__ = [
 ]
 
 
+# Keep __all__ and __getattr__ in sync when exports change.
+# This module uses lazy imports both for startup cost and for compatibility
+# exports, so missing an entry in either place can surface as AttributeError.
 def __getattr__(name: str):
     if name == "DocumentSessionStore":
         from .session_store import DocumentSessionStore
