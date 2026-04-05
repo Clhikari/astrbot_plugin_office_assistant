@@ -219,6 +219,7 @@ def _build_request_pipeline_services(
     request_hook_service = RequestHookService(
         auto_block_execution_tools=settings.auto_block_execution_tools,
         get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
+        list_session_upload_infos=upload_session_service.list_session_upload_infos,
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,

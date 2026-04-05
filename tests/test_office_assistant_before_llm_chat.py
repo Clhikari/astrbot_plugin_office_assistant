@@ -1192,7 +1192,7 @@ async def test_llm_request_policy_returns_after_tools_denied_notice():
 
 
 @pytest.mark.asyncio
-async def test_llm_request_policy_does_not_upgrade_plain_chat_from_cached_uploads():
+async def test_llm_request_policy_uses_file_only_for_cached_upload_context():
     request_hook_service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [
@@ -1220,7 +1220,7 @@ async def test_llm_request_policy_does_not_upgrade_plain_chat_from_cached_upload
     )
     event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
     req = ProviderRequest(
-        prompt="今天天气怎么样",
+        prompt="读取看看",
         system_prompt="base",
         func_tool=ToolSet(
             [
@@ -1237,11 +1237,70 @@ async def test_llm_request_policy_does_not_upgrade_plain_chat_from_cached_upload
 
     tool_names = set(req.func_tool.names())
     assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
-    assert "read_file" not in tool_names
+    assert "read_file" in tool_names
     assert "create_office_file" not in tool_names
     assert "create_document" not in tool_names
     assert "astrbot_execute_shell" not in tool_names
     assert "existing_tool" in tool_names
+    assert "文件处理规则" in req.system_prompt
+    assert "report_1.docx" in req.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_uses_session_upload_context_for_follow_up_text():
+    request_hook_service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        list_session_upload_infos=lambda _event: [
+            {
+                "original_name": "empty_1.txt",
+                "file_suffix": ".txt",
+                "stored_name": "empty_1.txt",
+                "source_path": "/tmp/empty_1.txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(
+            tools=[_tool("create_office_file"), _tool("create_document")]
+        ),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: False,
+        request_hook_service=request_hook_service,
+    )
+    event = _build_event(message_type=MessageType.FRIEND_MESSAGE, sender_id="user-2")
+    req = ProviderRequest(
+        prompt="你看一下",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("create_office_file"),
+                _tool("create_document"),
+                _tool("existing_tool"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+
+    await policy.apply(event, req)
+
+    tool_names = set(req.func_tool.names())
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
+    assert "read_file" in tool_names
+    assert "create_office_file" not in tool_names
+    assert "create_document" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "existing_tool" in tool_names
+    assert "文件处理规则" in req.system_prompt
+    assert "empty_1.txt" in req.system_prompt
 
 
 @pytest.mark.asyncio

@@ -1173,6 +1173,101 @@ async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_pr
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_reuses_cached_upload_summary_without_current_file_components():
+    request = ProviderRequest(
+        prompt="读取看看",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "empty_1.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": "empty_1.txt",
+                "source_path": "",
+            },
+            {
+                "original_name": "empty_2.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": "empty_2.txt",
+                "source_path": "",
+            },
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    assert len(context.notices) == 1
+    assert context.section_names == [SECTION_DYNAMIC_UPLOAD_SUMMARY]
+    assert "文件数量：2" in context.notices[0]
+    assert "empty_1.txt" in context.notices[0]
+    assert "empty_2.txt" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_uses_session_upload_infos_when_event_cache_is_empty():
+    request = ProviderRequest(
+        prompt="你看一下",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    event = _build_event()
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        list_session_upload_infos=lambda _event: [
+            {
+                "original_name": "empty_1.txt",
+                "file_suffix": ".txt",
+                "type_desc": "文本/代码文件",
+                "is_supported": True,
+                "stored_name": "empty_1.txt",
+                "source_path": "",
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=event,
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_uploaded_file_notices(context)
+
+    assert len(context.notices) == 1
+    assert context.section_names == [SECTION_DYNAMIC_UPLOAD_SUMMARY]
+    assert "原始文件名：empty_1.txt" in context.notices[0]
+    assert "工作区文件名：empty_1.txt" in context.notices[0]
+    assert "empty_1.txt" in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_keeps_scene_notice_for_buffered_prompt_with_instruction():
     request = ProviderRequest(
         prompt=(

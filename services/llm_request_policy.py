@@ -185,6 +185,11 @@ class LLMRequestPolicy:
             return None
         return self._request_hook_service.get_active_document_prompt_summary(event)
 
+    def _has_session_upload_infos(self, event: AstrMessageEvent) -> bool:
+        if self._request_hook_service is None:
+            return False
+        return bool(self._request_hook_service.get_session_upload_infos(event))
+
     @staticmethod
     def _should_append_denied_notice(
         denied_reason: ExposureDeniedReason | None,
@@ -289,7 +294,9 @@ class LLMRequestPolicy:
 
         has_uploaded_files = self._has_uploaded_file_component(event)
         has_buffered_upload = bool(getattr(event, "_buffered", False))
+        has_cached_uploads = self._has_session_upload_infos(event)
         has_current_upload = has_uploaded_files or has_buffered_upload
+        has_upload_context = has_current_upload or has_cached_uploads
         active_document_summary = self._get_active_document_summary(event)
         has_active_document = bool(active_document_summary)
         has_document_id = bool(extract_document_id_from_text(request_text))
@@ -312,11 +319,11 @@ class LLMRequestPolicy:
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_pdf_conversion_intent:
             exposure_level = ExposureLevel.FILE_ONLY
-        elif has_current_upload and has_document_intent:
+        elif has_upload_context and has_document_intent:
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_document_intent:
             exposure_level = ExposureLevel.DOCUMENT_FULL
-        elif has_current_upload or has_file_intent:
+        elif has_upload_context or has_file_intent:
             exposure_level = ExposureLevel.FILE_ONLY
         else:
             exposure_level = ExposureLevel.NONE

@@ -41,6 +41,7 @@ class RequestHookService:
         *,
         auto_block_execution_tools: bool,
         get_cached_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]],
+        list_session_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]] | None = None,
         extract_upload_source: Callable[
             [Comp.File], Awaitable[tuple[Path | None, str]]
         ],
@@ -56,6 +57,9 @@ class RequestHookService:
     ) -> None:
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
+        self._list_session_upload_infos = (
+            list_session_upload_infos or get_cached_upload_infos
+        )
         self._extract_upload_source = extract_upload_source
         self._store_uploaded_file = store_uploaded_file
         self._get_document_prompt_summary = get_document_prompt_summary
@@ -153,6 +157,31 @@ class RequestHookService:
     ) -> list[UploadInfo]:
         return list(self._get_cached_upload_infos(event))
 
+    def get_session_upload_infos(
+        self, event: AstrMessageEvent
+    ) -> list[UploadInfo]:
+        return list(self._list_session_upload_infos(event))
+
+    def _get_readable_cached_upload_infos(
+        self,
+        event: AstrMessageEvent,
+    ) -> list[UploadInfo]:
+        readable_infos: list[UploadInfo] = []
+        for cached_info in self.get_session_upload_infos(event):
+            if not cached_info.get("is_supported", False):
+                continue
+            readable_infos.append(
+                {
+                    "original_name": str(cached_info.get("original_name", "") or ""),
+                    "file_suffix": str(cached_info.get("file_suffix", "") or ""),
+                    "type_desc": str(cached_info.get("type_desc", "") or ""),
+                    "is_supported": True,
+                    "stored_name": str(cached_info.get("stored_name", "") or ""),
+                    "source_path": str(cached_info.get("source_path", "") or ""),
+                }
+            )
+        return readable_infos
+
     def get_active_document_prompt_summary(
         self, event: AstrMessageEvent
     ) -> dict[str, object] | None:
@@ -200,11 +229,13 @@ class RequestHookService:
 
         event = context.event
         req = context.request
+        has_current_file_component = False
         cached_upload_infos = iter(self._get_cached_upload_infos(event))
         readable_upload_infos: list[UploadInfo] = []
         for component in getattr(event.message_obj, "message", None) or []:
             if not isinstance(component, Comp.File):
                 continue
+            has_current_file_component = True
 
             try:
                 cached_info = next(cached_upload_infos, None)
@@ -280,9 +311,11 @@ class RequestHookService:
                 logger.error(f"[文件管理] 处理上传文件失败: {exc}")
 
         if not readable_upload_infos:
-            return context
+            readable_upload_infos = self._get_readable_cached_upload_infos(event)
+            if not readable_upload_infos:
+                return context
 
-        if self._should_append_uploaded_file_scene_notice(
+        if has_current_file_component and self._should_append_uploaded_file_scene_notice(
             event=event,
             prompt=str(req.prompt or ""),
         ):
