@@ -430,6 +430,54 @@ async def test_before_llm_chat_uses_file_only_for_uploaded_file_without_document
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "把这个 pdf转word",
+        "先导出为pdf再转word",
+    ],
+)
+async def test_before_llm_chat_keeps_pdf_conversion_on_file_only_path(prompt: str):
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        req = ProviderRequest(
+            prompt=prompt,
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                    _tool("convert_to_pdf"),
+                    _tool("convert_from_pdf"),
+                    _tool("create_document"),
+                    _tool("add_blocks"),
+                    _tool("export_document"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "read_file" in tool_names
+        assert "convert_to_pdf" in tool_names
+        assert "convert_from_pdf" in tool_names
+        assert "create_document" not in tool_names
+        assert "add_blocks" not in tool_names
+        assert "export_document" not in tool_names
+        assert "文件处理规则" in req.system_prompt
+        assert "文件工具使用指南" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_injects_document_guide_for_buffered_word_instruction():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())

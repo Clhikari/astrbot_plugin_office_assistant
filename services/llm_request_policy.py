@@ -54,6 +54,14 @@ class LLMRequestPolicy:
         r"pdf转word|pdf转excel)",
         flags=re.IGNORECASE,
     )
+    _PDF_CONVERSION_INTENT_RE = re.compile(
+        r"(convert_to_pdf|convert_from_pdf|"
+        r"pdf转word|pdf转excel|"
+        r"转成\s*pdf|转换成\s*pdf|导出成\s*pdf|导出为\s*pdf|"
+        r"\bpdf\b.*(?:转word|转excel|导出|转换)|"
+        r"(?:转word|转excel).*\bpdf\b)",
+        flags=re.IGNORECASE,
+    )
     _DOCUMENT_FOLLOWUP_RE = re.compile(
         r"(继续|接着|再加|加一章|加一节|补充|完善|导出|发给我)",
         flags=re.IGNORECASE,
@@ -290,11 +298,11 @@ class LLMRequestPolicy:
         req: ProviderRequest,
         *,
         exposure_level: ExposureLevel,
+        allowed_tool_names: tuple[str, ...],
     ) -> tuple[str, ...]:
         if not req.func_tool:
             return ()
 
-        allowed_tool_names = self._allowed_tool_names_for_level(exposure_level)
         if exposure_level == ExposureLevel.DOCUMENT_FULL:
             for tool in self._document_toolset.tools:
                 if tool.name in allowed_tool_names:
@@ -374,6 +382,9 @@ class LLMRequestPolicy:
             has_document_id or self._DOCUMENT_INTENT_RE.search(request_text)
         )
         has_file_intent = bool(self._FILE_INTENT_RE.search(request_text))
+        has_pdf_conversion_intent = bool(
+            self._PDF_CONVERSION_INTENT_RE.search(request_text)
+        )
         has_explicit_document_tool = explicit_tool_name in {
             "create_office_file",
             "create_document",
@@ -388,6 +399,8 @@ class LLMRequestPolicy:
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_active_document and self._looks_like_document_followup(request_text):
             exposure_level = ExposureLevel.DOCUMENT_FULL
+        elif has_pdf_conversion_intent:
+            exposure_level = ExposureLevel.FILE_ONLY
         elif has_current_upload and has_document_intent:
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_document_intent:
@@ -460,6 +473,7 @@ class LLMRequestPolicy:
         allowed_tool_names = self._apply_allowed_file_tools(
             req,
             exposure_level=decision.exposure_level,
+            allowed_tool_names=decision.allowed_tool_names,
         )
         logger.debug(
             "[文件管理] exposure_level=%s | allowed_tools=%s",
