@@ -13,6 +13,7 @@ from ..constants import (
     DOCUMENT_FULL_TOOLS,
     EXECUTION_TOOLS,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
+    ExposureDeniedReason,
     ExposureLevel,
     FILE_TOOLS,
     FILE_ONLY_TOOLS,
@@ -52,7 +53,7 @@ class LLMRequestPolicy:
         exposure_level: ExposureLevel
         allowed_tool_names: tuple[str, ...]
         active_document_summary: dict[str, object] | None
-        denied_reason: str | None
+        denied_reason: ExposureDeniedReason | None
 
     def __init__(
         self,
@@ -185,11 +186,13 @@ class LLMRequestPolicy:
         return self._request_hook_service.get_active_document_prompt_summary(event)
 
     @staticmethod
-    def _should_append_denied_notice(denied_reason: str | None) -> bool:
+    def _should_append_denied_notice(
+        denied_reason: ExposureDeniedReason | None,
+    ) -> bool:
         return denied_reason in {
-            "group_feature_disabled",
-            "missing_permission",
-            "missing_group_trigger",
+            ExposureDeniedReason.GROUP_FEATURE_DISABLED,
+            ExposureDeniedReason.MISSING_PERMISSION,
+            ExposureDeniedReason.MISSING_GROUP_TRIGGER,
         }
 
     @staticmethod
@@ -259,7 +262,7 @@ class LLMRequestPolicy:
                 exposure_level=ExposureLevel.NONE,
                 allowed_tool_names=(),
                 active_document_summary=None,
-                denied_reason="group_feature_disabled",
+                denied_reason=ExposureDeniedReason.GROUP_FEATURE_DISABLED,
             )
         if not ((is_friend and event.is_admin()) or has_permission):
             return self.ExposureDecision(
@@ -270,7 +273,7 @@ class LLMRequestPolicy:
                 exposure_level=ExposureLevel.NONE,
                 allowed_tool_names=(),
                 active_document_summary=None,
-                denied_reason="missing_permission",
+                denied_reason=ExposureDeniedReason.MISSING_PERMISSION,
             )
         if not ((is_friend and event.is_admin()) or meets_group_trigger):
             return self.ExposureDecision(
@@ -281,7 +284,7 @@ class LLMRequestPolicy:
                 exposure_level=ExposureLevel.NONE,
                 allowed_tool_names=(),
                 active_document_summary=None,
-                denied_reason="missing_group_trigger",
+                denied_reason=ExposureDeniedReason.MISSING_GROUP_TRIGGER,
             )
 
         has_uploaded_files = self._has_uploaded_file_component(event)
@@ -328,7 +331,11 @@ class LLMRequestPolicy:
             exposure_level=exposure_level,
             allowed_tool_names=allowed_tool_names,
             active_document_summary=active_document_summary,
-            denied_reason=None if should_expose else "no_relevant_intent",
+            denied_reason=(
+                None
+                if should_expose
+                else ExposureDeniedReason.NO_RELEVANT_INTENT
+            ),
         )
 
     async def apply(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
@@ -347,20 +354,31 @@ class LLMRequestPolicy:
         )
 
         if not decision.should_expose:
-            if decision.denied_reason == "group_feature_disabled":
+            if (
+                decision.denied_reason
+                == ExposureDeniedReason.GROUP_FEATURE_DISABLED
+            ):
                 logger.debug("[文件管理] 群聊总开关关闭，已隐藏全部文件工具")
-            elif decision.denied_reason == "missing_permission":
+            elif (
+                decision.denied_reason == ExposureDeniedReason.MISSING_PERMISSION
+            ):
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 无文件权限，已隐藏文件工具"
                 )
-            elif decision.denied_reason == "no_relevant_intent":
+            elif (
+                decision.denied_reason
+                == ExposureDeniedReason.NO_RELEVANT_INTENT
+            ):
                 logger.debug("[文件管理] 当前请求无文件相关意图，已隐藏文件工具")
             else:
                 logger.debug(
                     f"[文件管理] 用户 {event.get_sender_id()} 未满足群聊触发条件，已隐藏文件工具"
                 )
             self._remove_file_tools(req)
-            if decision.denied_reason == "no_relevant_intent":
+            if (
+                decision.denied_reason
+                == ExposureDeniedReason.NO_RELEVANT_INTENT
+            ):
                 await self._run_before_expose_tools(
                     ToolExposureContext(
                         event=event,

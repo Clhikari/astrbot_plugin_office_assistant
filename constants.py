@@ -11,6 +11,13 @@ class ExposureLevel(str, Enum):
     DOCUMENT_FULL = "document_full"
 
 
+class ExposureDeniedReason(str, Enum):
+    GROUP_FEATURE_DISABLED = "group_feature_disabled"
+    MISSING_PERMISSION = "missing_permission"
+    MISSING_GROUP_TRIGGER = "missing_group_trigger"
+    NO_RELEVANT_INTENT = "no_relevant_intent"
+
+
 class OfficeType(Enum):
     WORD = auto()
     EXCEL = auto()
