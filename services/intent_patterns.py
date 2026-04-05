@@ -26,13 +26,17 @@ FILE_INTENT_RE = re.compile(
     r"(read_file|convert_to_pdf|convert_from_pdf|"
     r"读取.*文件|查看.*文件|看看.*文件|读取内容|读取这个|"
     r"\bpdf\b|转成\s*pdf|转换成\s*pdf|导出成\s*pdf|导出为\s*pdf|"
-    r"pdf\s*转\s*word|pdf\s*转\s*excel|word\s*转\s*pdf|excel\s*转\s*pdf)",
+    r"pdf.*转(?:成)?\s*word|pdf.*转(?:成)?\s*excel|"
+    r"word\s*转\s*pdf|word\s*转成\s*pdf|"
+    r"excel\s*转\s*pdf|excel\s*转成\s*pdf)",
     flags=re.IGNORECASE,
 )
 
 PDF_CONVERSION_INTENT_RE = re.compile(
     r"(convert_to_pdf|convert_from_pdf|"
-    r"pdf\s*转\s*word|pdf\s*转\s*excel|word\s*转\s*pdf|excel\s*转\s*pdf|"
+    r"pdf.*转(?:成)?\s*word|pdf.*转(?:成)?\s*excel|"
+    r"word\s*转\s*pdf|word\s*转成\s*pdf|"
+    r"excel\s*转\s*pdf|excel\s*转成\s*pdf|"
     r"转成\s*pdf|转换成\s*pdf|导出成\s*pdf|导出为\s*pdf|"
     r"pdf.*(?:转\s*word|转\s*excel|导出|转换)|"
     r"(?:转\s*word|转\s*excel).*pdf)",
