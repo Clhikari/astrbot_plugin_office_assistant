@@ -42,6 +42,13 @@ def test_pdf_conversion_intent_stays_distinct_from_generic_document_intent():
     assert has_document_intent(text) is False
 
 
+def test_pdf_conversion_intent_matches_spaced_chinese_phrasing():
+    assert has_pdf_conversion_intent("pdf 转 word") is True
+    assert has_pdf_conversion_intent("把PDF 转 WORD") is True
+    assert has_file_intent("pdf 转 word") is True
+    assert has_file_intent("把PDF 转 WORD") is True
+
+
 def test_document_followup_requires_document_semantics_for_topic_switch():
     assert looks_like_document_followup("继续") is True
     assert looks_like_document_followup("再加一章关于销售的") is True
