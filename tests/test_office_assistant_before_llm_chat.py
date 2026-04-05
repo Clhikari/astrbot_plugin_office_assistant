@@ -223,7 +223,7 @@ async def test_before_llm_chat_skips_document_guide_for_generic_prompt():
         assert "astrbot_execute_shell" not in tool_names
         assert "create_document" not in tool_names
         assert "read_file" not in tool_names
-        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
         assert "文件工具使用指南" not in req.system_prompt
     finally:
         await plugin.terminate()
@@ -342,8 +342,49 @@ async def test_before_llm_chat_downgrades_active_document_session_for_unrelated_
         assert "create_document" not in tool_names
         assert "add_blocks" not in tool_names
         assert "read_file" not in tool_names
-        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
         assert "当前文档状态摘要" not in req.system_prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_downgrades_active_document_session_for_short_topic_switch():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE,
+            sender_id="user-1",
+        )
+        document_store = plugin._runtime.document_toolset.document_store
+        document_store.create_document(
+            CreateDocumentRequest(
+                session_id=event.unified_msg_origin,
+                title="季度经营复盘",
+            )
+        )
+        req = ProviderRequest(
+            prompt="继续讲个笑话",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("read_file"),
+                    _tool("create_document"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "read_file" not in tool_names
+        assert "create_document" not in tool_names
+        assert "文件工具使用指南" not in req.system_prompt
+        assert "当前文档状态摘要" not in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -699,7 +740,7 @@ async def test_before_llm_chat_does_not_restrict_for_question_style_tool_mention
         assert "create_office_file" not in tool_names
         assert "create_document" not in tool_names
         assert "read_file" not in tool_names
-        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -742,7 +783,7 @@ async def test_before_llm_chat_does_not_restrict_for_non_explicit_tool_mentions(
         assert "create_office_file" not in tool_names
         assert "create_document" not in tool_names
         assert "read_file" not in tool_names
-        assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+        assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -1147,7 +1188,7 @@ async def test_llm_request_policy_does_not_upgrade_plain_chat_from_cached_upload
     await policy.apply(event, req)
 
     tool_names = set(req.func_tool.names())
-    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
     assert "read_file" not in tool_names
     assert "create_office_file" not in tool_names
     assert "create_document" not in tool_names
@@ -1188,7 +1229,7 @@ async def test_llm_request_policy_keeps_execution_tools_when_no_file_intent_and_
     await policy.apply(event, req)
 
     tool_names = set(req.func_tool.names())
-    assert "当前聊天不可使用文件/Office/PDF 相关功能" in req.system_prompt
+    assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
     assert "read_file" not in tool_names
     assert "existing_tool" in tool_names
     assert "astrbot_execute_shell" in tool_names

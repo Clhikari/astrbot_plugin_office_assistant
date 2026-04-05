@@ -62,6 +62,14 @@ class LLMRequestPolicy:
         r"(导出|发给我|加一章|加一节|补充|再加)",
         flags=re.IGNORECASE,
     )
+    _DOCUMENT_FOLLOWUP_SHORT_RE = re.compile(
+        r"^(继续|接着|继续写|继续补充|继续完善|补充|完善|导出|发给我)$",
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_FOLLOWUP_TOPICAL_RE = re.compile(
+        r"(文档|报告|汇报|正文|内容|段落|章节|小节|标题|表格|草稿|这一章|这一节|上一段|下一段)",
+        flags=re.IGNORECASE,
+    )
     _BUFFERED_USER_INSTRUCTION_RE = re.compile(
         r"\[用户指令\]\s*(?P<instruction>.*?)(?:\n\s*\[|\Z)",
         flags=re.DOTALL,
@@ -251,11 +259,21 @@ class LLMRequestPolicy:
         normalized_text = str(text or "").strip()
         if not normalized_text:
             return False
+        if cls._DOCUMENT_FOLLOWUP_SHORT_RE.fullmatch(normalized_text):
+            return True
         if not cls._DOCUMENT_FOLLOWUP_RE.search(normalized_text):
             return False
-        if len(normalized_text) <= 24:
+        if cls._DOCUMENT_FOLLOWUP_TOPICAL_RE.search(normalized_text):
             return True
         return bool(cls._DOCUMENT_FOLLOWUP_ACTION_RE.search(normalized_text))
+
+    @staticmethod
+    def _should_append_denied_notice(denied_reason: str | None) -> bool:
+        return denied_reason in {
+            "group_feature_disabled",
+            "missing_permission",
+            "missing_group_trigger",
+        }
 
     @staticmethod
     def _allowed_tool_names_for_level(
@@ -435,7 +453,8 @@ class LLMRequestPolicy:
                 )
             else:
                 self._remove_execution_tools(req)
-            self._append_tools_denied_notice(req)
+            if self._should_append_denied_notice(decision.denied_reason):
+                self._append_tools_denied_notice(req)
             return
 
         allowed_tool_names = self._apply_allowed_file_tools(
