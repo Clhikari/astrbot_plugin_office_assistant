@@ -25,59 +25,19 @@ from ..internal_hooks import (
     run_notice_hooks,
     run_tool_exposure_hooks,
 )
+from .intent_patterns import (
+    detect_explicit_file_tool as detect_explicit_file_tool_by_text,
+    extract_document_id as extract_document_id_from_text,
+    has_document_intent as text_has_document_intent,
+    has_file_intent as text_has_file_intent,
+    has_pdf_conversion_intent as text_has_pdf_conversion_intent,
+    looks_like_document_followup as text_looks_like_document_followup,
+)
 from .prompt_context_service import PromptContextService
 from .request_hook_service import RequestHookService
 
 
 class LLMRequestPolicy:
-    _NEGATIVE_TOOL_PREFIX_RE = re.compile(
-        r"(?:不要|别|勿|不用|无需|do\s+not|don't|not)\s*(?:调用|使用|call|use|invoke)?\s*$",
-        flags=re.IGNORECASE,
-    )
-    _DOCUMENT_ID_RE = re.compile(
-        r'document_id["`\']?\s*[:=]\s*["`\']?(?P<document_id>[A-Za-z0-9_-]+)',
-        flags=re.IGNORECASE,
-    )
-    _DOCUMENT_INTENT_RE = re.compile(
-        r"(create_document|add_blocks|finalize_document|export_document|"
-        r"document_id\b|整理成\s*(?:文档|报告|汇报|word|docx)|"
-        r"导出成\s*word|导出为\s*word|生成\s*(?:文档|报告|汇报|word|docx)|"
-        r"生成\s*(?:excel|xlsx|表格|powerpoint|ppt|幻灯片)|"
-        r"\bword\b|\bdocx\b|\bexcel\b|\bxlsx\b|\bpowerpoint\b|\bppt\b|"
-        r"文档|报告|汇报|表格|幻灯片)",
-        flags=re.IGNORECASE,
-    )
-    _FILE_INTENT_RE = re.compile(
-        r"(read_file|convert_to_pdf|convert_from_pdf|"
-        r"读取.*文件|查看.*文件|看看.*文件|读取内容|读取这个|"
-        r"\bpdf\b|转成\s*pdf|转换成\s*pdf|导出成\s*pdf|导出为\s*pdf|"
-        r"pdf转word|pdf转excel)",
-        flags=re.IGNORECASE,
-    )
-    _PDF_CONVERSION_INTENT_RE = re.compile(
-        r"(convert_to_pdf|convert_from_pdf|"
-        r"pdf转word|pdf转excel|"
-        r"转成\s*pdf|转换成\s*pdf|导出成\s*pdf|导出为\s*pdf|"
-        r"\bpdf\b.*(?:转word|转excel|导出|转换)|"
-        r"(?:转word|转excel).*\bpdf\b)",
-        flags=re.IGNORECASE,
-    )
-    _DOCUMENT_FOLLOWUP_RE = re.compile(
-        r"(继续|接着|再加|加一章|加一节|补充|完善|导出|发给我)",
-        flags=re.IGNORECASE,
-    )
-    _DOCUMENT_FOLLOWUP_ACTION_RE = re.compile(
-        r"(导出|发给我|加一章|加一节|补充|再加)",
-        flags=re.IGNORECASE,
-    )
-    _DOCUMENT_FOLLOWUP_SHORT_RE = re.compile(
-        r"^(继续|接着|继续写|继续补充|继续完善|补充|完善|导出|发给我)$",
-        flags=re.IGNORECASE,
-    )
-    _DOCUMENT_FOLLOWUP_TOPICAL_RE = re.compile(
-        r"(文档|报告|汇报|正文|内容|段落|章节|小节|标题|表格|草稿|这一章|这一节|上一段|下一段)",
-        flags=re.IGNORECASE,
-    )
     _BUFFERED_USER_INSTRUCTION_RE = re.compile(
         r"\[用户指令\]\s*(?P<instruction>.*?)(?:\n\s*\[|\Z)",
         flags=re.DOTALL,
@@ -138,35 +98,6 @@ class LLMRequestPolicy:
             self._notice_hooks = None
             self._tool_exposure_hooks = None
             self._request_hook_service = request_hook_service
-
-    def _detect_explicit_file_tool(self, text: str) -> str | None:
-        if not text:
-            return None
-
-        explicit_matches: set[str] = set()
-        tool_invocation_prefix = (
-            r"(?:调用|使用|请求(?:调用|使用)?|请(?!问)(?:调用|使用)?|"
-            r"\b(?:call|use|invoke)\b|\bplease\s+(?:call|use|invoke)\b)"
-        )
-        for tool_name in sorted(FILE_TOOLS, key=len, reverse=True):
-            patterns = (
-                rf"(?P<tool>{tool_invocation_prefix}\s*`?{re.escape(tool_name)}`?)",
-                rf"(?P<tool>`{re.escape(tool_name)}`)",
-                rf"(?P<tool>{re.escape(tool_name)}\s*\()",
-                rf"(?P<tool>{re.escape(tool_name)}\s*[,，]\s*[a-zA-Z_]\w*\s*=)",
-            )
-            for pattern in patterns:
-                for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-                    tool_start = match.start("tool")
-                    prefix = text[max(0, tool_start - 20) : tool_start]
-                    if self._NEGATIVE_TOOL_PREFIX_RE.search(prefix):
-                        continue
-                    explicit_matches.add(tool_name)
-                    break
-
-        if len(explicit_matches) == 1:
-            return next(iter(explicit_matches))
-        return None
 
     def _extract_explicit_tool_text(
         self,
@@ -240,15 +171,6 @@ class LLMRequestPolicy:
         )
 
     @staticmethod
-    def _extract_document_id(text: str) -> str | None:
-        if not text:
-            return None
-        match = LLMRequestPolicy._DOCUMENT_ID_RE.search(text)
-        if not match:
-            return None
-        return match.group("document_id")
-
-    @staticmethod
     def _has_uploaded_file_component(event: AstrMessageEvent) -> bool:
         return any(
             isinstance(component, Comp.File)
@@ -261,19 +183,6 @@ class LLMRequestPolicy:
         if self._request_hook_service is None:
             return None
         return self._request_hook_service.get_active_document_prompt_summary(event)
-
-    @classmethod
-    def _looks_like_document_followup(cls, text: str) -> bool:
-        normalized_text = str(text or "").strip()
-        if not normalized_text:
-            return False
-        if cls._DOCUMENT_FOLLOWUP_SHORT_RE.fullmatch(normalized_text):
-            return True
-        if not cls._DOCUMENT_FOLLOWUP_RE.search(normalized_text):
-            return False
-        if cls._DOCUMENT_FOLLOWUP_TOPICAL_RE.search(normalized_text):
-            return True
-        return bool(cls._DOCUMENT_FOLLOWUP_ACTION_RE.search(normalized_text))
 
     @staticmethod
     def _should_append_denied_notice(denied_reason: str | None) -> bool:
@@ -323,7 +232,10 @@ class LLMRequestPolicy:
         is_friend: bool,
     ) -> ExposureDecision:
         request_text = self._extract_explicit_tool_text(event, req)
-        explicit_tool_name = self._detect_explicit_file_tool(request_text)
+        explicit_tool_name = detect_explicit_file_tool_by_text(
+            request_text,
+            FILE_TOOLS,
+        )
         has_permission = self._check_permission(event)
         can_process_upload = has_permission or event.is_admin()
         get_extra = getattr(event, "get_extra", None)
@@ -377,14 +289,10 @@ class LLMRequestPolicy:
         has_current_upload = has_uploaded_files or has_buffered_upload
         active_document_summary = self._get_active_document_summary(event)
         has_active_document = bool(active_document_summary)
-        has_document_id = bool(self._extract_document_id(request_text))
-        has_document_intent = bool(
-            has_document_id or self._DOCUMENT_INTENT_RE.search(request_text)
-        )
-        has_file_intent = bool(self._FILE_INTENT_RE.search(request_text))
-        has_pdf_conversion_intent = bool(
-            self._PDF_CONVERSION_INTENT_RE.search(request_text)
-        )
+        has_document_id = bool(extract_document_id_from_text(request_text))
+        has_document_intent = text_has_document_intent(request_text)
+        has_file_intent = text_has_file_intent(request_text)
+        has_pdf_conversion_intent = text_has_pdf_conversion_intent(request_text)
         has_explicit_document_tool = explicit_tool_name in {
             "create_office_file",
             "create_document",
@@ -397,7 +305,7 @@ class LLMRequestPolicy:
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_explicit_document_tool:
             exposure_level = ExposureLevel.DOCUMENT_FULL
-        elif has_active_document and self._looks_like_document_followup(request_text):
+        elif has_active_document and text_looks_like_document_followup(request_text):
             exposure_level = ExposureLevel.DOCUMENT_FULL
         elif has_pdf_conversion_intent:
             exposure_level = ExposureLevel.FILE_ONLY
