@@ -42,6 +42,22 @@ class RequestHookService:
         r"business_report|project_review|executive_brief|accent_color|document_style)",
         flags=re.IGNORECASE,
     )
+    _ACTIVE_SUMMARY_FOLLOWUP_SHORT_RE = re.compile(
+        r"^(继续|接着|继续写|继续补充|继续完善|补充|完善|导出|发给我)$",
+        flags=re.IGNORECASE,
+    )
+    _ACTIVE_SUMMARY_FOLLOWUP_RE = re.compile(
+        r"(继续|接着|再加|加一章|加一节|补充|完善|导出|发给我)",
+        flags=re.IGNORECASE,
+    )
+    _ACTIVE_SUMMARY_FOLLOWUP_ACTION_RE = re.compile(
+        r"(导出|发给我|加一章|加一节|补充|再加)",
+        flags=re.IGNORECASE,
+    )
+    _ACTIVE_SUMMARY_TOPICAL_RE = re.compile(
+        r"(文档|报告|汇报|正文|内容|段落|章节|小节|标题|表格|草稿|这一章|这一节|上一段|下一段|上一版)",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -202,7 +218,24 @@ class RequestHookService:
             if summary:
                 return summary
             return None
+        if not self._should_use_active_document_summary(request_text):
+            return None
         return self.get_active_document_prompt_summary(event)
+
+    @classmethod
+    def _should_use_active_document_summary(cls, request_text: str) -> bool:
+        normalized_text = str(request_text or "").strip()
+        if not normalized_text:
+            return False
+        if cls._ACTIVE_SUMMARY_FOLLOWUP_SHORT_RE.fullmatch(normalized_text):
+            return True
+        return bool(
+            cls._ACTIVE_SUMMARY_FOLLOWUP_RE.search(normalized_text)
+            and (
+                cls._ACTIVE_SUMMARY_TOPICAL_RE.search(normalized_text)
+                or cls._ACTIVE_SUMMARY_FOLLOWUP_ACTION_RE.search(normalized_text)
+            )
+        )
 
     @staticmethod
     def _append_prompt_section(

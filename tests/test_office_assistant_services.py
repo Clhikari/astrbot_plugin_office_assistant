@@ -44,6 +44,7 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_UPLOAD_SUMMARY,
     SECTION_SCENE_UPLOADED_FILE,
     SECTION_STATIC_DOCUMENT_TOOLS,
+    SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
     PromptContextService,
 )
 from astrbot_plugin_office_assistant.utils import (
@@ -1391,6 +1392,96 @@ async def test_request_hook_service_does_not_fallback_to_active_document_when_do
     assert "文件工具使用指南" in context.notices[0]
     assert "当前文档状态摘要" not in context.notices[0]
     assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_does_not_append_active_document_summary_for_new_document_intent():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+        get_active_document_prompt_summary=lambda _session_id: {
+            "document_id": "doc-active",
+            "title": "当前活动草稿",
+            "status": "draft",
+            "block_count": 2,
+            "latest_block_types": ["paragraph"],
+            "next_allowed_actions": ["add_blocks", "finalize_document"],
+        },
+    )
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt="请生成一份新的报告",
+            system_prompt="base",
+            func_tool=ToolSet([_tool("create_document")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        exposure_level=ExposureLevel.DOCUMENT_FULL,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert len(context.notices) == 2
+    assert "文件工具使用指南" in context.notices[0]
+    assert "文件工具细节指南" in context.notices[1]
+    assert all("当前文档状态摘要" not in notice for notice in context.notices)
+    assert context.section_names == [
+        SECTION_STATIC_DOCUMENT_TOOLS,
+        SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_appends_active_document_summary_for_followup_without_document_id():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+        get_active_document_prompt_summary=lambda _session_id: {
+            "document_id": "doc-active",
+            "title": "当前活动草稿",
+            "status": "draft",
+            "block_count": 2,
+            "latest_block_types": ["paragraph"],
+            "next_allowed_actions": ["add_blocks", "finalize_document"],
+        },
+    )
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt="继续完善上一版报告",
+            system_prompt="base",
+            func_tool=ToolSet([_tool("create_document")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        exposure_level=ExposureLevel.DOCUMENT_FULL,
+        notices=[],
+        section_names=[],
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert len(context.notices) == 3
+    assert "文件工具使用指南" in context.notices[0]
+    assert "文件工具细节指南" in context.notices[1]
+    assert "当前文档状态摘要" in context.notices[2]
+    assert "document_id: doc-active" in context.notices[2]
+    assert context.section_names == [
+        SECTION_STATIC_DOCUMENT_TOOLS,
+        SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
+        SECTION_DYNAMIC_DOCUMENT_SUMMARY,
+    ]
 
 
 def test_prompt_context_service_orders_notice_sections_by_stability():
