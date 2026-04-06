@@ -6,7 +6,6 @@ from ...domain.document.render_backends import (
     DocumentRenderBackend,
     DocumentRenderBackendConfig,
     build_document_render_backends,
-    build_word_render_backends,
 )
 from ...domain.document.session_store import DocumentSessionStore
 from ...domain.document.contracts import (
@@ -25,7 +24,7 @@ def register_export_document_tool(
     render_backends: list[DocumentRenderBackend] | None = None,
     render_backend_config: DocumentRenderBackendConfig | None = None,
 ) -> None:
-    resolved_render_backends = render_backends or build_word_render_backends()
+    resolved_render_backends = render_backends or build_document_render_backends("word")
 
     @server.tool(
         name="export_document",

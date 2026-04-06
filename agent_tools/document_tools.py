@@ -13,7 +13,6 @@ from ..domain.document.export_pipeline import export_document_via_pipeline
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
 from ..domain.document.render_backends import (
     build_document_render_backends,
-    build_word_render_backends,
     get_render_backend_config,
 )
 from ..domain.document.session_store import DocumentSessionStore
@@ -701,7 +700,7 @@ class ExportDocumentTool(DocumentToolBase):
         }
     )
     render_backends: list[Any] = Field(
-        default_factory=build_word_render_backends
+        default_factory=lambda: build_document_render_backends("word")
     )
     render_backend_config: Any | None = None
     before_export_hooks: list[BeforeExportHook] = Field(default_factory=list)

@@ -64,7 +64,12 @@ def build_plugin_runtime(
         settings.auto_delete, plugin_name=plugin_name
     )
     executor = ThreadPoolExecutor(max_workers=4)
-    office_gen = OfficeGenerator(plugin_data_path, executor=executor)
+    document_render_backend_config = _build_document_render_backend_config(settings)
+    office_gen = OfficeGenerator(
+        plugin_data_path,
+        executor=executor,
+        render_backend_config=document_render_backend_config,
+    )
     pdf_converter = PDFConverter(plugin_data_path, executor=executor)
     preview_gen = PreviewGenerator(dpi=settings.preview_dpi)
     office_libs = _check_office_libs()
@@ -113,7 +118,7 @@ def build_plugin_runtime(
     document_toolset = build_document_toolset(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
-        render_backend_config=_build_word_render_backend_config(settings),
+        render_backend_config=document_render_backend_config,
     )
     request_pipeline_services = _build_request_pipeline_services(
         settings=settings,
@@ -189,7 +194,7 @@ def build_plugin_runtime(
     )
 
 
-def _build_word_render_backend_config(
+def _build_document_render_backend_config(
     settings: PluginSettings,
 ) -> DocumentRenderBackendConfig:
     return DocumentRenderBackendConfig(
@@ -199,6 +204,12 @@ def _build_word_render_backend_config(
         excel_preferred_backend=settings.excel_render_backend,
         node_renderer_entry=settings.js_renderer_entry,
     )
+
+
+def _build_word_render_backend_config(
+    settings: PluginSettings,
+) -> DocumentRenderBackendConfig:
+    return _build_document_render_backend_config(settings)
 
 
 def _build_request_pipeline_services(

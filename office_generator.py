@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -14,23 +14,45 @@ from astrbot.core.message.message_event_result import MessageChain
 
 from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
 from ._executor_mixin import ExecutorOwnerMixin
-from .document_core.builders.word_builder import WordDocumentBuilder
 from .document_core.models.blocks import (
     DocumentBlock,
     HeadingBlock,
     ParagraphBlock,
     TableBlock,
 )
-from .document_core.models.document import DocumentMetadata, DocumentModel
+from .document_core.models.document import (
+    DocumentMetadata,
+    DocumentModel,
+    DocumentStatus,
+)
+from .domain.document.contracts import (
+    AddBlocksRequest,
+    BlockInput,
+    CreateDocumentRequest,
+    normalize_raw_block_payloads,
+)
+from .domain.document.render_backends import (
+    DocumentRenderBackendConfig,
+    build_document_render_backends,
+    render_document_with_backends,
+)
+from .domain.document.session_store import DocumentSessionStore
+
+_BLOCK_INPUT_ADAPTER = TypeAdapter(BlockInput)
 
 
 class OfficeGenerator(ExecutorOwnerMixin):
     """Office文件生成器"""
 
-    def __init__(self, data_path: Path, executor: ThreadPoolExecutor | None = None):
+    def __init__(
+        self,
+        data_path: Path,
+        executor: ThreadPoolExecutor | None = None,
+        render_backend_config: DocumentRenderBackendConfig | None = None,
+    ):
         self.data_path = data_path
         self.support = self._check_support()
-        self._word_builder = WordDocumentBuilder()
+        self._render_backend_config = render_backend_config
         self._init_executor(executor, label="文件生成器")
 
     # 定义映射表
@@ -270,16 +292,17 @@ class OfficeGenerator(ExecutorOwnerMixin):
 
     def _generate_word_sync(self, file_path: Path, content: dict):
         """生成Word文档"""
-        try:
-            document_model = self._build_word_document_model(file_path, content)
-            self._word_builder.build(document_model, file_path)
-        except Exception as exc:
-            logger.warning(
-                f"[文件生成器] Word builder 路径失败，回退到旧版生成逻辑: {exc}"
-            )
-            self._generate_word_legacy_sync(file_path, content)
+        document_model = self._build_document_model(file_path, content)
+        render_document_with_backends(
+            document_model,
+            file_path,
+            build_document_render_backends(
+                "word",
+                self._render_backend_config,
+            ),
+        )
 
-    def _build_word_document_model(
+    def _build_document_model(
         self, file_path: Path, content: dict | DocumentModel
     ) -> DocumentModel:
         if isinstance(content, DocumentModel):
@@ -295,69 +318,106 @@ class OfficeGenerator(ExecutorOwnerMixin):
                     if isinstance(metadata_data, DocumentMetadata)
                     else DocumentMetadata.model_validate(metadata_data)
                 )
-                metadata.preferred_filename = file_path.name
-                block_payloads = content.get("blocks", [])
-                blocks = []
-                for idx, block_payload in enumerate(block_payloads):
-                    try:
-                        blocks.append(
-                            self._normalize_document_block_payload(block_payload)
-                        )
-                    except ValueError as exc:
-                        logger.warning(
-                            "[文件生成器] 跳过无效文档块 index=%s file=%s: %s",
-                            idx,
-                            file_path,
-                            exc,
-                        )
-                return DocumentModel(
-                    document_id=str(content.get("document_id") or file_path.stem),
-                    session_id=str(content.get("session_id") or ""),
-                    format="word",
-                    status=content.get("status", "draft"),
+                return self._build_structured_document_model(
+                    file_path=file_path,
+                    content=content,
                     metadata=metadata,
-                    blocks=blocks,
-                    output_path=str(file_path),
                 )
             except ValidationError as exc:
                 logger.warning(
                     f"[文件生成器] 文档块模型校验失败，回退到旧版 Word 内容适配: {exc}"
                 )
 
-        return self._build_legacy_word_document_model(file_path, content)
+        return self._build_legacy_document_model(file_path, content)
+
+    def _build_word_document_model(
+        self, file_path: Path, content: dict | DocumentModel
+    ) -> DocumentModel:
+        return self._build_document_model(file_path, content)
 
     def _looks_like_document_model_payload(self, content: dict) -> bool:
         return isinstance(content, dict) and "blocks" in content
 
-    def _normalize_document_block_payload(
-        self, block_payload: dict | DocumentBlock
-    ) -> DocumentBlock:
-        if isinstance(block_payload, (HeadingBlock, ParagraphBlock, TableBlock)):
-            return block_payload
+    def _build_structured_document_model(
+        self,
+        *,
+        file_path: Path,
+        content: dict,
+        metadata: DocumentMetadata,
+    ) -> DocumentModel:
+        metadata = metadata.model_copy(deep=True)
+        metadata.preferred_filename = file_path.name
 
-        if not isinstance(block_payload, dict):
-            raise ValueError("Document block payload must be a dict or block model.")
+        temp_store = DocumentSessionStore(workspace_dir=self.data_path)
+        created_document = temp_store.create_document(
+            CreateDocumentRequest(
+                session_id=str(content.get("session_id") or ""),
+                title=metadata.title,
+                output_name=file_path.name,
+                theme_name=metadata.theme_name,
+                table_template=metadata.table_template,
+                density=metadata.density,
+                accent_color=metadata.accent_color,
+                header_footer=metadata.header_footer.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                ),
+                document_style=metadata.document_style.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                ),
+            )
+        )
 
-        block_type = block_payload.get("type")
-        if block_type == "heading":
+        normalized_payloads = normalize_raw_block_payloads(list(content.get("blocks") or []))
+        validated_blocks: list[BlockInput] = []
+        for idx, block_payload in enumerate(normalized_payloads):
             try:
-                return HeadingBlock.model_validate(block_payload)
+                validated_blocks.append(_BLOCK_INPUT_ADAPTER.validate_python(block_payload))
             except ValidationError as exc:
-                raise ValueError(f"Invalid heading block: {exc}") from exc
-        if block_type == "paragraph":
-            try:
-                return ParagraphBlock.model_validate(block_payload)
-            except ValidationError as exc:
-                raise ValueError(f"Invalid paragraph block: {exc}") from exc
-        if block_type == "table":
-            try:
-                return TableBlock.model_validate(block_payload)
-            except ValidationError as exc:
-                raise ValueError(f"Invalid table block: {exc}") from exc
+                logger.warning(
+                    "[文件生成器] 跳过无效文档块 index=%s file=%s: %s",
+                    idx,
+                    file_path,
+                    exc,
+                )
 
-        raise ValueError(f"Unsupported document block type: {block_type}")
+        if validated_blocks:
+            temp_store.add_blocks(
+                AddBlocksRequest(
+                    document_id=created_document.document_id,
+                    blocks=validated_blocks,
+                )
+            )
 
-    def _build_legacy_word_document_model(
+        status_value = content.get("status", DocumentStatus.DRAFT)
+        if isinstance(status_value, str):
+            try:
+                status_value = DocumentStatus(status_value)
+            except ValueError:
+                status_value = DocumentStatus.DRAFT
+
+        created_document.document_id = str(content.get("document_id") or file_path.stem)
+        created_document.session_id = str(content.get("session_id") or "")
+        created_document.status = status_value
+        created_document.output_path = str(file_path)
+        created_document.metadata.preferred_filename = file_path.name
+        return created_document
+
+    def _build_structured_word_document_model(
+        self,
+        *,
+        file_path: Path,
+        content: dict,
+        metadata: DocumentMetadata,
+    ) -> DocumentModel:
+        return self._build_structured_document_model(
+            file_path=file_path,
+            content=content,
+            metadata=metadata,
+        )
+
+    def _build_legacy_document_model(
         self, file_path: Path, content: dict
     ) -> DocumentModel:
         metadata = DocumentMetadata(
@@ -387,6 +447,11 @@ class OfficeGenerator(ExecutorOwnerMixin):
             output_path=str(file_path),
         )
 
+    def _build_legacy_word_document_model(
+        self, file_path: Path, content: dict
+    ) -> DocumentModel:
+        return self._build_legacy_document_model(file_path, content)
+
     def _build_legacy_table_block(self, table_data: object) -> TableBlock | None:
         if not isinstance(table_data, list) or not table_data:
             return None
@@ -406,35 +471,6 @@ class OfficeGenerator(ExecutorOwnerMixin):
         headers = normalized_rows[0]
         body_rows = normalized_rows[1:] if len(normalized_rows) > 1 else []
         return TableBlock(headers=headers, rows=body_rows)
-
-    def _generate_word_legacy_sync(self, file_path: Path, content: dict) -> None:
-        from docx import Document
-
-        doc = Document()
-
-        if "title" in content:
-            title = doc.add_heading(content["title"], 0)
-            title.alignment = 1
-
-        paragraphs = content.get("paragraphs", [])
-        if isinstance(paragraphs, str):
-            paragraphs = [paragraphs]
-
-        for para_text in paragraphs:
-            if str(para_text).strip():
-                doc.add_paragraph(str(para_text))
-
-        if "table" in content:
-            table_data = content["table"]
-            if table_data and len(table_data) > 0:
-                table = doc.add_table(rows=len(table_data), cols=len(table_data[0]))
-                table.style = "Light Grid Accent 1"
-
-                for i, row_data in enumerate(table_data):
-                    for j, cell_value in enumerate(row_data):
-                        table.rows[i].cells[j].text = str(cell_value)
-
-        doc.save(str(file_path))
 
     def _generate_excel_sync(self, file_path: Path, content: dict):
         """生成Excel表格"""

@@ -10,8 +10,9 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
 from ..domain.document.render_backends import (
+    DocumentRenderBackendConfig,
     attach_render_backend_config,
-    build_word_render_backends,
+    build_document_render_backends,
     get_render_backend_config,
 )
 from ..domain.document.session_store import DocumentSessionStore
@@ -91,9 +92,13 @@ def _build_export_document_tool(
     from ..agent_tools.document_tools import ExportDocumentTool
 
     render_backend_config = get_render_backend_config(store)
+    document_format = "word"
     return ExportDocumentTool(
         store=store,
-        render_backends=build_word_render_backends(render_backend_config),
+        render_backends=build_document_render_backends(
+            document_format,
+            render_backend_config,
+        ),
         render_backend_config=render_backend_config,
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
@@ -143,12 +148,16 @@ def _register_export_document_tool(
     from ..mcp_server.tools.export_document import register_export_document_tool
 
     render_backend_config = get_render_backend_config(store)
+    document_format = "word"
     register_export_document_tool(
         server,
         store,
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
-        render_backends=build_word_render_backends(render_backend_config),
+        render_backends=build_document_render_backends(
+            document_format,
+            render_backend_config,
+        ),
         render_backend_config=render_backend_config,
     )
 
@@ -187,5 +196,8 @@ def build_document_store(
     render_backend_config=None,
 ) -> DocumentSessionStore:
     store = DocumentSessionStore(workspace_dir=workspace_dir)
-    attach_render_backend_config(store, render_backend_config)
+    attach_render_backend_config(
+        store,
+        render_backend_config or DocumentRenderBackendConfig(),
+    )
     return store

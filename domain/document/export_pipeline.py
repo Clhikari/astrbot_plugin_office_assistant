@@ -16,6 +16,7 @@ from .hooks import (
     run_before_export_hooks,
 )
 from .render_backends import DocumentRenderBackend
+from .render_backends import render_document_with_backends
 from .session_store import DocumentSessionStore
 
 
@@ -50,35 +51,17 @@ async def export_document_via_pipeline(
             export_context.document.document_id,
             export_context.output_path,
         )
-    if not render_backends:
-        raise RuntimeError("No word render backend configured")
-    last_error: Exception | None = None
-    for index, backend in enumerate(render_backends):
-        try:
-            export_context.output_path.unlink(missing_ok=True)
-            result = backend.render(export_context.document, export_context.output_path)
-            logger.debug(
-                "[office-assistant] document build completed for document=%s output=%s backend=%s",
-                export_context.document.document_id,
-                export_context.output_path,
-                result.backend_name,
-            )
-            break
-        except Exception as exc:
-            last_error = exc
-            export_context.output_path.unlink(missing_ok=True)
-            has_fallback = index < len(render_backends) - 1
-            logger.warning(
-                "[office-assistant] render backend failed document=%s backend=%s fallback=%s error=%s",
-                export_context.document.document_id,
-                getattr(backend, "name", backend.__class__.__name__),
-                has_fallback,
-                exc,
-            )
-            if not has_fallback:
-                raise
-    else:
-        raise RuntimeError("Word rendering failed") from last_error
+    result = render_document_with_backends(
+        export_context.document,
+        export_context.output_path,
+        render_backends,
+    )
+    logger.debug(
+        "[office-assistant] document build completed for document=%s output=%s backend=%s",
+        export_context.document.document_id,
+        export_context.output_path,
+        result.backend_name,
+    )
     document = store.complete_export(request.document_id)
     after_context = AfterExportContext(
         document=document,

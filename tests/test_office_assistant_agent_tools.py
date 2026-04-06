@@ -5,7 +5,9 @@ import shutil
 import subprocess
 import struct
 import sys
+import zipfile
 import zlib
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
 )
@@ -22,9 +25,6 @@ from astrbot_plugin_office_assistant.agent_tools.document_tools import (
 from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
     DOCX_TABLE_STYLES,
     TableRenderer,
-)
-from astrbot_plugin_office_assistant.document_core.builders.word_builder import (
-    WordDocumentBuilder,
 )
 from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
     build_summary_card_group,
@@ -36,8 +36,10 @@ from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
     export_document_via_pipeline,
 )
 from astrbot_plugin_office_assistant.domain.document.render_backends import (
+    DocumentRenderBackendConfig,
     DocumentRenderBackendError,
-    NodeWordRenderBackend,
+    NodeDocumentRenderBackend,
+    PythonWordRenderBackend,
     build_document_render_backends,
     RenderResult,
     build_document_render_payload,
@@ -53,8 +55,15 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     ParagraphRun,
     SectionBreakBlock,
     SectionMarginsConfig,
+    SummaryCardBlock,
     TableBlock,
     TocBlock,
+)
+from astrbot_plugin_office_assistant.document_core.models.document import (
+    DocumentMetadata,
+    DocumentModel,
+    DocumentStyleConfig,
+    DocumentSummaryCardDefaults,
 )
 from astrbot_plugin_office_assistant.domain.document.contracts import (
     AddBlocksRequest,
@@ -151,11 +160,17 @@ def _find_paragraph(doc, text: str):
 def _paragraph_field_codes(paragraph) -> list[str]:
     from docx.oxml.ns import qn
 
-    return [
+    codes = [
         node.text or ""
         for node in paragraph._p.iter(qn("w:instrText"))
         if node.text is not None
     ]
+    codes.extend(
+        node.get(qn("w:instr")) or ""
+        for node in paragraph._p.iter(qn("w:fldSimple"))
+        if node.get(qn("w:instr")) is not None
+    )
+    return codes
 
 
 def _paragraph_field_nodes_use_runs(paragraph) -> bool:
@@ -407,6 +422,95 @@ def _write_png(path: Path, *, width: int, height: int) -> None:
     path.write_bytes(png)
 
 
+def _render_structured_payload_with_node(
+    workspace_root: Path,
+    workspace_name: str,
+    payload: dict[str, object],
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, workspace_name)
+    renderer_entry = (
+        Path(__file__).resolve().parents[1] / "word_renderer_js" / "dist" / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+
+    output_path = workspace_dir / "node-output.docx"
+    payload_path = workspace_dir / "node-payload.json"
+    normalized_payload = {
+        "version": "v1",
+        "format": "word",
+        "render_mode": "structured",
+        **payload,
+    }
+    payload_path.write_text(
+        json.dumps(normalized_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return docx.Document(output_path), output_path
+
+
+def _node_render_backend_config_for_tests() -> DocumentRenderBackendConfig:
+    renderer_entry = (
+        Path(__file__).resolve().parents[1] / "word_renderer_js" / "dist" / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+    return DocumentRenderBackendConfig(
+        preferred_backend="node",
+        fallback_enabled=False,
+        node_renderer_entry=str(renderer_entry),
+    )
+
+
+async def _export_docx_via_node_toolset(
+    workspace_root: Path,
+    workspace_name: str,
+    *,
+    create_kwargs: dict[str, object],
+    blocks: list[dict[str, object]],
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, workspace_name)
+    toolset = build_document_toolset(
+        workspace_dir=workspace_dir,
+        render_backend_config=_node_render_backend_config_for_tests(),
+    )
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(await tool_by_name["create_document"].call(None, **create_kwargs))
+    document_id = created["document"]["document_id"]
+
+    added = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=document_id,
+            blocks=blocks,
+        )
+    )
+    assert added["success"] is True, added["message"]
+    finalized = json.loads(
+        await tool_by_name["finalize_document"].call(None, document_id=document_id)
+    )
+    assert finalized["success"] is True, finalized["message"]
+    exported = json.loads(
+        await tool_by_name["export_document"].call(None, document_id=document_id)
+    )
+    assert exported["success"] is True, exported["message"]
+
+    return docx.Document(exported["file_path"]), Path(exported["file_path"])
+
+
 def test_build_document_toolset_uses_shared_store_and_default_workspace():
     toolset = build_document_toolset()
     tool_names = [tool.name for tool in toolset.tools]
@@ -447,11 +551,149 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
     ]
 
 
-def test_build_document_toolset_defaults_to_python_render_backend():
+def test_build_document_toolset_defaults_to_node_with_python_fallback():
     toolset = build_document_toolset()
     export_tool = next(tool for tool in toolset.tools if tool.name == "export_document")
 
-    assert [backend.name for backend in export_tool.render_backends] == ["python"]
+    assert [backend.name for backend in export_tool.render_backends] == [
+        "node",
+        "python",
+    ]
+
+
+def test_document_core_word_document_builder_is_legacy_export():
+    import astrbot_plugin_office_assistant.document_core as document_core
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        builder_cls = document_core.WordDocumentBuilder
+
+    assert builder_cls.__name__ == "WordDocumentBuilder"
+    assert any(
+        "legacy" in str(item.message).lower() and "render backend pipeline" in str(item.message)
+        for item in captured
+    )
+    assert "WordDocumentBuilder" not in getattr(document_core, "__all__", [])
+
+
+@pytest.mark.parametrize(
+    ("export_name", "expected_name"),
+    [
+        ("NodeWordRenderBackend", "NodeDocumentRenderBackend"),
+        ("PythonWordRenderBackend", "PythonWordRenderBackend"),
+        ("WordRenderBackendConfig", "DocumentRenderBackendConfig"),
+        ("WordRenderBackend", "DocumentRenderBackend"),
+        ("build_word_render_backends", "build_word_render_backends"),
+    ],
+)
+def test_domain_document_word_specific_exports_are_legacy_compatibility(
+    export_name: str,
+    expected_name: str,
+):
+    import astrbot_plugin_office_assistant.domain.document as domain_document
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        exported = getattr(domain_document, export_name)
+
+    assert getattr(exported, "__name__", None) == expected_name
+    assert any(
+        "legacy word-specific export" in str(item.message).lower()
+        and export_name in str(item.message)
+        for item in captured
+    )
+    assert export_name not in getattr(domain_document, "__all__", [])
+
+
+def test_render_backends_import_does_not_require_word_builder():
+    module_name = "astrbot_plugin_office_assistant.domain.document.render_backends"
+    cached_module = sys.modules.pop(module_name, None)
+    original_import = builtins.__import__
+
+    def _guard_word_builder_import(
+        name, globals=None, locals=None, fromlist=(), level=0
+    ):
+        if name.endswith("document_core.builders.word_builder"):
+            raise ModuleNotFoundError("word builder unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    try:
+        with patch(
+            "builtins.__import__",
+            side_effect=_guard_word_builder_import,
+        ):
+            imported = importlib.import_module(module_name)
+        assert imported.PythonWordRenderBackend.__name__ == "PythonWordRenderBackend"
+    finally:
+        sys.modules.pop(module_name, None)
+        if cached_module is not None:
+            sys.modules[module_name] = cached_module
+        else:
+            importlib.import_module(module_name)
+
+
+@pytest.mark.parametrize(
+    ("export_name", "expected_name"),
+    [
+        ("NodeWordRenderBackend", "NodeDocumentRenderBackend"),
+        ("WordRenderBackendConfig", "DocumentRenderBackendConfig"),
+        ("WordRenderBackend", "DocumentRenderBackend"),
+        ("WordRenderBackendError", "DocumentRenderBackendError"),
+        ("build_word_render_backends", "build_word_render_backends"),
+    ],
+)
+def test_render_backends_word_specific_aliases_are_legacy_compatibility(
+    export_name: str,
+    expected_name: str,
+):
+    import astrbot_plugin_office_assistant.domain.document.render_backends as render_backends
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        exported = getattr(render_backends, export_name)
+
+    assert getattr(exported, "__name__", None) == expected_name
+    assert any(
+        "legacy word-specific alias" in str(item.message).lower()
+        and export_name in str(item.message)
+        for item in captured
+    )
+    assert export_name not in getattr(render_backends, "__all__", [])
+
+
+def test_python_word_render_backend_delays_builder_creation_until_render(
+    workspace_root: Path,
+):
+    backend = build_document_render_backends(
+        "word",
+        DocumentRenderBackendConfig(
+            preferred_backend="python",
+            fallback_enabled=False,
+        ),
+    )[0]
+    fake_builder = MagicMock()
+    fake_builder_cls = MagicMock(return_value=fake_builder)
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="session-1",
+        metadata=DocumentMetadata(title="Lazy Builder"),
+    )
+    output_path = workspace_root / "lazy-builder.docx"
+
+    with patch(
+        "astrbot_plugin_office_assistant.domain.document.render_backends._load_word_document_builder",
+        return_value=fake_builder_cls,
+    ) as loader:
+        assert backend._builder is None
+        loader.assert_not_called()
+
+        result = backend.render(document, output_path)
+
+    loader.assert_called_once_with()
+    fake_builder_cls.assert_called_once_with()
+    fake_builder.build.assert_called_once_with(document, output_path)
+    assert result.backend_name == "python"
+    assert result.output_path == output_path
 
 
 def test_registry_import_does_not_require_fastmcp_at_runtime():
@@ -1053,7 +1295,7 @@ def test_paragraph_schema_requires_text_or_runs():
         )
 
 
-def test_word_document_builder_prefers_runs_when_both_text_and_runs_exist():
+def test_build_document_render_payload_preserves_runs_when_text_and_runs_exist():
     block = ParagraphBlock(
         text="plain text",
         runs=[
@@ -1061,8 +1303,18 @@ def test_word_document_builder_prefers_runs_when_both_text_and_runs_exist():
             ParagraphRun(text=" content"),
         ],
     )
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Rich Paragraph"),
+        blocks=[block],
+    )
+    payload = build_document_render_payload(document)
 
-    assert WordDocumentBuilder._paragraph_text(block) == "rich content"
+    assert payload["blocks"][0]["text"] == "plain text"
+    assert payload["blocks"][0]["runs"][0]["text"] == "rich"
+    assert payload["blocks"][0]["runs"][1]["text"] == " content"
 
 
 @pytest.mark.asyncio
@@ -1931,6 +2183,71 @@ async def test_create_document_tool_prefers_summary_block_over_document_style_de
     assert summary_item_paragraph.paragraph_format.space_after.pt == pytest.approx(
         8, abs=0.5
     )
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_applies_compact_density_and_paragraph_variants(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-document-compact-summary-variants"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Compact Summary",
+            output_name="compact-summary.docx",
+            theme_name="business_report",
+            density="compact",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "paragraph",
+                "variant": "summary_box",
+                "text": "Compact summary body.",
+            },
+            {
+                "type": "paragraph",
+                "variant": "key_takeaway",
+                "title": "Action Note",
+                "text": "Execute the next step.",
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    summary_title = _find_paragraph(loaded_doc, "Summary")
+    summary_item = _find_paragraph(loaded_doc, "• Compact summary body.")
+    takeaway_title = _find_paragraph(loaded_doc, "Action Note")
+    takeaway_item = _find_paragraph(loaded_doc, "• Execute the next step.")
+    section = loaded_doc.sections[0]
+
+    assert section.top_margin.cm == pytest.approx(2.2, abs=0.01)
+    assert section.bottom_margin.cm == pytest.approx(2.1, abs=0.01)
+    assert section.left_margin.cm == pytest.approx(2.4, abs=0.01)
+    assert section.right_margin.cm == pytest.approx(2.3, abs=0.01)
+    assert summary_title.runs[0].bold is True
+    assert summary_item.paragraph_format.space_after.pt == pytest.approx(4, abs=0.5)
+    assert takeaway_title.runs[0].bold is True
+    assert takeaway_item.text == "• Execute the next step."
 
 
 @pytest.mark.asyncio
@@ -3102,7 +3419,7 @@ def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: 
         "astrbot_plugin_office_assistant.domain.document.render_backends.subprocess.run",
         side_effect=_fake_run,
     ) as mocked_run:
-        backend = NodeWordRenderBackend(entry_path=entry_path)
+        backend = NodeDocumentRenderBackend(entry_path=entry_path)
         result = backend.render(document, output_path)
 
     assert mocked_run.call_count == 1
@@ -3142,6 +3459,12 @@ def test_build_document_render_backends_reserves_excel_for_python():
         match="Excel render backend is reserved for Python implementation",
     ):
         backends[0].render(MagicMock(), Path("out.xlsx"))
+
+
+def test_build_document_render_backends_defaults_to_node_with_python_fallback_for_word():
+    backends = build_document_render_backends("word")
+
+    assert [backend.name for backend in backends] == ["node", "python"]
 
 
 def test_node_render_backend_renders_sections_and_table_styles(workspace_root: Path):
@@ -3327,6 +3650,1045 @@ def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: P
     error_payload = json.loads(completed.stderr)
     assert error_payload["code"] == "FORMAT_NOT_IMPLEMENTED"
     assert "PPT structured renderer" in error_payload["message"]
+
+
+def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: Path):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-toc-header-footer",
+        {
+            "document_id": "node-toc-header-footer",
+            "metadata": {
+                "title": "目录测试",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {},
+                "header_footer": {
+                    "header_text": "季度经营复盘",
+                    "footer_text": "内部使用",
+                    "different_first_page": True,
+                    "first_page_header_text": "封面页眉",
+                    "first_page_footer_text": "封面页脚",
+                    "first_page_show_page_number": True,
+                    "different_odd_even": True,
+                    "even_page_header_text": "偶数页页眉",
+                    "even_page_footer_text": "偶数页页脚",
+                    "even_page_show_page_number": False,
+                    "show_page_number": True,
+                    "page_number_align": "center",
+                },
+            },
+            "blocks": [
+                {"type": "toc", "title": "目录", "levels": 2, "start_on_new_page": True},
+                {"type": "heading", "text": "经营总览", "level": 2},
+                {"type": "paragraph", "text": "正文"},
+            ],
+        },
+    )
+
+    assert _document_updates_fields_on_open(loaded_doc) is True
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert loaded_doc.sections[0].different_first_page_header_footer is True
+    assert "季度经营复盘" in _story_texts(loaded_doc.sections[0].header)
+    assert any(
+        text.startswith("内部使用") for text in _story_texts(loaded_doc.sections[0].footer)
+    )
+    assert "封面页眉" in _story_texts(loaded_doc.sections[0].first_page_header)
+    assert any(
+        text.startswith("封面页脚")
+        for text in _story_texts(loaded_doc.sections[0].first_page_footer)
+    )
+    assert "PAGE" in loaded_doc.sections[0].first_page_footer._element.xml
+    assert "偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
+    assert "偶数页页脚" in _story_texts(loaded_doc.sections[0].even_page_footer)
+    assert "PAGE" not in loaded_doc.sections[0].even_page_footer._element.xml
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+    assert all(
+        _paragraph_field_nodes_use_runs(paragraph)
+        for paragraph in loaded_doc.sections[0].footer.paragraphs
+    )
+    assert any(
+        _paragraph_has_page_break(paragraph)
+        or paragraph.paragraph_format.page_break_before is True
+        for paragraph in loaded_doc.paragraphs
+    )
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert "w:fldSimple" in document_xml
+    assert "TOC" in document_xml
+    assert '\\o &quot;1-2&quot;' in document_xml
+
+
+def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-dashboard-blocks",
+        {
+            "document_id": "node-dashboard-blocks",
+            "metadata": {
+                "title": "Q3 经营复盘报告",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "table_defaults": {
+                        "body_fill": "F8FAFC",
+                    }
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["区域", "预算完成率"],
+                    "rows": [
+                        [
+                            "华东",
+                            {
+                                "text": "112%",
+                                "fill": "DCFCE7",
+                                "text_color": "166534",
+                                "bold": True,
+                                "align": "right",
+                            },
+                        ]
+                    ],
+                    "border_style": "minimal",
+                },
+                {
+                    "type": "accent_box",
+                    "title": "核心摘要",
+                    "text": "Q3 整体经营表现稳健，增长质量继续改善。",
+                    "accent_color": "1F4E79",
+                    "fill_color": "F8FAFC",
+                },
+                {
+                    "type": "metric_cards",
+                    "accent_color": "1F4E79",
+                    "fill_color": "F8FAFC",
+                    "metrics": [
+                        {
+                            "label": "营业收入",
+                            "value": "¥4.82 亿",
+                            "delta": "↑ 18.4% YoY",
+                            "delta_color": "15803D",
+                        },
+                        {
+                            "label": "毛利率",
+                            "value": "32.1%",
+                            "delta": "↓ 0.3pp vs Q2",
+                            "delta_color": "DC2626",
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+    accent_table = loaded_doc.tables[1]
+    metric_table = loaded_doc.tables[2]
+
+    assert _cell_fill(table.rows[1].cells[0]) == "F7FBFF"
+    assert _cell_fill(table.rows[1].cells[1]) == "DCFCE7"
+    assert _run_rgb(table.rows[1].cells[1]) == "166534"
+    assert _run_bold(table.rows[1].cells[1]) is True
+    assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert _cell_fill(metric_table.rows[0].cells[0]) == "F8FAFC"
+    assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
+    assert metric_table.rows[0].cells[0].paragraphs[1].text == "¥4.82 亿"
+    assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
+
+
+def test_node_renderer_supports_section_inheritance_and_cover_normalization(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-section-inheritance",
+        {
+            "document_id": "node-section-inheritance",
+            "metadata": {
+                "title": "封面页码测试",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {},
+                "header_footer": {
+                    "header_text": "董事会季度经营汇报",
+                    "different_first_page": True,
+                    "first_page_header_text": "董事会季度经营汇报封面",
+                    "first_page_show_page_number": False,
+                    "different_odd_even": True,
+                    "even_page_header_text": "董事会季度经营汇报（偶数页）",
+                    "show_page_number": True,
+                },
+            },
+            "blocks": [
+                {"type": "paragraph", "text": "封面内容"},
+                {
+                    "type": "section_break",
+                    "start_type": "new_page",
+                    "page_orientation": "landscape",
+                    "restart_page_numbering": True,
+                },
+                {"type": "paragraph", "text": "横向节内容"},
+                {
+                    "type": "section_break",
+                    "start_type": "new_page",
+                    "header_footer": {"show_page_number": False},
+                },
+                {"type": "paragraph", "text": "纵向节内容"},
+            ],
+        },
+    )
+
+    assert len(loaded_doc.sections) == 3
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert loaded_doc.sections[0].different_first_page_header_footer is True
+    assert loaded_doc.sections[1].different_first_page_header_footer is False
+    assert loaded_doc.sections[2].different_first_page_header_footer is False
+    assert "PAGE" in loaded_doc.sections[1].footer._element.xml
+    assert _section_page_number_start(loaded_doc.sections[1]) == 1
+    assert loaded_doc.sections[2].footer.is_linked_to_previous is False
+    assert "董事会季度经营汇报" in _story_texts(loaded_doc.sections[2].header)
+    assert loaded_doc.sections[2].footer.paragraphs[0].text == ""
+    assert "PAGE" not in loaded_doc.sections[2].footer._element.xml
+
+
+def test_node_renderer_supports_heading_styles_and_split_header_footer(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-heading-split-layout",
+        {
+            "document_id": "node-heading-split-layout",
+            "metadata": {
+                "title": "Q3 经营复盘报告",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "heading_color": "000000",
+                    "heading_level_1_color": "0F4C81",
+                    "heading_level_2_color": "4B5563",
+                    "heading_bottom_border_color": "CBD5E1",
+                    "heading_bottom_border_size_pt": 1.5,
+                },
+                "header_footer": {
+                    "header_left": "Q3 经营复盘报告 | 战略与增长委员会",
+                    "header_right": "机密 · 2024 年 10 月",
+                    "header_border_bottom": True,
+                    "header_border_color": "D0D7DE",
+                    "footer_left": "集团战略部 · 内部机密文件",
+                    "footer_right": "第 {PAGE} 页",
+                    "footer_border_top": True,
+                    "footer_border_color": "D0D7DE",
+                },
+            },
+            "blocks": [
+                {
+                    "type": "heading",
+                    "text": "一、经营总览",
+                    "level": 1,
+                    "bottom_border": True,
+                },
+                {
+                    "type": "heading",
+                    "text": "1.1 各区营收完成情况",
+                    "level": 2,
+                    "bottom_border": True,
+                },
+                {
+                    "type": "heading",
+                    "text": "三级标题",
+                    "level": 3,
+                },
+                {"type": "paragraph", "text": "正文"},
+            ],
+        },
+    )
+
+    title_paragraph = _find_paragraph(loaded_doc, "Q3 经营复盘报告")
+    heading_one = _find_paragraph(loaded_doc, "一、经营总览")
+    heading_two = _find_paragraph(loaded_doc, "1.1 各区营收完成情况")
+    heading_three = _find_paragraph(loaded_doc, "三级标题")
+    header_paragraph = loaded_doc.sections[0].header.paragraphs[0]
+    footer_paragraph = loaded_doc.sections[0].footer.paragraphs[0]
+
+    assert heading_one.style.style_id == "Heading1"
+    assert heading_two.style.style_id == "Heading2"
+    assert heading_three.style.style_id == "Heading3"
+    assert _paragraph_run_rgb(title_paragraph) == "000000"
+    assert _paragraph_run_rgb(heading_one) == "0F4C81"
+    assert _paragraph_run_rgb(heading_two) == "4B5563"
+    assert _paragraph_bottom_border_color(heading_one) == "CBD5E1"
+    assert _paragraph_bottom_border_size(heading_one) == "12"
+    assert "Q3 经营复盘报告 | 战略与增长委员会" in header_paragraph.text
+    assert "机密 · 2024 年 10 月" in header_paragraph.text
+    assert "集团战略部 · 内部机密文件" in footer_paragraph.text
+    assert "第 " in footer_paragraph.text
+    assert _paragraph_bottom_border_color(header_paragraph) == "D0D7DE"
+    assert _paragraph_top_border_color(footer_paragraph) == "D0D7DE"
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+
+
+def test_node_renderer_supports_default_header_footer_baseline(workspace_root: Path):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-default-header-footer",
+        {
+            "document_id": "node-default-header-footer",
+            "metadata": {
+                "title": "默认页眉页脚测试",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {},
+                "header_footer": {},
+            },
+            "blocks": [{"type": "paragraph", "text": "正文"}],
+        },
+    )
+
+    assert _document_updates_fields_on_open(loaded_doc) is True
+    assert _document_uses_odd_even_headers(loaded_doc) is False
+    assert "PAGE" not in loaded_doc.sections[0].footer._element.xml
+    assert "PAGE" not in loaded_doc.sections[0].first_page_footer._element.xml
+    assert "PAGE" not in loaded_doc.sections[0].even_page_footer._element.xml
+
+
+def test_node_renderer_supports_section_override_inheritance_and_nested_even_headers(
+    workspace_root: Path,
+):
+    from docx.enum.section import WD_ORIENT
+
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-section-variants",
+        {
+            "document_id": "node-section-variants",
+            "metadata": {
+                "title": "分节测试",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {},
+                "header_footer": {
+                    "header_text": "默认页眉",
+                    "footer_text": "默认页脚",
+                    "show_page_number": True,
+                },
+            },
+            "blocks": [
+                {"type": "paragraph", "text": "第一节"},
+                {
+                    "type": "section_break",
+                    "start_type": "new_page",
+                    "inherit_header_footer": False,
+                    "page_orientation": "landscape",
+                    "margins": {
+                        "top_cm": 1.5,
+                        "bottom_cm": 1.8,
+                        "left_cm": 1.2,
+                        "right_cm": 1.4,
+                    },
+                    "restart_page_numbering": True,
+                    "page_number_start": 3,
+                    "header_footer": {
+                        "header_text": "第二节页眉",
+                        "footer_text": "第二节页脚",
+                        "show_page_number": True,
+                        "different_odd_even": True,
+                        "even_page_header_text": "第二节偶数页页眉",
+                    },
+                },
+                {"type": "paragraph", "text": "第二节"},
+                {"type": "section_break", "start_type": "new_page"},
+                {"type": "paragraph", "text": "第三节"},
+                {
+                    "type": "group",
+                    "blocks": [
+                        {
+                            "type": "columns",
+                            "columns": [
+                                {
+                                    "blocks": [
+                                        {
+                                            "type": "section_break",
+                                            "start_type": "new_page",
+                                            "inherit_header_footer": False,
+                                            "header_footer": {
+                                                "different_odd_even": True,
+                                                "even_page_header_text": "嵌套偶数页页眉",
+                                            },
+                                        },
+                                        {"type": "paragraph", "text": "第四节"},
+                                    ]
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert len(loaded_doc.sections) == 4
+    assert "默认页眉" in _story_texts(loaded_doc.sections[0].header)
+    assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert any(
+        text.startswith("第二节页脚") for text in _story_texts(loaded_doc.sections[1].footer)
+    )
+    assert "第二节偶数页页眉" in _story_texts(loaded_doc.sections[1].even_page_header)
+    assert "PAGE" in loaded_doc.sections[1].footer._element.xml
+    assert _section_page_number_start(loaded_doc.sections[1]) == 3
+    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
+    assert loaded_doc.sections[1].top_margin.cm == pytest.approx(1.5, abs=0.01)
+    assert loaded_doc.sections[1].bottom_margin.cm == pytest.approx(1.8, abs=0.01)
+    assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.2, abs=0.01)
+    assert loaded_doc.sections[1].right_margin.cm == pytest.approx(1.4, abs=0.01)
+    assert loaded_doc.sections[2].header.is_linked_to_previous is True
+    assert loaded_doc.sections[2].footer.is_linked_to_previous is True
+    assert _section_page_number_start(loaded_doc.sections[2]) is None
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert "嵌套偶数页页眉" in _story_texts(loaded_doc.sections[3].even_page_header)
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_exports_training_summary_golden_sample(
+    workspace_root: Path,
+):
+    loaded_doc, _ = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-training-summary",
+        create_kwargs={
+            "title": "Sample Training Summary Report",
+            "output_name": "sample-training-summary.docx",
+            "theme_name": "business_report",
+            "title_align": "center",
+            "document_style": {"heading_color": "000000"},
+            "header_footer": {
+                "show_page_number": True,
+                "page_number_align": "right",
+            },
+        },
+        blocks=[
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "Training Title: ", "bold": True},
+                    {"text": "Advanced Skills Workshop"},
+                ],
+            },
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "Date: ", "bold": True},
+                    {"text": "April 10-11, 2026"},
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "I. Overview",
+                "level": 1,
+                "bottom_border": True,
+                "bottom_border_color": "D0D7DE",
+            },
+            {
+                "type": "paragraph",
+                "text": "The workshop enhanced technical proficiency and collaboration across the team.",
+            },
+            {
+                "type": "heading",
+                "text": "II. Training Objectives",
+                "level": 1,
+                "bottom_border": True,
+                "bottom_border_color": "D0D7DE",
+            },
+            {
+                "type": "list",
+                "items": [
+                    {
+                        "runs": [
+                            {"text": "Enhance technical proficiency: ", "bold": True},
+                            {"text": "Focus on the latest tools and methodologies."},
+                        ]
+                    },
+                    {
+                        "runs": [
+                            {"text": "Improve collaboration: ", "bold": True},
+                            {
+                                "text": "Strengthen communication through shared exercises.",
+                            },
+                        ]
+                    },
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "III. Training Schedule",
+                "level": 1,
+                "bottom_border": True,
+                "bottom_border_color": "D0D7DE",
+            },
+            {
+                "type": "table",
+                "headers": ["Date", "Time", "Session Title", "Trainer"],
+                "header_fill_enabled": False,
+                "header_text_color": "666666",
+                "header_bold": False,
+                "border_style": "minimal",
+                "rows": [
+                    [
+                        {"text": "2026-04-10", "row_span": 2},
+                        "09:00 - 12:00",
+                        "Introduction to Tools",
+                        "Alice Smith",
+                    ],
+                    ["13:00 - 16:00", "Hands-on Practice", "Bob Johnson"],
+                    [
+                        {"text": "2026-04-11", "row_span": 2},
+                        "09:00 - 12:00",
+                        "Advanced Techniques",
+                        "Alice Smith",
+                    ],
+                    ["13:00 - 16:00", "Group Project", "Bob Johnson"],
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "IV. Participant Feedback",
+                "level": 1,
+                "bottom_border": True,
+                "bottom_border_color": "D0D7DE",
+            },
+            {
+                "type": "table",
+                "headers": ["Category", "Rating", "Comments"],
+                "header_fill_enabled": False,
+                "header_text_color": "666666",
+                "header_bold": False,
+                "border_style": "minimal",
+                "rows": [
+                    ["Content Quality", "4.8", "Very relevant and up-to-date"],
+                    ["Trainer Expertise", "4.9", "Engaging and highly knowledgeable"],
+                ],
+            },
+        ],
+    )
+
+    title_paragraph = _find_paragraph(loaded_doc, "Sample Training Summary Report")
+    overview_heading = _find_paragraph(loaded_doc, "I. Overview")
+    schedule_table = loaded_doc.tables[0]
+    feedback_table = loaded_doc.tables[1]
+
+    assert _paragraph_run_rgb(title_paragraph) == "000000"
+    assert _paragraph_bottom_border_color(overview_heading) == "D0D7DE"
+    assert any(
+        "Enhance technical proficiency:" in paragraph.text
+        for paragraph in loaded_doc.paragraphs
+    )
+    assert schedule_table.rows[0].cells[0].text == "III. Training Schedule"
+    assert _cell_vertical_merge(schedule_table.rows[2].cells[0]) == "restart"
+    assert _raw_row_cell_vertical_merge(schedule_table.rows[3], 0) == "continue"
+    assert _run_rgb(schedule_table.rows[1].cells[0]) == "666666"
+    assert _run_bold(schedule_table.rows[1].cells[0]) is False
+    assert feedback_table.rows[0].cells[0].text == "IV. Participant Feedback"
+    assert feedback_table.rows[2].cells[0].text == "Content Quality"
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_exports_executive_brief_golden_sample(
+    workspace_root: Path,
+):
+    loaded_doc, _ = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-executive-brief",
+        create_kwargs={
+            "title": "Executive Brief",
+            "output_name": "executive-brief.docx",
+            "theme_name": "executive_brief",
+            "title_align": "center",
+            "header_footer": {
+                "header_left": "Executive Brief | Strategy Office",
+                "header_right": "Confidential | October 2026",
+                "header_border_bottom": True,
+                "footer_left": "Prepared for Leadership Team",
+                "footer_right": "Page {PAGE}",
+                "footer_border_top": True,
+            },
+        },
+        blocks=[
+            {
+                "type": "heading",
+                "text": "Executive Summary",
+                "level": 1,
+                "bottom_border": True,
+            },
+            {
+                "type": "accent_box",
+                "title": "Key Message",
+                "text": "Revenue momentum remained ahead of plan while cost pressure stayed manageable.",
+                "accent_color": "1F4E79",
+                "fill_color": "F8FAFC",
+            },
+            {
+                "type": "columns",
+                "columns": [
+                    {
+                        "blocks": [
+                            {"type": "heading", "text": "What Changed", "level": 2},
+                            {
+                                "type": "paragraph",
+                                "text": "Market momentum remains strong in enterprise accounts.",
+                            },
+                        ]
+                    },
+                    {
+                        "blocks": [
+                            {"type": "heading", "text": "Decision Requested", "level": 2},
+                            {
+                                "type": "paragraph",
+                                "text": "Approve Q4 hiring for sales enablement and analytics.",
+                            },
+                        ]
+                    },
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "Priority Actions",
+                "level": 1,
+                "bottom_border": True,
+            },
+            {
+                "type": "table",
+                "headers": ["Priority", "Owner", "Timing"],
+                "border_style": "minimal",
+                "rows": [
+                    ["Pipeline quality review", "Revenue Ops", "Week 1"],
+                    ["Pricing guardrail refresh", "Finance", "Week 2"],
+                    ["Retention playbook launch", "Customer Success", "Week 3"],
+                ],
+            },
+        ],
+    )
+
+    summary_heading = _find_paragraph(loaded_doc, "Executive Summary")
+    header_paragraph = loaded_doc.sections[0].header.paragraphs[0]
+    footer_paragraph = loaded_doc.sections[0].footer.paragraphs[0]
+    accent_table = loaded_doc.tables[0]
+    priorities_table = loaded_doc.tables[1]
+
+    assert summary_heading.style.style_id == "Heading1"
+    assert _paragraph_bottom_border_color(summary_heading) is not None
+    assert "Executive Brief | Strategy Office" in header_paragraph.text
+    assert "Confidential | October 2026" in header_paragraph.text
+    assert "Prepared for Leadership Team" in footer_paragraph.text
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+    assert accent_table.rows[0].cells[0].text.startswith("Key Message")
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert any(
+        "Market momentum remains strong in enterprise accounts." in paragraph.text
+        for paragraph in loaded_doc.paragraphs
+    )
+    assert any(
+        "Approve Q4 hiring for sales enablement and analytics." in paragraph.text
+        for paragraph in loaded_doc.paragraphs
+    )
+    assert priorities_table.rows[0].cells[0].text == "Priority Actions"
+    assert priorities_table.rows[2].cells[0].text == "Pipeline quality review"
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_exports_q3_business_review_golden_sample(
+    workspace_root: Path,
+):
+    loaded_doc, _ = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-q3-business-review",
+        create_kwargs={
+            "title": "Q3 经营复盘报告",
+            "output_name": "q3-business-review.docx",
+            "theme_name": "business_report",
+            "title_align": "center",
+            "document_style": {
+                "heading_color": "000000",
+                "heading_level_1_color": "0F4C81",
+            },
+            "header_footer": {
+                "header_left": "Q3 经营复盘报告 | 战略与增长委员会",
+                "header_right": "机密 · 2024 年 10 月",
+                "header_border_bottom": True,
+                "footer_left": "集团战略部 · 内部机密文件",
+                "footer_right": "第 {PAGE} 页",
+                "footer_border_top": True,
+            },
+        },
+        blocks=[
+            {
+                "type": "accent_box",
+                "title": "核心摘要",
+                "text": "Q3 整体经营表现稳健，增长质量继续改善。",
+                "accent_color": "1F4E79",
+                "fill_color": "F8FAFC",
+            },
+            {
+                "type": "metric_cards",
+                "accent_color": "1F4E79",
+                "fill_color": "F8FAFC",
+                "metrics": [
+                    {
+                        "label": "营业收入",
+                        "value": "¥4.82 亿",
+                        "delta": "↑ 18.4% YoY",
+                        "delta_color": "15803D",
+                    },
+                    {
+                        "label": "毛利率",
+                        "value": "32.1%",
+                        "delta": "↓ 0.3pp vs Q2",
+                        "delta_color": "DC2626",
+                    },
+                    {
+                        "label": "净新增客户",
+                        "value": "184",
+                        "delta": "↑ 12.0% QoQ",
+                        "delta_color": "15803D",
+                    },
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "一、分区业绩",
+                "level": 1,
+                "bottom_border": True,
+            },
+            {
+                "type": "table",
+                "headers": ["区域", "收入", "预算完成率", "备注"],
+                "header_fill": "1F4E79",
+                "header_text_color": "FFFFFF",
+                "border_style": "minimal",
+                "rows": [
+                    [
+                        "华东",
+                        "¥1.62 亿",
+                        {
+                            "text": "112%",
+                            "fill": "DCFCE7",
+                            "text_color": "166534",
+                            "bold": True,
+                        },
+                        "超额完成",
+                    ],
+                    [
+                        "华南",
+                        "¥1.08 亿",
+                        {
+                            "text": "95%",
+                            "fill": "FEF3C7",
+                            "text_color": "92400E",
+                            "bold": True,
+                        },
+                        "接近目标",
+                    ],
+                    [
+                        "北区",
+                        "¥0.94 亿",
+                        {
+                            "text": "89%",
+                            "fill": "FEE2E2",
+                            "text_color": "991B1B",
+                            "bold": True,
+                        },
+                        "恢复中",
+                    ],
+                ],
+            },
+            {
+                "type": "heading",
+                "text": "二、风险与应对",
+                "level": 1,
+                "bottom_border": True,
+            },
+            {
+                "type": "list",
+                "items": [
+                    {
+                        "runs": [
+                            {"text": "供应链风险：", "bold": True},
+                            {"text": "部分关键器件交付周期仍有波动。"},
+                        ]
+                    },
+                    {
+                        "runs": [
+                            {"text": "价格压力：", "bold": True},
+                            {"text": "重点客户在续约谈判中要求更强折扣。"},
+                        ]
+                    },
+                ],
+            },
+        ],
+    )
+
+    title_paragraph = _find_paragraph(loaded_doc, "Q3 经营复盘报告")
+    header_paragraph = loaded_doc.sections[0].header.paragraphs[0]
+    footer_paragraph = loaded_doc.sections[0].footer.paragraphs[0]
+    accent_table = loaded_doc.tables[0]
+    metric_table = loaded_doc.tables[1]
+    data_table = loaded_doc.tables[2]
+
+    assert _paragraph_run_rgb(title_paragraph) == "000000"
+    assert "Q3 经营复盘报告 | 战略与增长委员会" in header_paragraph.text
+    assert "集团战略部 · 内部机密文件" in footer_paragraph.text
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+    assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
+    assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
+    assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
+    assert _paragraph_run_rgb(metric_table.rows[0].cells[1].paragraphs[2]) == "DC2626"
+    assert data_table.rows[0].cells[0].text == "一、分区业绩"
+    assert _cell_fill(data_table.rows[1].cells[0]) == "1F4E79"
+    assert _run_rgb(data_table.rows[1].cells[0]) == "FFFFFF"
+    assert _cell_fill(data_table.rows[2].cells[2]) == "DCFCE7"
+    assert _cell_fill(data_table.rows[3].cells[2]) == "FEF3C7"
+    assert _cell_fill(data_table.rows[4].cells[2]) == "FEE2E2"
+    assert any("供应链风险：" in paragraph.text for paragraph in loaded_doc.paragraphs)
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_exports_low_frequency_parity_sample(
+    workspace_root: Path,
+):
+    from docx.enum.section import WD_ORIENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    loaded_doc, exported_path = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-low-frequency-parity",
+        create_kwargs={
+            "title": "低频结构验收样例",
+            "output_name": "low-frequency-parity.docx",
+            "theme_name": "business_report",
+            "document_style": {
+                "summary_card_defaults": {
+                    "title_align": "center",
+                    "title_emphasis": "strong",
+                    "title_font_scale": 1.15,
+                    "title_space_before": 10,
+                    "title_space_after": 3,
+                    "list_space_after": 7,
+                },
+                "table_defaults": {
+                    "header_fill": "1F4E79",
+                    "header_text_color": "FFFFFF",
+                    "banded_rows": True,
+                    "banded_row_fill": "EEF4FA",
+                    "table_align": "center",
+                    "border_style": "minimal",
+                    "cell_align": "center",
+                },
+            },
+            "header_footer": {
+                "header_text": "默认页眉",
+                "footer_text": "默认页脚",
+                "show_page_number": True,
+            },
+        },
+        blocks=[
+            {
+                "type": "summary_card",
+                "title": "结论与行动计划",
+                "items": ["统一节奏", "聚焦续约"],
+                "variant": "summary",
+            },
+            {
+                "type": "columns",
+                "columns": [
+                    {
+                        "blocks": [
+                            {
+                                "type": "paragraph",
+                                "text": "左栏提示：以下为横向节的详细看板。",
+                            }
+                        ]
+                    },
+                    {
+                        "blocks": [
+                            {
+                                "type": "section_break",
+                                "start_type": "new_page",
+                                "inherit_header_footer": False,
+                                "page_orientation": "landscape",
+                                "restart_page_numbering": True,
+                                "page_number_start": 2,
+                                "header_footer": {
+                                    "header_text": "横向明细页眉",
+                                    "footer_text": "横向明细页脚",
+                                    "show_page_number": True,
+                                },
+                            },
+                            {
+                                "type": "heading",
+                                "text": "明细运营看板",
+                                "level": 1,
+                                "bottom_border": True,
+                            },
+                            {
+                                "type": "table",
+                                "header_groups": [
+                                    {"title": "经营数据", "span": 3},
+                                    {"title": "结果", "span": 1},
+                                ],
+                                "headers": ["区域", "Q3", "Q4", "完成率"],
+                                "numeric_columns": [1, 2, 3],
+                                "rows": [
+                                    [
+                                        "华东",
+                                        "120",
+                                        "135",
+                                        {
+                                            "text": "112%",
+                                            "fill": "DCFCE7",
+                                            "text_color": "166534",
+                                            "bold": True,
+                                        },
+                                    ],
+                                    [
+                                        "华南",
+                                        "108",
+                                        "102",
+                                        {
+                                            "text": "95%",
+                                            "fill": "FEF3C7",
+                                            "text_color": "92400E",
+                                            "bold": True,
+                                        },
+                                    ],
+                                ],
+                            },
+                        ]
+                    },
+                ],
+            },
+        ],
+    )
+
+    title_paragraph = _find_paragraph(loaded_doc, "结论与行动计划")
+    summary_item_paragraph = _find_paragraph(loaded_doc, "• 统一节奏")
+    detail_heading = _find_paragraph(loaded_doc, "明细运营看板")
+    detail_table = loaded_doc.tables[0]
+
+    assert len(loaded_doc.sections) == 2
+    assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert title_paragraph.runs[0].bold is True
+    assert _paragraph_run_size(title_paragraph) == pytest.approx(12.5, abs=0.1)
+    assert (_paragraph_run_size(title_paragraph) or 0) > (
+        _paragraph_run_size(summary_item_paragraph) or 0
+    )
+    assert title_paragraph.paragraph_format.space_before.pt == pytest.approx(10, abs=0.5)
+    assert title_paragraph.paragraph_format.space_after.pt == pytest.approx(3, abs=0.5)
+    assert summary_item_paragraph.paragraph_format.space_after.pt == pytest.approx(
+        7, abs=0.5
+    )
+    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
+    assert _section_page_number_start(loaded_doc.sections[1]) == 2
+    assert "横向明细页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert any(
+        text.startswith("横向明细页脚")
+        for text in _story_texts(loaded_doc.sections[1].footer)
+    )
+    assert "PAGE" in loaded_doc.sections[1].footer._element.xml
+    assert _paragraph_bottom_border_color(detail_heading) is not None
+    assert detail_table.rows[0].cells[0].text == "经营数据"
+    assert detail_table.rows[1].cells[0].text == "区域"
+    assert (
+        detail_table.rows[2].cells[1].paragraphs[0].alignment
+        == WD_ALIGN_PARAGRAPH.CENTER
+    )
+    assert detail_table.rows[2].cells[3].text == "112%"
+    assert _cell_fill(detail_table.rows[2].cells[3]) == "DCFCE7"
+    assert _run_rgb(detail_table.rows[2].cells[3]) == "166534"
+    assert detail_table.rows[3].cells[3].text == "95%"
+    assert _cell_fill(detail_table.rows[3].cells[3]) == "FEF3C7"
+    with zipfile.ZipFile(exported_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert 'w:type w:val="nextPage"' in document_xml
+
+
+def test_summary_card_defaults_match_between_python_and_node(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    renderer_entry = (
+        Path(__file__).resolve().parents[1] / "word_renderer_js" / "dist" / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-summary-card-python-node")
+    document = DocumentModel(
+        document_id="summary-card-parity",
+        session_id="pytest-session",
+        metadata=DocumentMetadata(
+            title="Summary Card Parity",
+            theme_name="business_report",
+            document_style=DocumentStyleConfig(
+                summary_card_defaults=DocumentSummaryCardDefaults(
+                    title_align="center",
+                    title_emphasis="strong",
+                    title_font_scale=1.15,
+                    title_space_before=10,
+                    title_space_after=3,
+                    list_space_after=7,
+                )
+            ),
+        ),
+        blocks=[
+            SummaryCardBlock(
+                title="结论与行动计划",
+                items=["统一节奏", "聚焦续约"],
+                variant="summary",
+            )
+        ],
+    )
+
+    python_output = workspace_dir / "summary-card-python.docx"
+    node_output = workspace_dir / "summary-card-node.docx"
+
+    PythonWordRenderBackend().render(document, python_output)
+    NodeDocumentRenderBackend(renderer_entry).render(document, node_output)
+
+    python_doc = docx.Document(python_output)
+    node_doc = docx.Document(node_output)
+
+    python_title = _find_paragraph(python_doc, "结论与行动计划")
+    node_title = _find_paragraph(node_doc, "结论与行动计划")
+    python_item = _find_paragraph(python_doc, "• 统一节奏")
+    node_item = _find_paragraph(node_doc, "• 统一节奏")
+
+    assert python_title.alignment == node_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert python_title.runs[0].bold is True
+    assert node_title.runs[0].bold is True
+    assert _paragraph_run_size(python_title) == pytest.approx(12.5, abs=0.1)
+    assert _paragraph_run_size(node_title) == pytest.approx(12.5, abs=0.1)
+    assert _paragraph_run_size(python_title) == pytest.approx(
+        _paragraph_run_size(node_title), abs=0.01
+    )
+    assert python_title.paragraph_format.space_before.pt == pytest.approx(10, abs=0.1)
+    assert node_title.paragraph_format.space_before.pt == pytest.approx(10, abs=0.1)
+    assert python_title.paragraph_format.space_after.pt == pytest.approx(3, abs=0.1)
+    assert node_title.paragraph_format.space_after.pt == pytest.approx(3, abs=0.1)
+    assert python_item.paragraph_format.space_after.pt == pytest.approx(7, abs=0.1)
+    assert node_item.paragraph_format.space_after.pt == pytest.approx(7, abs=0.1)
 
 
 @pytest.mark.asyncio
@@ -3530,6 +4892,79 @@ async def test_mcp_export_document_runs_after_export_hooks(workspace_root: Path)
     assert hook_calls == [("exported", "mcp-after-hook.docx")]
 
 
+@pytest.mark.asyncio
+async def test_mcp_server_exports_word_via_node_backend(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-mcp-node-word-export")
+    server = create_server(
+        workspace_dir=workspace_dir,
+        render_backend_config=_node_render_backend_config_for_tests(),
+    )
+
+    _, created_payload = await server.call_tool(
+        "create_document",
+        {
+            "title": "MCP Node Export",
+            "output_name": "mcp-node-export.docx",
+            "document_style": {"heading_color": "000000"},
+            "header_footer": {
+                "header_left": "季度经营复盘",
+                "footer_right": "第 {PAGE} 页",
+                "show_page_number": True,
+            },
+        },
+    )
+    document_id = created_payload["document"]["document_id"]
+
+    _, add_blocks_payload = await server.call_tool(
+        "add_blocks",
+        {
+            "document_id": document_id,
+            "blocks": [
+                {
+                    "type": "heading",
+                    "text": "一、经营总览",
+                    "level": 1,
+                    "bottom_border": True,
+                },
+                {
+                    "type": "table",
+                    "headers": ["日期", "时间", "内容"],
+                    "rows": [
+                        [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+                        ["13:00", "课程 B"],
+                    ],
+                    "header_fill_enabled": False,
+                    "header_bold": False,
+                },
+            ],
+        },
+    )
+    assert add_blocks_payload["success"] is True
+
+    _, finalized_payload = await server.call_tool(
+        "finalize_document",
+        {"document_id": document_id},
+    )
+    assert finalized_payload["success"] is True
+
+    _, exported_payload = await server.call_tool(
+        "export_document",
+        {"document_id": document_id},
+    )
+    assert exported_payload["success"] is True
+
+    loaded_doc = docx.Document(exported_payload["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert table.rows[0].cells[0].text == "一、经营总览"
+    assert _find_paragraph(loaded_doc, "MCP Node Export").text == "MCP Node Export"
+    assert len(table.rows) >= 4
+    assert _cell_vertical_merge(table.rows[2].cells[0]) == "restart"
+    assert _raw_row_cell_vertical_merge(table.rows[3], 0) == "continue"
+
+
 def test_document_session_store_keeps_exports_inside_workspace(workspace_root: Path):
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-paths")
     store = DocumentSessionStore(workspace_dir=workspace_dir)
@@ -3626,847 +5061,6 @@ def test_word_document_builder_resolves_logical_table_styles():
     assert TableRenderer.resolve_docx_table_style("custom_style") == "custom_style"
 
 
-def test_word_document_builder_uses_image_width_px_with_page_cap(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-    from docx.shared import Inches
-
-    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-image-width")
-    image_path = workspace_dir / "wide.png"
-    output_path = workspace_dir / "image-width.docx"
-    _write_png(image_path, width=2000, height=400)
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import ImageBlock
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="image-width-test",
-        metadata=DocumentMetadata(title="Image Width"),
-        blocks=[
-            ImageBlock(
-                path=str(image_path),
-                width_px=1600,
-                caption="Image caption",
-            )
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.inline_shapes) == 1
-    max_width = (
-        loaded_doc.sections[0].page_width
-        - loaded_doc.sections[0].left_margin
-        - loaded_doc.sections[0].right_margin
-    )
-    assert loaded_doc.inline_shapes[0].width == min(Inches(1600 / 96.0), max_width)
-    assert "Image caption" in [paragraph.text for paragraph in loaded_doc.paragraphs]
-
-
-def test_word_document_builder_preserves_workspace_for_summary_card_group(
-    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-summary-card-workspace"
-    )
-    image_path = workspace_dir / "nested.png"
-    output_path = workspace_dir / "summary-card-workspace.docx"
-    _write_png(image_path, width=320, height=180)
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import (
-        GroupBlock,
-        ImageBlock,
-        ParagraphBlock,
-    )
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    paragraph = ParagraphBlock(text="Summary block body")
-    object.__setattr__(paragraph, "variant", "summary_box")
-    object.__setattr__(paragraph, "title", "Summary")
-
-    monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.document_core.builders.word_builder.build_summary_card_group",
-        lambda **_kwargs: GroupBlock(
-            blocks=[
-                ImageBlock(
-                    path=image_path.name,
-                    caption="Nested image caption",
-                )
-            ]
-        ),
-    )
-
-    document = DocumentModel(
-        document_id="summary-card-workspace-test",
-        metadata=DocumentMetadata(title="Summary Card Workspace"),
-        blocks=[paragraph],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.inline_shapes) == 1
-    assert "Nested image caption" in [
-        paragraph.text for paragraph in loaded_doc.paragraphs
-    ]
-
-
-def test_word_document_builder_skips_images_outside_workspace(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-image-sandbox")
-    external_dir = _make_workspace(workspace_root, "pytest-agent-tools-image-external")
-    external_image_path = external_dir / "outside.png"
-    output_path = workspace_dir / "image-sandbox.docx"
-    _write_png(external_image_path, width=400, height=200)
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import ImageBlock
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="image-sandbox-test",
-        metadata=DocumentMetadata(title="Image Sandbox"),
-        blocks=[
-            ImageBlock(
-                path=str(external_image_path),
-                caption="Should be skipped",
-            )
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.inline_shapes) == 0
-    assert "Should be skipped" not in [
-        paragraph.text for paragraph in loaded_doc.paragraphs
-    ]
-
-
-def test_word_document_builder_writes_toc_and_document_header_footer(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-    from docx.enum.section import WD_ORIENT
-
-    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-toc-header")
-    output_path = workspace_dir / "toc-header.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import (
-        HeadingBlock,
-        ParagraphBlock,
-    )
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="toc-header-test",
-        metadata=DocumentMetadata(
-            title="目录测试",
-            header_footer=HeaderFooterConfig(
-                header_text="季度经营复盘",
-                footer_text="内部使用",
-                different_first_page=True,
-                first_page_header_text="封面页眉",
-                first_page_footer_text="封面页脚",
-                first_page_show_page_number=True,
-                different_odd_even=True,
-                even_page_header_text="偶数页页眉",
-                even_page_footer_text="偶数页页脚",
-                even_page_show_page_number=False,
-                show_page_number=True,
-                page_number_align="center",
-            ),
-        ),
-        blocks=[
-            TocBlock(title="目录", levels=2, start_on_new_page=True),
-            HeadingBlock(text="经营总览", level=2),
-            ParagraphBlock(text="正文"),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert _document_updates_fields_on_open(loaded_doc) is True
-    assert _document_uses_odd_even_headers(loaded_doc) is True
-    assert loaded_doc.sections[0].different_first_page_header_footer is True
-    assert "季度经营复盘" in _story_texts(loaded_doc.sections[0].header)
-    assert "内部使用" in _story_texts(loaded_doc.sections[0].footer)
-    assert "封面页眉" in _story_texts(loaded_doc.sections[0].first_page_header)
-    assert "封面页脚" in _story_texts(loaded_doc.sections[0].first_page_footer)
-    assert (
-        _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is True
-    )
-    assert "偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
-    assert "偶数页页脚" in _story_texts(loaded_doc.sections[0].even_page_footer)
-    assert (
-        _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
-    )
-    assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is True
-    assert all(
-        _paragraph_field_nodes_use_runs(paragraph)
-        for paragraph in loaded_doc.sections[0].footer.paragraphs
-    )
-    assert loaded_doc.sections[0].orientation == WD_ORIENT.PORTRAIT
-    assert any(
-        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
-    )
-    toc_index = next(
-        index
-        for index, paragraph in enumerate(loaded_doc.paragraphs)
-        if paragraph.text == "目录"
-    )
-    assert any(
-        'TOC \\o "1-2"' in field_code
-        for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
-    )
-    assert _paragraph_field_nodes_use_runs(loaded_doc.paragraphs[toc_index + 1]) is True
-
-
-def test_word_document_builder_uses_default_header_footer_baseline(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-default-header-footer"
-    )
-    output_path = workspace_dir / "default-header-footer.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="default-header-footer-test",
-        metadata=DocumentMetadata(title="默认页眉页脚测试"),
-        blocks=[ParagraphBlock(text="正文")],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert _document_updates_fields_on_open(loaded_doc) is True
-    assert _document_uses_odd_even_headers(loaded_doc) is False
-    assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is False
-    assert (
-        _story_has_field_code(loaded_doc.sections[0].first_page_footer, "PAGE") is False
-    )
-    assert (
-        _story_has_field_code(loaded_doc.sections[0].even_page_footer, "PAGE") is False
-    )
-
-
-def test_word_document_builder_assigns_builtin_heading_styles(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-heading-style")
-    output_path = workspace_dir / "heading-style.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import HeadingBlock
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="heading-style-test",
-        metadata=DocumentMetadata(title="默认标题"),
-        blocks=[
-            HeadingBlock(text="一级标题", level=1),
-            HeadingBlock(text="三级标题", level=3),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    title_paragraph = _find_paragraph(loaded_doc, "默认标题")
-    heading_one = _find_paragraph(loaded_doc, "一级标题")
-    heading_three = _find_paragraph(loaded_doc, "三级标题")
-
-    assert heading_one.style.style_id == "Heading1"
-    assert heading_three.style.style_id == "Heading3"
-    assert _paragraph_run_rgb(title_paragraph) == "000000"
-    assert heading_one.runs[0].bold is True
-    assert _paragraph_run_rgb(heading_one) == "000000"
-
-
-def test_word_document_builder_applies_heading_bottom_border(workspace_root: Path):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root,
-        "pytest-agent-tools-heading-bottom-border",
-    )
-    output_path = workspace_dir / "heading-bottom-border.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="heading-bottom-border-test",
-        metadata=DocumentMetadata(),
-        blocks=[
-            HeadingBlock(
-                text="I. Overview",
-                level=1,
-                bottom_border=True,
-                bottom_border_color="CCCCCC",
-            ),
-            ParagraphBlock(text="Body paragraph."),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    heading = _find_paragraph(loaded_doc, "I. Overview")
-    body = _find_paragraph(loaded_doc, "Body paragraph.")
-
-    assert _paragraph_bottom_border_color(heading) == "CCCCCC"
-    assert _paragraph_bottom_border_color(body) is None
-
-
-def test_word_document_builder_supports_level_heading_colors_and_border_size(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root,
-        "pytest-agent-tools-heading-theme-variants",
-    )
-    output_path = workspace_dir / "heading-theme-variants.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="heading-theme-variants-test",
-        metadata=DocumentMetadata(
-            document_style={
-                "heading_color": "000000",
-                "heading_level_1_color": "0F4C81",
-                "heading_level_2_color": "4B5563",
-                "heading_bottom_border_color": "CBD5E1",
-                "heading_bottom_border_size_pt": 1.5,
-            }
-        ),
-        blocks=[
-            HeadingBlock(text="一、经营总览", level=1, bottom_border=True),
-            HeadingBlock(text="1.1 各区营收完成情况", level=2, bottom_border=True),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    heading_one = _find_paragraph(loaded_doc, "一、经营总览")
-    heading_two = _find_paragraph(loaded_doc, "1.1 各区营收完成情况")
-
-    assert _paragraph_run_rgb(heading_one) == "0F4C81"
-    assert _paragraph_run_rgb(heading_two) == "4B5563"
-    assert _paragraph_bottom_border_color(heading_one) == "CBD5E1"
-    assert _paragraph_bottom_border_size(heading_one) == "12"
-
-
-def test_word_document_builder_supports_header_footer_split_layout_and_dividers(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-header-footer-split-layout"
-    )
-    output_path = workspace_dir / "header-footer-split-layout.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="header-footer-split-layout-test",
-        metadata=DocumentMetadata(
-            title="Q3 经营复盘报告",
-            header_footer=HeaderFooterConfig(
-                header_left="Q3 经营复盘报告 | 战略与增长委员会",
-                header_right="机密 · 2024 年 10 月",
-                header_border_bottom=True,
-                header_border_color="D0D7DE",
-                footer_left="集团战略部 · 内部机密文件",
-                footer_right="第 {PAGE} 页",
-                footer_border_top=True,
-                footer_border_color="D0D7DE",
-            ),
-        ),
-        blocks=[ParagraphBlock(text="正文")],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    header_text = loaded_doc.sections[0].header.paragraphs[0].text
-    footer_text = loaded_doc.sections[0].footer.paragraphs[0].text
-
-    assert "Q3 经营复盘报告 | 战略与增长委员会" in header_text
-    assert "机密 · 2024 年 10 月" in header_text
-    assert "集团战略部 · 内部机密文件" in footer_text
-    assert "第 " in footer_text
-    assert _paragraph_bottom_border_color(loaded_doc.sections[0].header.paragraphs[0]) == (
-        "D0D7DE"
-    )
-    assert _paragraph_top_border_color(loaded_doc.sections[0].footer.paragraphs[0]) == (
-        "D0D7DE"
-    )
-    assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is True
-
-
-def test_word_document_builder_applies_table_body_cell_overrides(workspace_root: Path):
-    docx = pytest.importorskip("docx")
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-table-body-cell-overrides"
-    )
-    output_path = workspace_dir / "table-body-cell-overrides.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import TableCell
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="table-body-cell-overrides-test",
-        metadata=DocumentMetadata(
-            document_style={
-                "table_defaults": {
-                    "body_fill": "F8FAFC",
-                }
-            }
-        ),
-        blocks=[
-            TableBlock(
-                headers=["区域", "预算完成率"],
-                rows=[
-                    [
-                        "华东",
-                        TableCell(
-                            text="112%",
-                            fill="DCFCE7",
-                            text_color="166534",
-                            bold=True,
-                            align="right",
-                        ),
-                    ]
-                ],
-            )
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    table = loaded_doc.tables[0]
-
-    assert _cell_fill(table.rows[1].cells[0]) == "F8FAFC"
-    assert _cell_fill(table.rows[1].cells[1]) == "DCFCE7"
-    assert _run_rgb(table.rows[1].cells[1]) == "166534"
-    assert _run_bold(table.rows[1].cells[1]) is True
-    assert table.rows[1].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
-
-
-def test_word_document_builder_renders_accent_box_and_metric_cards(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-accent-box-metric-cards"
-    )
-    output_path = workspace_dir / "accent-box-metric-cards.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import (
-        AccentBoxBlock,
-        MetricCard,
-        MetricCardsBlock,
-    )
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="accent-box-metric-cards-test",
-        metadata=DocumentMetadata(),
-        blocks=[
-            AccentBoxBlock(
-                title="核心摘要",
-                text="Q3 整体经营表现稳健，增长质量继续改善。",
-                accent_color="1F4E79",
-                fill_color="F8FAFC",
-            ),
-            MetricCardsBlock(
-                accent_color="1F4E79",
-                fill_color="F8FAFC",
-                metrics=[
-                    MetricCard(
-                        label="营业收入",
-                        value="¥4.82 亿",
-                        delta="↑ 18.4% YoY",
-                        delta_color="15803D",
-                    ),
-                    MetricCard(
-                        label="毛利率",
-                        value="32.1%",
-                        delta="↓ 0.3pp vs Q2",
-                        delta_color="DC2626",
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    accent_table = loaded_doc.tables[0]
-    metric_table = loaded_doc.tables[1]
-
-    assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
-    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
-    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
-    assert _cell_fill(metric_table.rows[0].cells[0]) == "F8FAFC"
-    assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
-    assert metric_table.rows[0].cells[0].paragraphs[1].text == "¥4.82 亿"
-    assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
-
-
-def test_word_document_builder_section_break_creates_new_section_with_override(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-    from docx.enum.section import WD_ORIENT
-
-    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-section-break")
-    output_path = workspace_dir / "section-break.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.blocks import (
-        ParagraphBlock,
-    )
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="section-break-test",
-        metadata=DocumentMetadata(
-            title="分节测试",
-            header_footer=HeaderFooterConfig(header_text="默认页眉"),
-        ),
-        blocks=[
-            ParagraphBlock(text="第一节"),
-            SectionBreakBlock(
-                start_type="new_page",
-                inherit_header_footer=False,
-                page_orientation="landscape",
-                margins={
-                    "top_cm": 1.5,
-                    "bottom_cm": 1.8,
-                    "left_cm": 1.2,
-                    "right_cm": 1.4,
-                },
-                restart_page_numbering=True,
-                page_number_start=3,
-                header_footer=HeaderFooterConfig(
-                    header_text="第二节页眉",
-                    footer_text="第二节页脚",
-                    show_page_number=True,
-                    different_odd_even=True,
-                    even_page_header_text="第二节偶数页页眉",
-                ),
-            ),
-            ParagraphBlock(text="第二节"),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.sections) == 2
-    assert "默认页眉" in _story_texts(loaded_doc.sections[0].header)
-    assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
-    assert "第二节页脚" in _story_texts(loaded_doc.sections[1].footer)
-    assert "第二节偶数页页眉" in _story_texts(loaded_doc.sections[1].even_page_header)
-    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
-    assert _section_page_number_start(loaded_doc.sections[1]) == 3
-    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
-    assert loaded_doc.sections[1].top_margin.cm == pytest.approx(1.5, abs=0.01)
-    assert loaded_doc.sections[1].bottom_margin.cm == pytest.approx(1.8, abs=0.01)
-    assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.2, abs=0.01)
-    assert loaded_doc.sections[1].right_margin.cm == pytest.approx(1.4, abs=0.01)
-
-
-def test_word_document_builder_section_break_inherits_header_footer_without_override(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-section-inherit"
-    )
-    output_path = workspace_dir / "section-inherit.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="section-inherit-test",
-        metadata=DocumentMetadata(
-            title="分节继承测试",
-            header_footer=HeaderFooterConfig(
-                header_text="默认页眉",
-                footer_text="默认页脚",
-                show_page_number=True,
-            ),
-        ),
-        blocks=[
-            ParagraphBlock(text="第一节"),
-            SectionBreakBlock(start_type="new_page"),
-            ParagraphBlock(text="第二节"),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.sections) == 2
-    assert loaded_doc.sections[1].header.is_linked_to_previous is True
-    assert loaded_doc.sections[1].footer.is_linked_to_previous is True
-    assert _section_page_number_start(loaded_doc.sections[1]) is None
-
-
-def test_word_document_builder_section_break_does_not_reuse_cover_first_page_rules(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-section-cover-page-numbering"
-    )
-    output_path = workspace_dir / "section-cover-page-numbering.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="section-cover-page-numbering-test",
-        metadata=DocumentMetadata(
-            title="封面页码测试",
-            header_footer=HeaderFooterConfig(
-                header_text="董事会季度经营汇报",
-                different_first_page=True,
-                first_page_header_text="董事会季度经营汇报封面",
-                first_page_show_page_number=False,
-                different_odd_even=True,
-                even_page_header_text="董事会季度经营汇报（偶数页）",
-                show_page_number=True,
-            ),
-        ),
-        blocks=[
-            ParagraphBlock(text="封面内容"),
-            SectionBreakBlock(
-                start_type="new_page",
-                page_orientation="landscape",
-                restart_page_numbering=True,
-            ),
-            ParagraphBlock(text="横向节内容"),
-            SectionBreakBlock(
-                start_type="new_page",
-                page_orientation="portrait",
-            ),
-            ParagraphBlock(text="纵向节内容"),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.sections) == 3
-    assert _document_uses_odd_even_headers(loaded_doc) is True
-    assert loaded_doc.sections[0].different_first_page_header_footer is True
-    assert loaded_doc.sections[1].different_first_page_header_footer is False
-    assert loaded_doc.sections[2].different_first_page_header_footer is False
-    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
-    assert _story_has_field_code(loaded_doc.sections[2].footer, "PAGE") is True
-    assert _section_page_number_start(loaded_doc.sections[1]) == 1
-    assert _section_page_number_start(loaded_doc.sections[2]) is None
-
-
-def test_word_document_builder_section_break_can_disable_page_numbers_while_inheriting_text(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-section-page-number-override"
-    )
-    output_path = workspace_dir / "section-page-number-override.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="section-page-number-override-test",
-        metadata=DocumentMetadata(
-            title="页码覆盖测试",
-            header_footer=HeaderFooterConfig(
-                header_text="默认页眉",
-                footer_text="默认页脚",
-                show_page_number=True,
-                page_number_align="center",
-            ),
-        ),
-        blocks=[
-            ParagraphBlock(text="第一节"),
-            SectionBreakBlock(
-                start_type="new_page",
-                header_footer=HeaderFooterConfig(show_page_number=False),
-            ),
-            ParagraphBlock(text="第二节"),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.sections) == 2
-    assert loaded_doc.sections[1].footer.is_linked_to_previous is False
-    assert "默认页眉" in _story_texts(loaded_doc.sections[1].header)
-    assert "默认页脚" in _story_texts(loaded_doc.sections[1].footer)
-    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is False
-
-
-def test_word_document_builder_section_break_restarts_page_numbering_from_one_by_default(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-section-page-number-default"
-    )
-    output_path = workspace_dir / "section-page-number-default.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="section-page-number-default-test",
-        metadata=DocumentMetadata(title="页码默认起始测试"),
-        blocks=[
-            ParagraphBlock(text="第一节"),
-            SectionBreakBlock(
-                start_type="new_page",
-                restart_page_numbering=True,
-            ),
-            ParagraphBlock(text="第二节"),
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.sections) == 2
-    assert _section_page_number_start(loaded_doc.sections[1]) == 1
-
-
-def test_word_document_builder_enables_odd_even_headers_for_nested_section_breaks(
-    workspace_root: Path,
-):
-    docx = pytest.importorskip("docx")
-
-    workspace_dir = _make_workspace(
-        workspace_root, "pytest-agent-tools-nested-section-headers"
-    )
-    output_path = workspace_dir / "nested-section-headers.docx"
-
-    from astrbot_plugin_office_assistant.document_core.models.document import (
-        DocumentMetadata,
-        DocumentModel,
-    )
-
-    document = DocumentModel(
-        document_id="nested-section-header-test",
-        metadata=DocumentMetadata(title="嵌套分节测试"),
-        blocks=[
-            GroupBlock(
-                blocks=[
-                    ColumnsBlock(
-                        columns=[
-                            ColumnBlock(
-                                blocks=[
-                                    SectionBreakBlock(
-                                        start_type="new_page",
-                                        inherit_header_footer=False,
-                                        header_footer=HeaderFooterConfig(
-                                            different_odd_even=True,
-                                            even_page_header_text="嵌套偶数页页眉",
-                                        ),
-                                    ),
-                                    ParagraphBlock(text="第二节"),
-                                ]
-                            )
-                        ]
-                    )
-                ]
-            )
-        ],
-    )
-
-    WordDocumentBuilder().build(document, output_path)
-
-    loaded_doc = docx.Document(output_path)
-    assert len(loaded_doc.sections) == 2
-    assert _document_uses_odd_even_headers(loaded_doc) is True
-    assert "嵌套偶数页页眉" in _story_texts(loaded_doc.sections[1].even_page_header)
-
-
 @pytest.mark.asyncio
 async def test_document_toolset_exports_toc_and_section_break(workspace_root: Path):
     docx = pytest.importorskip("docx")
@@ -4538,27 +5132,27 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
     )
 
     loaded_doc = docx.Document(exported["file_path"])
-    assert len(loaded_doc.sections) == 2
-    assert _document_uses_odd_even_headers(loaded_doc) is True
-    assert "默认偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
-    assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
-    assert "第二节首页页眉" in _story_texts(loaded_doc.sections[1].first_page_header)
-    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
-    assert _section_page_number_start(loaded_doc.sections[1]) == 5
-    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
-    assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.8, abs=0.01)
-    assert any(
-        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
-    )
     toc_index = next(
         index
         for index, paragraph in enumerate(loaded_doc.paragraphs)
         if paragraph.text == "目录"
     )
-    assert any(
-        'TOC \\o "1-2"' in field_code
-        for field_code in _paragraph_field_codes(loaded_doc.paragraphs[toc_index + 1])
-    )
+    assert len(loaded_doc.sections) == 2
+    assert _document_updates_fields_on_open(loaded_doc) is True
+    assert _document_uses_odd_even_headers(loaded_doc) is True
+    assert "默认偶数页页眉" in _story_texts(loaded_doc.sections[0].even_page_header)
+    assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert "第二节首页页眉" in _story_texts(loaded_doc.sections[1].first_page_header)
+    assert _story_has_field_code(loaded_doc.sections[1].footer, "PAGE") is True
+    assert _paragraph_field_nodes_use_runs(loaded_doc.paragraphs[toc_index + 1]) is True
+    assert _section_page_number_start(loaded_doc.sections[1]) == 5
+    assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
+    assert loaded_doc.sections[1].left_margin.cm == pytest.approx(1.8, abs=0.01)
+    with zipfile.ZipFile(exported["file_path"]) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert "w:fldSimple" in document_xml
+    assert '\\o &quot;1-2&quot;' in document_xml
+    assert 'w:type w:val="nextPage"' in document_xml
 
 
 @pytest.mark.asyncio
@@ -4665,6 +5259,11 @@ async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
                     "page_orientation": "landscape",
                     "start_on_new_page": True,
                     "restart_page_numbering": True,
+                    "header_footer": {
+                        "header_text": "横向页眉",
+                        "footer_text": "横向页脚",
+                        "show_page_number": True,
+                    },
                 },
                 {
                     "type": "table",
@@ -4686,6 +5285,11 @@ async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
                     "level": 1,
                     "page_orientation": "portrait",
                     "start_on_new_page": True,
+                    "header_footer": {
+                        "header_text": "竖向页眉",
+                        "footer_text": "竖向页脚",
+                        "show_page_number": True,
+                    },
                 },
             ],
         )
@@ -4704,6 +5308,14 @@ async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
     assert len(loaded_doc.sections) == 3
     assert loaded_doc.sections[1].orientation == WD_ORIENT.LANDSCAPE
     assert loaded_doc.sections[2].orientation == WD_ORIENT.PORTRAIT
+    assert "横向页眉" in _story_texts(loaded_doc.sections[1].header)
+    assert any(
+        text.startswith("横向页脚") for text in _story_texts(loaded_doc.sections[1].footer)
+    )
+    assert "竖向页眉" in _story_texts(loaded_doc.sections[2].header)
+    assert any(
+        text.startswith("竖向页脚") for text in _story_texts(loaded_doc.sections[2].footer)
+    )
     toc_index = next(
         index
         for index, paragraph in enumerate(loaded_doc.paragraphs)
