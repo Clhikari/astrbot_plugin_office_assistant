@@ -56,10 +56,14 @@ _STYLE_SCHEMA = {
 
 _LAYOUT_SCHEMA = {
     "type": "object",
-    "description": "Optional block layout tokens such as spacing_before and spacing_after.",
+    "description": "Optional block layout tokens such as spacing_before, spacing_after, and container padding.",
     "properties": {
         "spacing_before": {"type": "number"},
         "spacing_after": {"type": "number"},
+        "padding_top_pt": {"type": "number"},
+        "padding_right_pt": {"type": "number"},
+        "padding_bottom_pt": {"type": "number"},
+        "padding_left_pt": {"type": "number"},
     },
 }
 
@@ -90,7 +94,7 @@ class CreateDocumentTool(DocumentToolBase):
     name: str = "create_document"
     description: str = (
         "Create a draft Word document session and return its document_id. "
-        "Use this before adding headings, paragraphs, accent boxes, metric cards, lists, tables, or summary cards. "
+        "Use this before adding hero banners, headings, paragraphs, accent boxes, metric cards, lists, tables, or summary cards. "
         "For whole-document styling, put document-wide defaults in document_style and keep "
         "table block fields for local overrides. document_style.table_defaults does not "
         "accept table-only flags such as header_fill_enabled or header_bold."
@@ -170,6 +174,22 @@ class CreateDocumentTool(DocumentToolBase):
                         "body_line_spacing": {
                             "type": "number",
                             "description": "Optional body paragraph line spacing multiplier.",
+                        },
+                        "font_name": {
+                            "type": "string",
+                            "description": "Optional default body font. Default is Microsoft YaHei.",
+                        },
+                        "heading_font_name": {
+                            "type": "string",
+                            "description": "Optional default heading font. Default follows font_name.",
+                        },
+                        "table_font_name": {
+                            "type": "string",
+                            "description": "Optional default table font. Default follows font_name.",
+                        },
+                        "code_font_name": {
+                            "type": "string",
+                            "description": "Optional default code run font. Default is Consolas.",
                         },
                         "paragraph_space_after": {
                             "type": "number",
@@ -316,7 +336,7 @@ class AddBlocksTool(DocumentToolBase):
     name: str = "add_blocks"
     description: str = (
         "Append one or more blocks in order. Use this for mixed content such as "
-        "heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
+        "hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
         "not as a separate heading block. For table styling, use table-specific fields like "
@@ -334,12 +354,13 @@ class AddBlocksTool(DocumentToolBase):
                 },
                 "blocks": {
                     "type": "array",
-                    "description": "Ordered block list. Supported block types: heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
+                    "description": "Ordered block list. Supported block types: hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "type": {"type": "string"},
                             "text": {"type": "string"},
+                            "subtitle": {"type": "string"},
                             "runs": {
                                 "type": "array",
                                 "description": "Optional inline rich-text runs for paragraph or list item content.",
@@ -436,6 +457,10 @@ class AddBlocksTool(DocumentToolBase):
                                                         "enum": ["left", "center", "right"],
                                                         "description": "Optional alignment override for this body cell.",
                                                     },
+                                                    "font_scale": {
+                                                        "type": "number",
+                                                        "description": "Optional body cell font scale override.",
+                                                    },
                                                 },
                                             },
                                         ]
@@ -512,6 +537,26 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "string",
                                 "description": "Optional paragraph card title, or table title alias for table blocks.",
                             },
+                            "theme_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex background color for hero_banner blocks.",
+                            },
+                            "text_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex title color for hero_banner blocks.",
+                            },
+                            "subtitle_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex subtitle color for hero_banner blocks.",
+                            },
+                            "min_height_pt": {
+                                "type": "number",
+                                "description": "Optional minimum banner height in points.",
+                            },
+                            "full_width": {
+                                "type": "boolean",
+                                "description": "Whether hero_banner should stretch across the page width.",
+                            },
                             "accent_color": {
                                 "type": "string",
                                 "description": "Optional 6-digit hex accent color for accent_box or metric_cards blocks.",
@@ -523,6 +568,38 @@ class AddBlocksTool(DocumentToolBase):
                             "title_color": {
                                 "type": "string",
                                 "description": "Optional 6-digit hex title color for accent_box blocks.",
+                            },
+                            "border_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex border color for accent_box or metric_cards blocks.",
+                            },
+                            "border_width_pt": {
+                                "type": "number",
+                                "description": "Optional border width in points for accent_box or metric_cards blocks.",
+                            },
+                            "accent_border_width_pt": {
+                                "type": "number",
+                                "description": "Optional left accent border width in points for accent_box blocks.",
+                            },
+                            "divider_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex divider color for metric_cards blocks.",
+                            },
+                            "divider_width_pt": {
+                                "type": "number",
+                                "description": "Optional divider width in points for metric_cards blocks.",
+                            },
+                            "padding_pt": {
+                                "type": "number",
+                                "description": "Optional inner padding in points for accent_box or metric_cards blocks.",
+                            },
+                            "title_font_scale": {
+                                "type": "number",
+                                "description": "Optional title font scale for accent_box blocks.",
+                            },
+                            "body_font_scale": {
+                                "type": "number",
+                                "description": "Optional body font scale for accent_box or table blocks.",
                             },
                             "metrics": {
                                 "type": "array",
@@ -537,6 +614,10 @@ class AddBlocksTool(DocumentToolBase):
                                         "value_color": {"type": "string"},
                                         "delta_color": {"type": "string"},
                                         "fill_color": {"type": "string"},
+                                        "label_color": {"type": "string"},
+                                        "note_color": {"type": "string"},
+                                        "value_font_scale": {"type": "number"},
+                                        "delta_font_scale": {"type": "number"},
                                     },
                                     "required": ["label", "value"],
                                 },
@@ -544,6 +625,22 @@ class AddBlocksTool(DocumentToolBase):
                             "label_color": {
                                 "type": "string",
                                 "description": "Optional 6-digit hex label color for metric_cards blocks.",
+                            },
+                            "label_font_scale": {
+                                "type": "number",
+                                "description": "Optional default label font scale for metric_cards blocks.",
+                            },
+                            "value_font_scale": {
+                                "type": "number",
+                                "description": "Optional default value font scale for metric_cards blocks.",
+                            },
+                            "delta_font_scale": {
+                                "type": "number",
+                                "description": "Optional default delta font scale for metric_cards blocks.",
+                            },
+                            "note_font_scale": {
+                                "type": "number",
+                                "description": "Optional default note font scale for metric_cards blocks.",
                             },
                             "column_widths": {
                                 "type": "array",
@@ -554,6 +651,18 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "array",
                                 "description": "Optional zero-based column indexes that should be right-aligned for numeric values.",
                                 "items": {"type": "integer"},
+                            },
+                            "cell_padding_horizontal_pt": {
+                                "type": "number",
+                                "description": "Optional horizontal cell padding for table blocks in points.",
+                            },
+                            "cell_padding_vertical_pt": {
+                                "type": "number",
+                                "description": "Optional vertical cell padding for table blocks in points.",
+                            },
+                            "header_font_scale": {
+                                "type": "number",
+                                "description": "Optional header font scale for table blocks.",
                             },
                             "path": {"type": "string"},
                             "width_px": {"type": "number"},

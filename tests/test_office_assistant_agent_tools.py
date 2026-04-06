@@ -49,9 +49,10 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     ColumnBlock,
     ColumnsBlock,
     GroupBlock,
-    HeaderFooterConfig,
-    HeadingBlock,
-    ParagraphBlock,
+	    HeaderFooterConfig,
+	    HeadingBlock,
+    HeroBannerBlock,
+	    ParagraphBlock,
     ParagraphRun,
     SectionBreakBlock,
     SectionMarginsConfig,
@@ -347,6 +348,48 @@ def _cell_border_color(cell, edge_name: str) -> str | None:
     if edge is None:
         return None
     return edge.get(qn("w:color"))
+
+
+def _cell_border_size(cell, edge_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.tcPr
+    if tc_pr is None:
+        return None
+    tc_borders = tc_pr.find(qn("w:tcBorders"))
+    if tc_borders is None:
+        return None
+    edge = tc_borders.find(qn(f"w:{edge_name}"))
+    if edge is None:
+        return None
+    return edge.get(qn("w:sz"))
+
+
+def _cell_margin(cell, edge_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.tcPr
+    if tc_pr is None:
+        return None
+    tc_margins = tc_pr.find(qn("w:tcMar"))
+    if tc_margins is None:
+        return None
+    edge = tc_margins.find(qn(f"w:{edge_name}"))
+    if edge is None:
+        return None
+    return edge.get(qn("w:w"))
+
+
+def _run_font_attr(run, attr_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    r_pr = run._r.rPr
+    if r_pr is None:
+        return None
+    r_fonts = r_pr.find(qn("w:rFonts"))
+    if r_fonts is None:
+        return None
+    return r_fonts.get(qn(f"w:{attr_name}"))
 
 
 def _raw_row_cell_vertical_merge(row, cell_index: int) -> str | None:
@@ -889,6 +932,10 @@ def test_create_document_tool_schema_exposes_document_style():
     ]
     assert document_style["body_font_size"]["type"] == "number"
     assert document_style["body_line_spacing"]["type"] == "number"
+    assert document_style["font_name"]["type"] == "string"
+    assert document_style["heading_font_name"]["type"] == "string"
+    assert document_style["table_font_name"]["type"] == "string"
+    assert document_style["code_font_name"]["type"] == "string"
     assert document_style["paragraph_space_after"]["type"] == "number"
     assert document_style["list_space_after"]["type"] == "number"
     assert document_style["summary_card_defaults"]["type"] == "object"
@@ -943,6 +990,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert run_properties["code"]["type"] == "boolean"
     assert run_properties["color"]["type"] == "string"
     assert block_properties["text"]["type"] == "string"
+    assert block_properties["subtitle"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"
     assert block_properties["runs"]["items"]["type"] == "object"
     assert block_properties["bottom_border"]["type"] == "boolean"
@@ -1013,11 +1061,42 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert row_cell_properties["text_color"]["type"] == "string"
     assert row_cell_properties["bold"]["type"] == "boolean"
     assert row_cell_properties["align"]["enum"] == ["left", "center", "right"]
+    assert row_cell_properties["font_scale"]["type"] == "number"
+    assert block_properties["theme_color"]["type"] == "string"
+    assert block_properties["text_color"]["type"] == "string"
+    assert block_properties["subtitle_color"]["type"] == "string"
+    assert block_properties["min_height_pt"]["type"] == "number"
+    assert block_properties["full_width"]["type"] == "boolean"
     assert block_properties["accent_color"]["type"] == "string"
     assert block_properties["fill_color"]["type"] == "string"
     assert block_properties["title_color"]["type"] == "string"
+    assert block_properties["border_color"]["type"] == "string"
+    assert block_properties["border_width_pt"]["type"] == "number"
+    assert block_properties["accent_border_width_pt"]["type"] == "number"
+    assert block_properties["divider_color"]["type"] == "string"
+    assert block_properties["divider_width_pt"]["type"] == "number"
+    assert block_properties["padding_pt"]["type"] == "number"
+    assert block_properties["title_font_scale"]["type"] == "number"
+    assert block_properties["body_font_scale"]["type"] == "number"
     assert block_properties["metrics"]["items"]["required"] == ["label", "value"]
+    assert block_properties["metrics"]["items"]["properties"]["label_color"]["type"] == "string"
+    assert block_properties["metrics"]["items"]["properties"]["note_color"]["type"] == "string"
+    assert (
+        block_properties["metrics"]["items"]["properties"]["value_font_scale"]["type"]
+        == "number"
+    )
+    assert (
+        block_properties["metrics"]["items"]["properties"]["delta_font_scale"]["type"]
+        == "number"
+    )
     assert block_properties["label_color"]["type"] == "string"
+    assert block_properties["label_font_scale"]["type"] == "number"
+    assert block_properties["value_font_scale"]["type"] == "number"
+    assert block_properties["delta_font_scale"]["type"] == "number"
+    assert block_properties["note_font_scale"]["type"] == "number"
+    assert block_properties["cell_padding_horizontal_pt"]["type"] == "number"
+    assert block_properties["cell_padding_vertical_pt"]["type"] == "number"
+    assert block_properties["header_font_scale"]["type"] == "number"
     assert (
         block_properties["header_footer"]["properties"]["different_odd_even"]["type"]
         == "boolean"
@@ -1341,6 +1420,10 @@ def test_create_document_request_normalizes_document_style():
             "title_align": "left",
             "body_font_size": 12,
             "body_line_spacing": 1.25,
+            "font_name": "Microsoft YaHei",
+            "heading_font_name": "Source Han Sans SC",
+            "table_font_name": "SimSun",
+            "code_font_name": "Consolas",
             "paragraph_space_after": 14,
             "list_space_after": 11,
             "summary_card_defaults": {
@@ -1376,6 +1459,10 @@ def test_create_document_request_normalizes_document_style():
     assert request.document_style.title_align == "left"
     assert request.document_style.body_font_size == 12
     assert request.document_style.body_line_spacing == 1.25
+    assert request.document_style.font_name == "Microsoft YaHei"
+    assert request.document_style.heading_font_name == "Source Han Sans SC"
+    assert request.document_style.table_font_name == "SimSun"
+    assert request.document_style.code_font_name == "Consolas"
     assert request.document_style.paragraph_space_after == 14
     assert request.document_style.list_space_after == 11
     assert request.document_style.summary_card_defaults.title_align == "center"
@@ -1418,6 +1505,20 @@ def test_create_document_request_rejects_invalid_table_defaults_header_fill():
                     "header_fill": "123",
                 },
             },
+        )
+
+
+def test_add_blocks_request_rejects_invalid_hero_banner_colors():
+    with pytest.raises(ValidationError, match="6-digit hex color"):
+        AddBlocksRequest(
+            document_id="doc-1",
+            blocks=[
+                {
+                    "type": "hero_banner",
+                    "title": "Q3 经营复盘报告",
+                    "theme_color": "blue",
+                }
+            ],
         )
 
 
@@ -3720,6 +3821,58 @@ def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: P
     assert '\\o &quot;1-2&quot;' in document_xml
 
 
+def test_node_renderer_schema_rejects_invalid_hero_banner_colors(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-node-schema-hero-banner")
+    renderer_entry = (
+        Path(__file__).resolve().parents[1] / "word_renderer_js" / "dist" / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+
+    output_path = workspace_dir / "invalid-hero-banner.docx"
+    payload_path = workspace_dir / "invalid-hero-banner.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "invalid-hero-banner",
+                "metadata": {
+                    "title": "",
+                    "theme_name": "business_report",
+                    "table_template": "report_grid",
+                    "density": "comfortable",
+                    "document_style": {},
+                    "header_footer": {},
+                },
+                "blocks": [
+                    {
+                        "type": "hero_banner",
+                        "title": "Q3 经营复盘报告",
+                        "theme_color": "blue",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "SCHEMA_VALIDATION_FAILED"
+    assert "theme_color" in error_payload["message"]
+
+
 def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
     workspace_root: Path,
 ):
@@ -3803,6 +3956,166 @@ def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
     assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
     assert metric_table.rows[0].cells[0].paragraphs[1].text == "¥4.82 亿"
     assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
+
+
+def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
+    workspace_root: Path,
+):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-hero-banner-styles",
+        {
+            "document_id": "node-hero-banner-styles",
+            "metadata": {
+                "title": "",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "font_name": "Microsoft YaHei",
+                    "heading_font_name": "Source Han Sans SC",
+                    "table_font_name": "SimSun",
+                    "code_font_name": "Consolas",
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "hero_banner",
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会",
+                    "theme_color": "1F4E79",
+                    "text_color": "FFFFFF",
+                    "subtitle_color": "DCE6F1",
+                    "min_height_pt": 92,
+                },
+                {"type": "toc", "title": "目录", "levels": 1},
+                {"type": "heading", "text": "一、经营总览", "level": 1},
+                {
+                    "type": "paragraph",
+                    "runs": [
+                        {"text": "正文段落 "},
+                        {"text": "const revenue = true;", "code": True},
+                    ],
+                },
+                {
+                    "type": "accent_box",
+                    "title": "核心摘要",
+                    "text": "经营质量稳中有升。",
+                    "accent_color": "1F4E79",
+                    "fill_color": "F8FAFC",
+                    "border_color": "CBD5E1",
+                    "border_width_pt": 0.75,
+                    "accent_border_width_pt": 3.0,
+                    "padding_pt": 16,
+                    "title_font_scale": 1.2,
+                    "body_font_scale": 1.05,
+                },
+                {
+                    "type": "metric_cards",
+                    "accent_color": "1F4E79",
+                    "fill_color": "F8FAFC",
+                    "border_color": "D9E1E8",
+                    "divider_color": "CBD5E1",
+                    "border_width_pt": 0.75,
+                    "divider_width_pt": 0.75,
+                    "padding_pt": 14,
+                    "label_font_scale": 0.9,
+                    "value_font_scale": 1.8,
+                    "delta_font_scale": 0.9,
+                    "note_font_scale": 0.82,
+                    "metrics": [
+                        {
+                            "label": "营业收入",
+                            "value": "¥4.82 亿",
+                            "delta": "↑ 18.4% YoY",
+                            "note": "核心业务保持增长",
+                            "delta_color": "15803D",
+                            "note_color": "64748B",
+                        }
+                    ],
+                },
+                {
+                    "type": "table",
+                    "caption": "区域营收完成情况",
+                    "header_groups": [{"title": "经营数据", "span": 3}],
+                    "headers": ["区域", "完成率", "备注"],
+                    "header_fill": "1F4E79",
+                    "header_text_color": "FFFFFF",
+                    "header_font_scale": 1.1,
+                    "body_font_scale": 0.95,
+                    "cell_padding_horizontal_pt": 8,
+                    "cell_padding_vertical_pt": 6,
+                    "rows": [
+                        [
+                            {"text": "华东", "font_scale": 1.15},
+                            {
+                                "text": "112%",
+                                "fill": "DCFCE7",
+                                "text_color": "166534",
+                                "bold": True,
+                                "align": "right",
+                                "font_scale": 1.2,
+                            },
+                            "达成",
+                        ]
+                    ],
+                },
+            ],
+        },
+    )
+
+    hero_table = loaded_doc.tables[0]
+    accent_table = loaded_doc.tables[1]
+    metric_table = loaded_doc.tables[2]
+    data_table = loaded_doc.tables[3]
+    heading = _find_paragraph(loaded_doc, "一、经营总览")
+    body_paragraph = _find_paragraph(loaded_doc, "正文段落 const revenue = true;")
+
+    assert hero_table.rows[0].cells[0].text.startswith("Q3 经营复盘报告")
+    assert _cell_fill(hero_table.rows[0].cells[0]) == "1F4E79"
+    assert _run_font_attr(hero_table.rows[0].cells[0].paragraphs[0].runs[0], "ascii") == (
+        "Source Han Sans SC"
+    )
+    assert _run_font_attr(
+        hero_table.rows[0].cells[0].paragraphs[0].runs[0], "eastAsia"
+    ) == "Source Han Sans SC"
+    assert _run_font_attr(heading.runs[0], "ascii") == "Source Han Sans SC"
+    assert _run_font_attr(heading.runs[0], "eastAsia") == "Source Han Sans SC"
+    assert _run_font_attr(body_paragraph.runs[0], "ascii") == "Microsoft YaHei"
+    assert _run_font_attr(body_paragraph.runs[0], "eastAsia") == "Microsoft YaHei"
+    assert _run_font_attr(body_paragraph.runs[1], "ascii") == "Consolas"
+    assert _run_font_attr(body_paragraph.runs[1], "eastAsia") == "Consolas"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "top") == "CBD5E1"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "right") == "CBD5E1"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "bottom") == "CBD5E1"
+    assert _cell_border_size(accent_table.rows[0].cells[0], "left") == "24"
+    assert _cell_border_size(accent_table.rows[0].cells[0], "top") == "6"
+    assert _cell_margin(accent_table.rows[0].cells[0], "left") == "320"
+    assert metric_table.rows[0].cells[0].paragraphs[1].runs[0].font.size.pt > (
+        metric_table.rows[0].cells[0].paragraphs[0].runs[0].font.size.pt
+    )
+    assert metric_table.rows[0].cells[0].paragraphs[2].runs[0].font.size.pt < (
+        metric_table.rows[0].cells[0].paragraphs[1].runs[0].font.size.pt
+    )
+    assert _run_font_attr(data_table.rows[1].cells[0].paragraphs[0].runs[0], "ascii") == (
+        "SimSun"
+    )
+    assert _run_font_attr(data_table.rows[2].cells[0].paragraphs[0].runs[0], "eastAsia") == (
+        "SimSun"
+    )
+    assert _table_cell_margin(data_table, "left") == "160"
+    assert _table_cell_margin(data_table, "top") == "120"
+    assert _paragraph_run_size(data_table.rows[2].cells[0].paragraphs[0]) == pytest.approx(
+        11.5, abs=0.2
+    )
+    assert _paragraph_run_size(data_table.rows[3].cells[1].paragraphs[0]) == pytest.approx(
+        12.0, abs=0.2
+    )
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert document_xml.count('w:pStyle w:val="Heading1"') == 1
 
 
 def test_node_renderer_supports_section_inheritance_and_cover_normalization(
@@ -3937,6 +4250,72 @@ def test_node_renderer_supports_heading_styles_and_split_header_footer(
     assert _paragraph_bottom_border_color(header_paragraph) == "D0D7DE"
     assert _paragraph_top_border_color(footer_paragraph) == "D0D7DE"
     assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+
+
+def test_node_renderer_uses_accent_fallback_and_header_footer_fonts(
+    workspace_root: Path,
+):
+    accent_color = "C2410C"
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-accent-fallback-header-footer-fonts",
+        {
+            "document_id": "node-accent-fallback-header-footer-fonts",
+            "metadata": {
+                "title": "经营复盘",
+                "theme_name": "business_report",
+                "accent_color": accent_color,
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "font_name": "Microsoft YaHei",
+                },
+                "header_footer": {
+                    "header_left": "经营复盘 | 战略组",
+                    "header_right": "机密 · 2026 年 4 月",
+                    "footer_left": "集团战略部",
+                    "footer_right": "第 {PAGE} 页",
+                },
+            },
+            "blocks": [
+                {
+                    "type": "heading",
+                    "text": "一、经营总览",
+                    "level": 1,
+                },
+                {
+                    "type": "accent_box",
+                    "title": "核心摘要",
+                    "text": "经营质量继续改善，现金流保持稳定。",
+                },
+            ],
+        },
+    )
+
+    def _blend_hex(source: str, target: str, ratio: float) -> str:
+        source_channels = [int(source[index : index + 2], 16) for index in (0, 2, 4)]
+        target_channels = [int(target[index : index + 2], 16) for index in (0, 2, 4)]
+        blended = [
+            round(src * (1 - ratio) + dst * ratio)
+            for src, dst in zip(source_channels, target_channels, strict=False)
+        ]
+        return "".join(f"{value:02X}" for value in blended)
+
+    heading = _find_paragraph(loaded_doc, "一、经营总览")
+    accent_table = loaded_doc.tables[0]
+    header_paragraph = loaded_doc.sections[0].header.paragraphs[0]
+    footer_paragraph = loaded_doc.sections[0].footer.paragraphs[0]
+
+    assert _paragraph_run_rgb(heading) == accent_color
+    assert _cell_fill(accent_table.rows[0].cells[0]) == _blend_hex(
+        accent_color,
+        "FFFFFF",
+        0.92,
+    )
+    assert _run_font_attr(header_paragraph.runs[0], "ascii") == "Microsoft YaHei"
+    assert _run_font_attr(header_paragraph.runs[0], "eastAsia") == "Microsoft YaHei"
+    assert _run_font_attr(footer_paragraph.runs[0], "ascii") == "Microsoft YaHei"
+    assert _run_font_attr(footer_paragraph.runs[0], "eastAsia") == "Microsoft YaHei"
 
 
 def test_node_renderer_supports_default_header_footer_baseline(workspace_root: Path):
@@ -5919,6 +6298,107 @@ def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_style
     assert table.rows[0][1].align == "right"
 
 
+def test_add_blocks_request_accepts_hero_banner_and_report_style_fields():
+    request = AddBlocksRequest(
+        document_id="doc-1",
+        blocks=[
+            {
+                "type": "hero_banner",
+                "title": "Q3 经营复盘报告",
+                "subtitle": "战略与增长委员会",
+                "theme_color": "1F4E79",
+                "text_color": "FFFFFF",
+                "subtitle_color": "DCE6F1",
+                "min_height_pt": 96,
+                "full_width": True,
+                "layout": {
+                    "spacing_after": 12,
+                    "padding_top_pt": 18,
+                    "padding_left_pt": 20,
+                },
+            },
+            {
+                "type": "accent_box",
+                "title": "核心摘要",
+                "text": "经营质量继续改善。",
+                "accent_color": "1F4E79",
+                "border_color": "CBD5E1",
+                "border_width_pt": 0.75,
+                "accent_border_width_pt": 3.0,
+                "padding_pt": 16,
+                "title_font_scale": 1.2,
+                "body_font_scale": 1.05,
+            },
+            {
+                "type": "metric_cards",
+                "accent_color": "1F4E79",
+                "border_color": "D9E1E8",
+                "divider_color": "CBD5E1",
+                "border_width_pt": 0.75,
+                "divider_width_pt": 0.75,
+                "padding_pt": 14,
+                "label_font_scale": 0.9,
+                "value_font_scale": 1.8,
+                "delta_font_scale": 0.9,
+                "note_font_scale": 0.82,
+                "metrics": [
+                    {
+                        "label": "营业收入",
+                        "value": "¥4.82 亿",
+                        "label_color": "475569",
+                        "value_font_scale": 1.95,
+                        "delta": "↑ 18.4% YoY",
+                        "delta_font_scale": 1.1,
+                        "note": "核心业务保持增长",
+                        "note_color": "64748B",
+                    }
+                ],
+            },
+            {
+                "type": "table",
+                "headers": ["区域", "完成率"],
+                "header_font_scale": 1.1,
+                "body_font_scale": 0.95,
+                "cell_padding_horizontal_pt": 8,
+                "cell_padding_vertical_pt": 6,
+                "rows": [
+                    [
+                        "华东",
+                        {
+                            "text": "112%",
+                            "font_scale": 1.2,
+                            "fill": "DCFCE7",
+                            "text_color": "166534",
+                        },
+                    ]
+                ],
+            },
+        ],
+    )
+
+    hero_banner = request.blocks[0]
+    accent_box = request.blocks[1]
+    metric_cards = request.blocks[2]
+    table = request.blocks[3]
+
+    assert hero_banner.title == "Q3 经营复盘报告"
+    assert hero_banner.theme_color == "1F4E79"
+    assert hero_banner.layout.padding_top_pt == pytest.approx(18)
+    assert accent_box.border_color == "CBD5E1"
+    assert accent_box.accent_border_width_pt == pytest.approx(3.0)
+    assert accent_box.title_font_scale == pytest.approx(1.2)
+    assert metric_cards.divider_color == "CBD5E1"
+    assert metric_cards.note_font_scale == pytest.approx(0.82)
+    assert metric_cards.metrics[0].label_color == "475569"
+    assert metric_cards.metrics[0].value_font_scale == pytest.approx(1.95)
+    assert metric_cards.metrics[0].delta_font_scale == pytest.approx(1.1)
+    assert metric_cards.metrics[0].note_color == "64748B"
+    assert table.header_font_scale == pytest.approx(1.1)
+    assert table.body_font_scale == pytest.approx(0.95)
+    assert table.cell_padding_horizontal_pt == pytest.approx(8)
+    assert table.rows[0][1].font_scale == pytest.approx(1.2)
+
+
 def test_add_table_request_rejects_vertical_merge_rows_that_exceed_header_columns():
     with pytest.raises(
         ValidationError,
@@ -5975,6 +6455,93 @@ def test_document_session_store_preserves_grouped_headers_for_table_blocks():
     assert table.table_align == "center"
     assert table.border_style == "strong"
     assert table.caption_emphasis == "strong"
+
+
+def test_document_session_store_preserves_hero_banner_and_report_style_fields():
+    store = DocumentSessionStore()
+    document = store.create_document(
+        CreateDocumentRequest(
+            title="经营复盘",
+            document_style=DocumentStyleConfig(
+                font_name="Microsoft YaHei",
+                heading_font_name="Source Han Sans SC",
+                table_font_name="SimSun",
+                code_font_name="Consolas",
+            ),
+        )
+    )
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "hero_banner",
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会",
+                    "theme_color": "1F4E79",
+                    "text_color": "FFFFFF",
+                },
+                {
+                    "type": "accent_box",
+                    "title": "核心摘要",
+                    "text": "经营质量继续改善。",
+                    "border_color": "CBD5E1",
+                    "border_width_pt": 0.75,
+                    "accent_border_width_pt": 3.0,
+                    "padding_pt": 16,
+                },
+                {
+                    "type": "metric_cards",
+                    "metrics": [
+                        {
+                            "label": "营业收入",
+                            "value": "¥4.82 亿",
+                            "value_font_scale": 1.9,
+                            "note": "核心业务保持增长",
+                            "note_color": "64748B",
+                        }
+                    ],
+                    "border_color": "D9E1E8",
+                    "divider_color": "CBD5E1",
+                    "padding_pt": 14,
+                },
+                {
+                    "type": "table",
+                    "headers": ["区域", "完成率"],
+                    "header_font_scale": 1.1,
+                    "body_font_scale": 0.95,
+                    "cell_padding_horizontal_pt": 8,
+                    "cell_padding_vertical_pt": 6,
+                    "rows": [
+                        [
+                            {
+                                "text": "华东",
+                                "font_scale": 1.15,
+                            },
+                            "112%",
+                        ]
+                    ],
+                },
+            ],
+        )
+    )
+
+    hero_banner = updated.blocks[0]
+    accent_box = updated.blocks[1]
+    metric_cards = updated.blocks[2]
+    table = updated.blocks[3]
+
+    assert isinstance(hero_banner, HeroBannerBlock)
+    assert hero_banner.subtitle == "战略与增长委员会"
+    assert accent_box.border_color == "CBD5E1"
+    assert accent_box.padding_pt == pytest.approx(16)
+    assert metric_cards.border_color == "D9E1E8"
+    assert metric_cards.metrics[0].value_font_scale == pytest.approx(1.9)
+    assert metric_cards.metrics[0].note_color == "64748B"
+    assert table.header_font_scale == pytest.approx(1.1)
+    assert table.body_font_scale == pytest.approx(0.95)
+    assert table.rows[0][0].font_scale == pytest.approx(1.15)
 
 
 def test_document_session_store_add_table_preserves_grouped_headers():

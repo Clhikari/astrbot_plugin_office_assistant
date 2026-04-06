@@ -11,6 +11,7 @@ import {
 import { Block, ThemeConfig } from "./types";
 import {
   booleanValue,
+  numberValue,
   mapAlignment,
   normalizeHexColor,
   stringValue,
@@ -198,18 +199,24 @@ export function resolveCaptionFontSize(
 }
 
 export function resolveTableFontSize(
+  block: Block,
   tableStyleName: string,
   theme: ThemeConfig,
   header: boolean,
+  cellFontScale?: number,
 ): number {
   const baseSize = theme.tableFontSize;
+  const blockFontScale =
+    numberValue(header ? block.header_font_scale : block.body_font_scale) ?? 1;
+  const effectiveCellScale = cellFontScale ?? 1;
+  const scaledBaseSize = baseSize * blockFontScale * effectiveCellScale;
   if (tableStyleName === "metrics_compact") {
-    return Math.max(baseSize - 0.5, 9);
+    return Math.max(scaledBaseSize - 0.5, 9);
   }
   if (tableStyleName === "minimal" && header) {
-    return Math.max(baseSize, theme.bodySize);
+    return Math.max(scaledBaseSize, theme.bodySize);
   }
-  return baseSize;
+  return scaledBaseSize;
 }
 
 export function resolveTableBodyAlignment(
@@ -233,6 +240,7 @@ export function resolveTableBodyAlignment(
 
 export function resolveTableCellMargin(
   tableStyleName: string,
+  block?: Block,
 ): {
   top?: number;
   bottom?: number;
@@ -244,9 +252,20 @@ export function resolveTableCellMargin(
   if (!spec) {
     return undefined;
   }
+  const horizontalPadding = numberValue(block?.cell_padding_horizontal_pt);
+  const verticalPadding = numberValue(block?.cell_padding_vertical_pt);
   return {
-    left: spec.horizontalMargin,
-    right: spec.horizontalMargin,
+    top: verticalPadding !== undefined ? Math.round(verticalPadding * 20) : undefined,
+    bottom:
+      verticalPadding !== undefined ? Math.round(verticalPadding * 20) : undefined,
+    left:
+      horizontalPadding !== undefined
+        ? Math.round(horizontalPadding * 20)
+        : spec.horizontalMargin,
+    right:
+      horizontalPadding !== undefined
+        ? Math.round(horizontalPadding * 20)
+        : spec.horizontalMargin,
     marginUnitType: WidthType.DXA,
   };
 }

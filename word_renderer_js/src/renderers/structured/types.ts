@@ -9,6 +9,10 @@ export type HeaderFooterConfig = JsonObject;
 export type ThemeConfig = {
   accent: string;
   accentSoft: string;
+  fontName: string;
+  headingFontName: string;
+  tableFontName: string;
+  codeFontName: string;
   titleSize: number;
   titleAlign: string;
   titleSpacingAfter: number;
@@ -38,6 +42,7 @@ export type TableCellValue = {
   textColor?: string;
   bold?: boolean;
   align?: string;
+  fontScale?: number;
 };
 
 export type SectionStartType =
@@ -62,4 +67,6 @@ export type RunDefaults = {
   fontSize?: number;
   emphasis?: string;
   fontScale?: number;
+  fontName?: string;
+  codeFontName?: string;
 };

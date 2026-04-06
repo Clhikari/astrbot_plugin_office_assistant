@@ -11,6 +11,10 @@ class BlockLayout(BaseModel):
 
     spacing_before: float | None = Field(default=None, ge=0, le=72)
     spacing_after: float | None = Field(default=None, ge=0, le=72)
+    padding_top_pt: float | None = Field(default=None, ge=0, le=72)
+    padding_right_pt: float | None = Field(default=None, ge=0, le=72)
+    padding_bottom_pt: float | None = Field(default=None, ge=0, le=72)
+    padding_left_pt: float | None = Field(default=None, ge=0, le=72)
 
 
 class BlockStyle(BaseModel):
@@ -113,6 +117,22 @@ class HeadingBlock(BlockBase):
         return normalize_optional_hex_color(value)
 
 
+class HeroBannerBlock(BlockBase):
+    type: Literal["hero_banner"] = "hero_banner"
+    title: str = Field(min_length=1)
+    subtitle: str = ""
+    theme_color: str | None = None
+    text_color: str | None = None
+    subtitle_color: str | None = None
+    min_height_pt: float | None = Field(default=None, gt=0, le=240)
+    full_width: bool = True
+
+    @field_validator("theme_color", "text_color", "subtitle_color")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
 class ParagraphRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -209,6 +229,7 @@ class TableCell(BaseModel):
     text_color: str | None = None
     bold: bool | None = None
     align: Literal["left", "center", "right"] | None = None
+    font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
 
     @field_validator("fill", "text_color")
     @classmethod
@@ -323,6 +344,10 @@ class TableBlock(BlockBase):
     table_align: TableAlignment | None = None
     border_style: TableBorderStyle | None = None
     caption_emphasis: TableCaptionEmphasis | None = None
+    cell_padding_horizontal_pt: float | None = Field(default=None, ge=0, le=72)
+    cell_padding_vertical_pt: float | None = Field(default=None, ge=0, le=72)
+    header_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    body_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
 
     @field_validator("column_widths")
     @classmethod
@@ -365,8 +390,14 @@ class AccentBoxBlock(BlockBase):
     accent_color: str | None = None
     fill_color: str | None = None
     title_color: str | None = None
+    border_color: str | None = None
+    border_width_pt: float | None = Field(default=None, gt=0, le=12)
+    accent_border_width_pt: float | None = Field(default=None, gt=0, le=18)
+    padding_pt: float | None = Field(default=None, ge=0, le=72)
+    title_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    body_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
 
-    @field_validator("accent_color", "fill_color", "title_color")
+    @field_validator("accent_color", "fill_color", "title_color", "border_color")
     @classmethod
     def validate_optional_colors(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
@@ -388,8 +419,18 @@ class MetricCard(BaseModel):
     value_color: str | None = None
     delta_color: str | None = None
     fill_color: str | None = None
+    label_color: str | None = None
+    note_color: str | None = None
+    value_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    delta_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
 
-    @field_validator("value_color", "delta_color", "fill_color")
+    @field_validator(
+        "value_color",
+        "delta_color",
+        "fill_color",
+        "label_color",
+        "note_color",
+    )
     @classmethod
     def validate_optional_colors(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
@@ -401,8 +442,23 @@ class MetricCardsBlock(BlockBase):
     accent_color: str | None = None
     fill_color: str | None = None
     label_color: str | None = None
+    border_color: str | None = None
+    border_width_pt: float | None = Field(default=None, gt=0, le=12)
+    divider_color: str | None = None
+    divider_width_pt: float | None = Field(default=None, gt=0, le=12)
+    padding_pt: float | None = Field(default=None, ge=0, le=72)
+    label_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    value_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    delta_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    note_font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
 
-    @field_validator("accent_color", "fill_color", "label_color")
+    @field_validator(
+        "accent_color",
+        "fill_color",
+        "label_color",
+        "border_color",
+        "divider_color",
+    )
     @classmethod
     def validate_optional_colors(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
@@ -471,7 +527,8 @@ class TocBlock(BlockBase):
 
 
 DocumentBlock = Annotated[
-    HeadingBlock
+    HeroBannerBlock
+    | HeadingBlock
     | ParagraphBlock
     | ListBlock
     | TableBlock

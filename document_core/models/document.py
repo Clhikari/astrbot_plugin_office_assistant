@@ -75,6 +75,10 @@ class DocumentStyleConfig(BaseModel):
     title_align: Literal["left", "center", "right", "justify"] | None = None
     body_font_size: float | None = Field(default=None, ge=9.0, le=16.0)
     body_line_spacing: float | None = Field(default=None, ge=1.0, le=2.5)
+    font_name: str = "Microsoft YaHei"
+    heading_font_name: str = "Microsoft YaHei"
+    table_font_name: str = "Microsoft YaHei"
+    code_font_name: str = "Consolas"
     paragraph_space_after: float | None = Field(default=None, ge=0, le=72)
     list_space_after: float | None = Field(default=None, ge=0, le=72)
     summary_card_defaults: DocumentSummaryCardDefaults = Field(

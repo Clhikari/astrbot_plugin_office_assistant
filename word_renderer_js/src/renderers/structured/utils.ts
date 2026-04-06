@@ -2,6 +2,7 @@ import {
   AlignmentType,
   HeadingLevel,
   PageOrientation,
+  WidthType,
   convertInchesToTwip,
 } from "docx";
 
@@ -68,6 +69,10 @@ export function halfPoint(value: number): number {
   return Math.round(value * 2);
 }
 
+export function borderSize(valuePt: number | undefined, fallbackPt: number): number {
+  return Math.max(2, Math.round((valuePt ?? fallbackPt) * 8));
+}
+
 export function cmToTwip(value: number): number {
   return convertInchesToTwip(value / 2.54);
 }
@@ -93,6 +98,30 @@ export function numberValue(value: unknown): number | undefined {
 
 export function booleanValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+export function resolveBoxPadding(
+  layout: JsonObject,
+  defaultPaddingPt: number,
+): {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+  marginUnitType: (typeof WidthType)[keyof typeof WidthType];
+} {
+  const top = numberValue(layout.padding_top_pt) ?? defaultPaddingPt;
+  const right = numberValue(layout.padding_right_pt) ?? defaultPaddingPt;
+  const bottom = numberValue(layout.padding_bottom_pt) ?? defaultPaddingPt;
+  const left = numberValue(layout.padding_left_pt) ?? defaultPaddingPt;
+
+  return {
+    top: point(top),
+    right: point(right),
+    bottom: point(bottom),
+    left: point(left),
+    marginUnitType: WidthType.DXA,
+  };
 }
 
 export function resolveBold(

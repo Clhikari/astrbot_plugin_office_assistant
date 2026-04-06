@@ -13,6 +13,15 @@ import {
   stringValue,
 } from "./utils";
 
+export function buildFontAttributes(fontName: string) {
+  return {
+    ascii: fontName,
+    hAnsi: fontName,
+    eastAsia: fontName,
+    cs: fontName,
+  };
+}
+
 export function normalizeInlineItem(
   item: unknown,
   theme: ThemeConfig,
@@ -41,25 +50,31 @@ export function buildRuns(
       : undefined;
 
   if (runs.length === 0) {
+    const fontName = defaults?.fontName;
     return [
       new TextRun({
         text: stringValue(block.text),
         bold: resolveBold(false, defaults?.emphasis),
         color: defaultColor,
         size: defaultSize,
+        font: fontName ? buildFontAttributes(fontName) : undefined,
       }),
     ];
   }
 
   return runs.map((rawRun) => {
     const run = asObject(rawRun);
+    const codeFontName = defaults?.codeFontName || "Consolas";
+    const bodyFontName = defaults?.fontName;
+    const fontName =
+      booleanValue(run.code) === true ? codeFontName : bodyFontName;
     return new TextRun({
       text: stringValue(run.text),
       bold: resolveBold(booleanValue(run.bold) === true, defaults?.emphasis),
       italics: booleanValue(run.italic) === true,
       underline: booleanValue(run.underline) === true ? {} : undefined,
       color: stringValue(run.color) || defaultColor,
-      font: booleanValue(run.code) === true ? "Consolas" : undefined,
+      font: fontName ? buildFontAttributes(fontName) : undefined,
       size: defaultSize,
     });
   });

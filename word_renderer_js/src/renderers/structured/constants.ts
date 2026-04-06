@@ -81,6 +81,10 @@ export const THEMES: Record<string, ThemeConfig> = {
   business_report: {
     accent: "1F4E79",
     accentSoft: "DCE6F1",
+    fontName: "Microsoft YaHei",
+    headingFontName: "Microsoft YaHei",
+    tableFontName: "Microsoft YaHei",
+    codeFontName: "Consolas",
     titleSize: 20,
     titleAlign: "center",
     titleSpacingAfter: 18,
@@ -100,6 +104,10 @@ export const THEMES: Record<string, ThemeConfig> = {
   project_review: {
     accent: "0F766E",
     accentSoft: "D9F3EE",
+    fontName: "Microsoft YaHei",
+    headingFontName: "Microsoft YaHei",
+    tableFontName: "Microsoft YaHei",
+    codeFontName: "Consolas",
     titleSize: 19,
     titleAlign: "center",
     titleSpacingAfter: 18,
@@ -119,6 +127,10 @@ export const THEMES: Record<string, ThemeConfig> = {
   executive_brief: {
     accent: "B45309",
     accentSoft: "FDEBD8",
+    fontName: "Microsoft YaHei",
+    headingFontName: "Microsoft YaHei",
+    tableFontName: "Microsoft YaHei",
+    codeFontName: "Consolas",
     titleSize: 18.5,
     titleAlign: "center",
     titleSpacingAfter: 18,

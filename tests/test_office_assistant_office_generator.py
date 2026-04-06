@@ -9,6 +9,7 @@ from astrbot_plugin_office_assistant.domain.document.render_backends import (
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     HeadingBlock,
     GroupBlock,
+    HeroBannerBlock,
     ParagraphBlock,
     TableBlock,
 )
@@ -77,6 +78,40 @@ def test_build_word_document_model_reuses_session_store_normalization(
     assert isinstance(document.blocks[1], TableBlock)
     assert document.blocks[1].caption in (None, "")
     assert document.blocks[1].rows[0][0].row_span == 2
+
+
+def test_build_word_document_model_supports_hero_banner_blocks(
+    workspace_root: Path,
+):
+    generator = OfficeGenerator(data_path=workspace_root)
+    file_path = workspace_root / "report.docx"
+
+    document = generator._build_word_document_model(
+        file_path,
+        {
+            "metadata": {
+                "title": "Quarterly Report",
+                "document_style": {"font_name": "Microsoft YaHei"},
+            },
+            "blocks": [
+                {
+                    "type": "hero_banner",
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会",
+                    "theme_color": "1F4E79",
+                    "text_color": "FFFFFF",
+                },
+                {"type": "paragraph", "text": "正文"},
+            ],
+        },
+    )
+
+    assert len(document.blocks) == 2
+    assert isinstance(document.blocks[0], HeroBannerBlock)
+    assert document.blocks[0].title == "Q3 经营复盘报告"
+    assert document.blocks[0].subtitle == "战略与增长委员会"
+    assert document.blocks[0].theme_color == "1F4E79"
+    assert isinstance(document.blocks[1], ParagraphBlock)
 
 
 def test_build_word_document_model_expands_summary_card_blocks(

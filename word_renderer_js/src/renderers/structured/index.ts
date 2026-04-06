@@ -20,6 +20,7 @@ import {
   renderToc,
 } from "./blocks";
 import { renderAccentBox, renderMetricCards } from "./cards";
+import { renderHeroBanner } from "./hero-banner";
 import {
   EXTERNAL_WORD_STYLES_XML,
   ORDERED_NUMBERING_REFERENCE,
@@ -254,11 +255,11 @@ function buildSection(
     properties,
     headers:
       !section.inheritPreviousHeaderFooter || isFirstSection
-        ? buildHeaders(section.headerFooter)
+        ? buildHeaders(section.headerFooter, theme)
         : undefined,
     footers:
       !section.inheritPreviousHeaderFooter || isFirstSection
-        ? buildFooters(section.headerFooter)
+        ? buildFooters(section.headerFooter, theme)
         : undefined,
     children: section.children.length > 0 ? section.children : [new Paragraph("")],
   };
@@ -270,6 +271,8 @@ function renderBlock(
   theme: ThemeConfig,
 ): FileChild[] {
   switch (block.type) {
+    case "hero_banner":
+      return [renderHeroBanner(block, theme)];
     case "heading":
       return [renderHeading(block, metadata, theme)];
     case "paragraph":
@@ -283,7 +286,7 @@ function renderBlock(
     case "toc":
       return renderToc(block, metadata, theme);
     case "accent_box":
-      return [renderAccentBox(block, metadata, theme, renderParagraph)];
+      return [renderAccentBox(block, metadata, theme)];
     case "metric_cards":
       return [renderMetricCards(block, metadata, theme)];
     case "summary_card":

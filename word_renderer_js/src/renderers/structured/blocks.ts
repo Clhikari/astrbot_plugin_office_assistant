@@ -25,13 +25,13 @@ import {
   stringValue,
 } from "./utils";
 import {
+  buildFontAttributes,
   buildRuns,
   mergeLayoutDefaults,
   mergeStyleDefaults,
   normalizeInlineItem,
   paragraphPlainText,
 } from "./inline";
-import { renderAccentBox, renderMetricCards } from "./cards";
 
 export function renderDocumentTitle(
   metadata: JsonObject,
@@ -55,6 +55,7 @@ export function renderDocumentTitle(
         bold: true,
         color: stringValue(documentStyle.heading_color) || "000000",
         size: halfPoint(theme.titleSize),
+        font: buildFontAttributes(theme.headingFontName),
       }),
     ],
   });
@@ -73,7 +74,7 @@ export function renderHeading(
     stringValue(block.color) ||
     stringValue(documentStyle[`heading_level_${level}_color`]) ||
     stringValue(documentStyle.heading_color) ||
-    "000000";
+    theme.accent;
   const fontScale = numberValue(style.font_scale) ?? 1;
   const baseSize =
     level <= 1 ? theme.headingSize : Math.max(theme.bodySize + 1, 11.5);
@@ -112,6 +113,7 @@ export function renderHeading(
         bold: true,
         color,
         size: halfPoint(baseSize * fontScale),
+        font: buildFontAttributes(theme.headingFontName),
       }),
     ],
   });
@@ -152,6 +154,8 @@ export function renderParagraph(
         fontSize: bodyFontSize,
         emphasis: stringValue(style.emphasis),
         fontScale: numberValue(style.font_scale),
+        fontName: theme.fontName,
+        codeFontName: theme.codeFontName,
       }),
       spacing: {
         before: point(numberValue(layout.spacing_before) ?? 0),
@@ -187,6 +191,8 @@ export function renderList(
       fontSize: bodyFontSize,
       emphasis: stringValue(style.emphasis),
       fontScale: numberValue(style.font_scale),
+      fontName: theme.fontName,
+      codeFontName: theme.codeFontName,
     });
     const marker = ordered ? `${index + 1}. ` : "• ";
     return new Paragraph({
@@ -196,6 +202,7 @@ export function renderList(
           bold: resolveBold(false, stringValue(style.emphasis)),
           color: resolveTextColor(theme, stringValue(style.emphasis)),
           size: halfPoint(bodyFontSize * (numberValue(style.font_scale) ?? 1)),
+          font: buildFontAttributes(theme.fontName),
         }),
         ...normalized.runs,
       ],
@@ -264,6 +271,7 @@ export function renderToc(
             stringValue(asObject(metadata.document_style).heading_color) ||
             theme.accent,
           size: halfPoint(theme.headingSize),
+          font: buildFontAttributes(theme.headingFontName),
         }),
       ],
     }),

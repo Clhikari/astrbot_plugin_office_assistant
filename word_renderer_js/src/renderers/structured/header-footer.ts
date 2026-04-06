@@ -4,7 +4,7 @@ import {
   Paragraph,
 } from "docx";
 
-import { HeaderFooterConfig } from "./types";
+import { HeaderFooterConfig, ThemeConfig } from "./types";
 import { buildHeaderFooterParagraphs } from "./header-footer-content";
 import {
   hasHeaderFooterOverride as hasHeaderFooterOverrideRule,
@@ -16,9 +16,15 @@ import {
 
 export function buildHeaders(
   config: HeaderFooterConfig,
+  theme: ThemeConfig,
 ): { default?: Header; first?: Header; even?: Header } {
   const headers: { default?: Header; first?: Header; even?: Header } = {};
-  const normalHeader = buildHeaderFooterParagraphs(config, "header", "default");
+  const normalHeader = buildHeaderFooterParagraphs(
+    config,
+    "header",
+    "default",
+    theme,
+  );
   if (normalHeader) {
     headers.default = new Header({ children: normalHeader });
   } else if (hasHeaderFooterOverride(config)) {
@@ -27,7 +33,7 @@ export function buildHeaders(
   if (usesFirstPageVariants(config)) {
     headers.first = new Header({
       children:
-        buildHeaderFooterParagraphs(config, "header", "first") ?? [
+        buildHeaderFooterParagraphs(config, "header", "first", theme) ?? [
           new Paragraph(""),
         ],
     });
@@ -35,7 +41,7 @@ export function buildHeaders(
   if (usesEvenPageVariants(config)) {
     headers.even = new Header({
       children:
-        buildHeaderFooterParagraphs(config, "header", "even") ?? [
+        buildHeaderFooterParagraphs(config, "header", "even", theme) ?? [
           new Paragraph(""),
         ],
     });
@@ -45,9 +51,15 @@ export function buildHeaders(
 
 export function buildFooters(
   config: HeaderFooterConfig,
+  theme: ThemeConfig,
 ): { default?: Footer; first?: Footer; even?: Footer } {
   const footers: { default?: Footer; first?: Footer; even?: Footer } = {};
-  const normalFooter = buildHeaderFooterParagraphs(config, "footer", "default");
+  const normalFooter = buildHeaderFooterParagraphs(
+    config,
+    "footer",
+    "default",
+    theme,
+  );
   if (normalFooter) {
     footers.default = new Footer({ children: normalFooter });
   } else if (hasHeaderFooterOverride(config)) {
@@ -56,7 +68,7 @@ export function buildFooters(
   if (usesFirstPageVariants(config)) {
     footers.first = new Footer({
       children:
-        buildHeaderFooterParagraphs(config, "footer", "first") ?? [
+        buildHeaderFooterParagraphs(config, "footer", "first", theme) ?? [
           new Paragraph(""),
         ],
     });
@@ -64,7 +76,7 @@ export function buildFooters(
   if (usesEvenPageVariants(config)) {
     footers.even = new Footer({
       children:
-        buildHeaderFooterParagraphs(config, "footer", "even") ?? [
+        buildHeaderFooterParagraphs(config, "footer", "even", theme) ?? [
           new Paragraph(""),
         ],
     });

@@ -18,6 +18,7 @@ from ...document_core.models.blocks import (
     DocumentBlock,
     GroupBlock,
     HeadingBlock,
+    HeroBannerBlock,
     ListBlock,
     MetricCard,
     MetricCardsBlock,
@@ -53,6 +54,7 @@ from .contracts import (
     SectionBreakInput,
     SectionAccentBoxInput,
     SectionCardInput,
+    SectionHeroBannerInput,
     SectionListInput,
     SectionMetricCardsInput,
     SectionPageBreakInput,
@@ -353,6 +355,18 @@ class DocumentSessionStore:
         block: BlockInput,
         document: DocumentModel,
     ) -> RuntimeBlock:
+        if isinstance(block, SectionHeroBannerInput):
+            return HeroBannerBlock(
+                title=block.title,
+                subtitle=block.subtitle,
+                theme_color=block.theme_color,
+                text_color=block.text_color,
+                subtitle_color=block.subtitle_color,
+                min_height_pt=block.min_height_pt,
+                full_width=block.full_width,
+                style=block.style,
+                layout=block.layout,
+            )
         if isinstance(block, BlockHeadingInput):
             return HeadingBlock(
                 text=block.text,
@@ -384,6 +398,12 @@ class DocumentSessionStore:
                 accent_color=block.accent_color,
                 fill_color=block.fill_color,
                 title_color=block.title_color,
+                border_color=block.border_color,
+                border_width_pt=block.border_width_pt,
+                accent_border_width_pt=block.accent_border_width_pt,
+                padding_pt=block.padding_pt,
+                title_font_scale=block.title_font_scale,
+                body_font_scale=block.body_font_scale,
                 style=block.style,
                 layout=block.layout,
             )
@@ -413,6 +433,10 @@ class DocumentSessionStore:
                 table_align=block.table_align,
                 border_style=block.border_style,
                 caption_emphasis=block.caption_emphasis,
+                cell_padding_horizontal_pt=block.cell_padding_horizontal_pt,
+                cell_padding_vertical_pt=block.cell_padding_vertical_pt,
+                header_font_scale=block.header_font_scale,
+                body_font_scale=block.body_font_scale,
                 style=block.style,
                 layout=block.layout,
             )
@@ -427,12 +451,25 @@ class DocumentSessionStore:
                         value_color=metric.value_color,
                         delta_color=metric.delta_color,
                         fill_color=metric.fill_color,
+                        label_color=metric.label_color,
+                        note_color=metric.note_color,
+                        value_font_scale=metric.value_font_scale,
+                        delta_font_scale=metric.delta_font_scale,
                     )
                     for metric in block.metrics
                 ],
                 accent_color=block.accent_color,
                 fill_color=block.fill_color,
                 label_color=block.label_color,
+                border_color=block.border_color,
+                border_width_pt=block.border_width_pt,
+                divider_color=block.divider_color,
+                divider_width_pt=block.divider_width_pt,
+                padding_pt=block.padding_pt,
+                label_font_scale=block.label_font_scale,
+                value_font_scale=block.value_font_scale,
+                delta_font_scale=block.delta_font_scale,
+                note_font_scale=block.note_font_scale,
                 style=block.style,
                 layout=block.layout,
             )
@@ -613,6 +650,10 @@ class DocumentSessionStore:
                         table_align=request.table_align,
                         border_style=request.border_style,
                         caption_emphasis=request.caption_emphasis,
+                        cell_padding_horizontal_pt=request.cell_padding_horizontal_pt,
+                        cell_padding_vertical_pt=request.cell_padding_vertical_pt,
+                        header_font_scale=request.header_font_scale,
+                        body_font_scale=request.body_font_scale,
                         style=request.style.model_copy(deep=True),
                         layout=request.layout.model_copy(deep=True),
                     )

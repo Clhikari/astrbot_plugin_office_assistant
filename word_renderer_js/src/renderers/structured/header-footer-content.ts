@@ -10,8 +10,9 @@ import {
 
 import { JsonObject } from "../../core/payload";
 import { DEFAULT_DIVIDER_COLOR } from "./constants";
-import { HeaderFooterConfig } from "./types";
+import { HeaderFooterConfig, ThemeConfig } from "./types";
 import { booleanValue, mapAlignment, normalizeHexColor, stringValue } from "./utils";
+import { buildFontAttributes } from "./inline";
 import {
   containsPagePlaceholder,
   resolveHeaderFooterLeft,
@@ -25,6 +26,7 @@ export function buildHeaderFooterParagraphs(
   config: HeaderFooterConfig,
   kind: "header" | "footer",
   variant: "default" | "first" | "even",
+  theme: ThemeConfig,
 ): Paragraph[] | null {
   const splitLayout = usesSplitLayout(config, kind);
   let left = resolveHeaderFooterLeft(config, kind, variant);
@@ -64,7 +66,7 @@ export function buildHeaderFooterParagraphs(
             position: TabStopPosition.MAX,
           },
         ],
-        children: buildSplitHeaderFooterRuns(left, right),
+        children: buildSplitHeaderFooterRuns(left, right, theme),
       }),
     ];
   }
@@ -74,7 +76,7 @@ export function buildHeaderFooterParagraphs(
       return [
         new Paragraph({
           border: buildHeaderFooterDivider(config, kind),
-          children: buildInlineRuns(left),
+          children: buildInlineRuns(left, theme),
         }),
         new Paragraph({
           alignment: resolvePageNumberAlignment(config),
@@ -94,7 +96,7 @@ export function buildHeaderFooterParagraphs(
   return [
     new Paragraph({
       border: buildHeaderFooterDivider(config, kind),
-      children: buildInlineRuns(left),
+      children: buildInlineRuns(left, theme),
     }),
   ];
 }
@@ -102,29 +104,50 @@ export function buildHeaderFooterParagraphs(
 function buildSplitHeaderFooterRuns(
   left: string,
   right: string,
+  theme: ThemeConfig,
 ): Array<TextRun | SimpleField> {
   const children: Array<TextRun | SimpleField> = [];
   if (left.trim()) {
-    children.push(...buildInlineRuns(left));
+    children.push(...buildInlineRuns(left, theme));
   }
   if (left.trim() || right.trim()) {
-    children.push(new TextRun({ text: "\t" }));
+    children.push(
+      new TextRun({
+        text: "\t",
+        font: buildFontAttributes(theme.fontName),
+      }),
+    );
   }
   if (right.trim()) {
-    children.push(...buildInlineRuns(right));
+    children.push(...buildInlineRuns(right, theme));
   }
-  return children.length > 0 ? children : [new TextRun("")];
+  return children.length > 0
+    ? children
+    : [new TextRun({ text: "", font: buildFontAttributes(theme.fontName) })];
 }
 
-function buildInlineRuns(text: string): Array<TextRun | SimpleField> {
+function buildInlineRuns(
+  text: string,
+  theme: ThemeConfig,
+): Array<TextRun | SimpleField> {
   if (!text.includes("{PAGE}")) {
-    return [new TextRun({ text })];
+    return [
+      new TextRun({
+        text,
+        font: buildFontAttributes(theme.fontName),
+      }),
+    ];
   }
   const children: Array<TextRun | SimpleField> = [];
   const parts = text.split("{PAGE}");
   parts.forEach((part, index) => {
     if (part) {
-      children.push(new TextRun({ text: part }));
+      children.push(
+        new TextRun({
+          text: part,
+          font: buildFontAttributes(theme.fontName),
+        }),
+      );
     }
     if (index < parts.length - 1) {
       children.push(new SimpleField("PAGE"));

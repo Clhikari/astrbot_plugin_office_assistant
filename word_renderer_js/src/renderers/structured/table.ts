@@ -13,6 +13,7 @@ import {
 import { RenderCliError } from "../../core/errors";
 import { JsonObject } from "../../core/payload";
 import { Block, ThemeConfig } from "./types";
+import { buildFontAttributes } from "./inline";
 import {
   arrayValue,
   asObject,
@@ -93,6 +94,7 @@ export function renderTable(
                     size: halfPoint(
                       resolveCaptionFontSize(block, tableDefaults, theme),
                     ),
+                    font: buildFontAttributes(theme.tableFontName),
                   }),
                 ],
               }),
@@ -134,7 +136,10 @@ export function renderTable(
                   tableStyleName,
                   theme,
                 ),
-                size: halfPoint(resolveTableFontSize(tableStyleName, theme, true)),
+                size: halfPoint(
+                  resolveTableFontSize(block, tableStyleName, theme, true),
+                ),
+                font: buildFontAttributes(theme.tableFontName),
               }),
             ],
           }),
@@ -185,7 +190,10 @@ export function renderTable(
                       tableStyleName,
                       theme,
                     ),
-                    size: halfPoint(resolveTableFontSize(tableStyleName, theme, true)),
+                    size: halfPoint(
+                      resolveTableFontSize(block, tableStyleName, theme, true),
+                    ),
+                    font: buildFontAttributes(theme.tableFontName),
                   }),
                 ],
               }),
@@ -222,7 +230,7 @@ export function renderTable(
     layout: columnWidths.length > 0 ? TableLayoutType.FIXED : undefined,
     columnWidths: columnWidths.length > 0 ? columnWidths : undefined,
     style: resolveDocxTableStyle(tableStyleName),
-    margins: resolveTableCellMargin(tableStyleName),
+    margins: resolveTableCellMargin(tableStyleName, block),
     borders: resolveTableBorders(block, tableDefaults, theme, tableStyleName),
     rows: tableRows,
   });

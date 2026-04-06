@@ -1,6 +1,12 @@
 {
   "type": "object",
   "additionalProperties": false,
+  "definitions": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{6}$"
+    }
+  },
   "required": [
     "version",
     "render_mode",
@@ -57,10 +63,33 @@
           "type": "string"
         },
         "accent_color": {
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/hexColor"
+            },
+            {
+              "type": "string",
+              "const": ""
+            }
+          ]
         },
         "document_style": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "font_name": {
+              "type": "string"
+            },
+            "heading_font_name": {
+              "type": "string"
+            },
+            "table_font_name": {
+              "type": "string"
+            },
+            "code_font_name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
         },
         "header_footer": {
           "type": "object"
@@ -80,6 +109,48 @@
             "type": "string"
           }
         },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "hero_banner"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "title"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "subtitle": {
+                  "type": "string"
+                },
+                "theme_color": {
+                  "$ref": "#/definitions/hexColor"
+                },
+                "text_color": {
+                  "$ref": "#/definitions/hexColor"
+                },
+                "subtitle_color": {
+                  "$ref": "#/definitions/hexColor"
+                },
+                "min_height_pt": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 240
+                },
+                "full_width": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        ],
         "additionalProperties": true
       }
     }

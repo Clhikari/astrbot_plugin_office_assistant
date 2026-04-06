@@ -11,6 +11,7 @@ import {
 import { RenderCliError } from "../../core/errors";
 import { JsonObject } from "../../core/payload";
 import { Block, TableCellValue, ThemeConfig } from "./types";
+import { buildFontAttributes } from "./inline";
 import {
   arrayValue,
   asObject,
@@ -101,7 +102,16 @@ export function buildTableBodyRows(
                   text: cell.text,
                   bold: cell.bold ?? (firstColumnBold && columnIndex === 0),
                   color: cell.textColor,
-                  size: halfPoint(resolveTableFontSize(tableStyleName, theme, false)),
+                  size: halfPoint(
+                    resolveTableFontSize(
+                      block,
+                      tableStyleName,
+                      theme,
+                      false,
+                      cell.fontScale,
+                    ),
+                  ),
+                  font: buildFontAttributes(theme.tableFontName),
                 }),
               ],
             }),
@@ -145,6 +155,7 @@ export function normalizeTableCell(cell: unknown): TableCellValue {
     textColor: stringValue(obj.text_color) || undefined,
     bold: booleanValue(obj.bold),
     align: stringValue(obj.align) || undefined,
+    fontScale: numberValue(obj.font_scale),
   };
 }
 
