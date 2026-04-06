@@ -1,11 +1,14 @@
 import builtins
 import importlib
 import json
+import shutil
+import subprocess
 import struct
 import sys
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -29,12 +32,23 @@ from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
 from astrbot_plugin_office_assistant.domain.document.session_store import (
     DocumentSessionStore,
 )
+from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
+    export_document_via_pipeline,
+)
+from astrbot_plugin_office_assistant.domain.document.render_backends import (
+    DocumentRenderBackendError,
+    NodeWordRenderBackend,
+    build_document_render_backends,
+    RenderResult,
+    build_document_render_payload,
+)
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
     ColumnBlock,
     ColumnsBlock,
     GroupBlock,
     HeaderFooterConfig,
+    HeadingBlock,
     ParagraphBlock,
     ParagraphRun,
     SectionBreakBlock,
@@ -55,6 +69,7 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     SectionListInput,
     SectionParagraphInput,
     SectionTableInput,
+    normalize_create_document_kwargs,
     normalize_raw_block_payloads,
 )
 from astrbot_plugin_office_assistant.mcp_server.server import (
@@ -232,6 +247,106 @@ def _table_border_color(table, edge_name: str) -> str | None:
     return edge.get(qn("w:color"))
 
 
+def _table_cell_margin(table, edge_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    tbl_pr = table._tbl.tblPr
+    if tbl_pr is None:
+        return None
+    tbl_cell_margins = tbl_pr.find(qn("w:tblCellMar"))
+    if tbl_cell_margins is None:
+        return None
+    edge = tbl_cell_margins.find(qn(f"w:{edge_name}"))
+    if edge is None:
+        return None
+    return edge.get(qn("w:w"))
+
+
+def _paragraph_bottom_border_color(paragraph) -> str | None:
+    from docx.oxml.ns import qn
+
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return None
+    paragraph_border = p_pr.find(qn("w:pBdr"))
+    if paragraph_border is None:
+        return None
+    bottom = paragraph_border.find(qn("w:bottom"))
+    if bottom is None:
+        return None
+    return bottom.get(qn("w:color"))
+
+
+def _paragraph_bottom_border_size(paragraph) -> str | None:
+    from docx.oxml.ns import qn
+
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return None
+    paragraph_border = p_pr.find(qn("w:pBdr"))
+    if paragraph_border is None:
+        return None
+    bottom = paragraph_border.find(qn("w:bottom"))
+    if bottom is None:
+        return None
+    return bottom.get(qn("w:sz"))
+
+
+def _paragraph_top_border_color(paragraph) -> str | None:
+    from docx.oxml.ns import qn
+
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return None
+    paragraph_border = p_pr.find(qn("w:pBdr"))
+    if paragraph_border is None:
+        return None
+    top = paragraph_border.find(qn("w:top"))
+    if top is None:
+        return None
+    return top.get(qn("w:color"))
+
+
+def _cell_vertical_merge(cell) -> str | None:
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.tcPr
+    if tc_pr is None:
+        return None
+    vertical_merge = tc_pr.find(qn("w:vMerge"))
+    if vertical_merge is None:
+        return None
+    return vertical_merge.get(qn("w:val"))
+
+
+def _cell_border_color(cell, edge_name: str) -> str | None:
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.tcPr
+    if tc_pr is None:
+        return None
+    tc_borders = tc_pr.find(qn("w:tcBorders"))
+    if tc_borders is None:
+        return None
+    edge = tc_borders.find(qn(f"w:{edge_name}"))
+    if edge is None:
+        return None
+    return edge.get(qn("w:color"))
+
+
+def _raw_row_cell_vertical_merge(row, cell_index: int) -> str | None:
+    from docx.oxml.ns import qn
+
+    tc = row._tr.tc_lst[cell_index]
+    tc_pr = tc.tcPr
+    if tc_pr is None:
+        return None
+    vertical_merge = tc_pr.find(qn("w:vMerge"))
+    if vertical_merge is None:
+        return None
+    return vertical_merge.get(qn("w:val"))
+
+
 def _row_has_cant_split(row) -> bool:
     from docx.oxml.ns import qn
 
@@ -330,6 +445,13 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
     assert [tool.name for tool in toolset.tools] == [
         spec.name for spec in get_document_tool_specs()
     ]
+
+
+def test_build_document_toolset_defaults_to_python_render_backend():
+    toolset = build_document_toolset()
+    export_tool = next(tool for tool in toolset.tools if tool.name == "export_document")
+
+    assert [backend.name for backend in export_tool.render_backends] == ["python"]
 
 
 def test_registry_import_does_not_require_fastmcp_at_runtime():
@@ -493,6 +615,14 @@ def test_create_document_tool_schema_exposes_document_style():
 
     assert header_footer["header_text"]["type"] == "string"
     assert header_footer["footer_text"]["type"] == "string"
+    assert header_footer["header_left"]["type"] == "string"
+    assert header_footer["header_right"]["type"] == "string"
+    assert header_footer["footer_left"]["type"] == "string"
+    assert header_footer["footer_right"]["type"] == "string"
+    assert header_footer["header_border_bottom"]["type"] == "boolean"
+    assert header_footer["footer_border_top"]["type"] == "boolean"
+    assert header_footer["header_border_color"]["type"] == "string"
+    assert header_footer["footer_border_color"]["type"] == "string"
     assert header_footer["different_first_page"]["type"] == "boolean"
     assert header_footer["first_page_header_text"]["type"] == "string"
     assert header_footer["first_page_footer_text"]["type"] == "string"
@@ -505,6 +635,10 @@ def test_create_document_tool_schema_exposes_document_style():
     assert header_footer["page_number_align"]["enum"] == ["left", "center", "right"]
     assert document_style["brief"]["type"] == "string"
     assert document_style["heading_color"]["type"] == "string"
+    assert document_style["heading_level_1_color"]["type"] == "string"
+    assert document_style["heading_level_2_color"]["type"] == "string"
+    assert document_style["heading_bottom_border_color"]["type"] == "string"
+    assert document_style["heading_bottom_border_size_pt"]["type"] == "number"
     assert document_style["title_align"]["enum"] == [
         "left",
         "center",
@@ -522,11 +656,16 @@ def test_create_document_tool_schema_exposes_document_style():
     assert document_style["summary_card_defaults"]["properties"]["title_emphasis"][
         "enum"
     ] == ["normal", "strong", "subtle"]
+    assert (
+        "header_fill_enabled and header_bold belong on each table block"
+        in document_style["table_defaults"]["description"]
+    )
     assert table_defaults["preset"]["enum"] == [
         "report_grid",
         "metrics_compact",
         "minimal",
     ]
+    assert table_defaults["body_fill"]["type"] == "string"
     assert table_defaults["table_align"]["enum"] == ["left", "center"]
     assert table_defaults["border_style"]["enum"] == [
         "minimal",
@@ -560,9 +699,13 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert run_properties["bold"]["type"] == "boolean"
     assert run_properties["underline"]["type"] == "boolean"
     assert run_properties["code"]["type"] == "boolean"
+    assert run_properties["color"]["type"] == "string"
     assert block_properties["text"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"
     assert block_properties["runs"]["items"]["type"] == "object"
+    assert block_properties["bottom_border"]["type"] == "boolean"
+    assert block_properties["bottom_border_color"]["type"] == "string"
+    assert block_properties["bottom_border_size_pt"]["type"] == "number"
     assert block_properties["header_groups"]["type"] == "array"
     assert block_properties["header_groups"]["items"]["type"] == "object"
     assert (
@@ -585,7 +728,9 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         "span",
     ]
     assert block_properties["header_fill"]["type"] == "string"
+    assert block_properties["header_fill_enabled"]["type"] == "boolean"
     assert block_properties["header_text_color"]["type"] == "string"
+    assert block_properties["header_bold"]["type"] == "boolean"
     assert block_properties["banded_rows"]["type"] == "boolean"
     assert block_properties["banded_row_fill"]["type"] == "string"
     assert block_properties["first_column_bold"]["type"] == "boolean"
@@ -609,6 +754,28 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["restart_page_numbering"]["type"] == "boolean"
     assert block_properties["page_number_start"]["type"] == "integer"
     assert block_properties["header_footer"]["type"] == "object"
+    assert block_properties["items"]["items"]["anyOf"][0]["type"] == "string"
+    assert (
+        block_properties["items"]["items"]["anyOf"][1]["properties"]["runs"]["items"][
+            "properties"
+        ]["color"]["type"]
+        == "string"
+    )
+    assert block_properties["rows"]["items"]["items"]["anyOf"][0]["type"] == "string"
+    row_cell_properties = block_properties["rows"]["items"]["items"]["anyOf"][1][
+        "properties"
+    ]
+    assert row_cell_properties["text"]["type"] == "string"
+    assert row_cell_properties["row_span"]["minimum"] == 1
+    assert row_cell_properties["fill"]["type"] == "string"
+    assert row_cell_properties["text_color"]["type"] == "string"
+    assert row_cell_properties["bold"]["type"] == "boolean"
+    assert row_cell_properties["align"]["enum"] == ["left", "center", "right"]
+    assert block_properties["accent_color"]["type"] == "string"
+    assert block_properties["fill_color"]["type"] == "string"
+    assert block_properties["title_color"]["type"] == "string"
+    assert block_properties["metrics"]["items"]["required"] == ["label", "value"]
+    assert block_properties["label_color"]["type"] == "string"
     assert (
         block_properties["header_footer"]["properties"]["different_odd_even"]["type"]
         == "boolean"
@@ -635,6 +802,14 @@ def test_create_document_request_accepts_header_footer_defaults():
         header_footer={
             "header_text": "季度经营复盘",
             "footer_text": "内部使用",
+            "header_left": "Q3 经营复盘报告",
+            "header_right": "机密 · 2024 年 10 月",
+            "footer_left": "集团战略部 · 内部机密文件",
+            "footer_right": "第 {PAGE} 页",
+            "header_border_bottom": True,
+            "footer_border_top": True,
+            "header_border_color": "D0D7DE",
+            "footer_border_color": "D0D7DE",
             "different_first_page": True,
             "first_page_header_text": "封面页眉",
             "first_page_footer_text": "封面页脚",
@@ -650,6 +825,14 @@ def test_create_document_request_accepts_header_footer_defaults():
 
     assert request.header_footer.header_text == "季度经营复盘"
     assert request.header_footer.footer_text == "内部使用"
+    assert request.header_footer.header_left == "Q3 经营复盘报告"
+    assert request.header_footer.header_right == "机密 · 2024 年 10 月"
+    assert request.header_footer.footer_left == "集团战略部 · 内部机密文件"
+    assert request.header_footer.footer_right == "第 {PAGE} 页"
+    assert request.header_footer.header_border_bottom is True
+    assert request.header_footer.footer_border_top is True
+    assert request.header_footer.header_border_color == "D0D7DE"
+    assert request.header_footer.footer_border_color == "D0D7DE"
     assert request.header_footer.different_first_page is True
     assert request.header_footer.first_page_header_text == "封面页眉"
     assert request.header_footer.first_page_footer_text == "封面页脚"
@@ -802,6 +985,42 @@ def test_normalize_raw_block_payloads_strips_markdown_table_edge_pipes():
     assert normalized[0]["rows"] == [["单元格1", "单元格2", "单元格3"]]
 
 
+def test_normalize_raw_block_payloads_repairs_paragraph_items_alias():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "paragraph",
+                "items": [
+                    {
+                        "runs": [
+                            {"text": "Training Title: ", "bold": True},
+                            {"text": "Advanced Skills Workshop"},
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert normalized[0]["type"] == "paragraph"
+    assert "items" not in normalized[0]
+    assert normalized[0]["runs"][0]["text"] == "Training Title: "
+    assert normalized[0]["runs"][1]["text"] == "Advanced Skills Workshop"
+
+
+def test_normalize_create_document_kwargs_moves_top_level_style_fields():
+    normalized = normalize_create_document_kwargs(
+        {
+            "title": "Sample Training Summary Report",
+            "title_align": "center",
+            "document_style": {"heading_color": "000000"},
+        }
+    )
+
+    assert normalized["document_style"]["heading_color"] == "000000"
+    assert normalized["document_style"]["title_align"] == "center"
+
+
 def test_normalize_raw_block_payloads_rejects_excessive_nesting():
     nested_block: dict[str, object] = {"type": "paragraph", "text": "leaf"}
     for _ in range(34):
@@ -863,6 +1082,10 @@ def test_create_document_request_normalizes_document_style():
         document_style={
             "brief": "deep blue business report",
             "heading_color": "#1f4e79",
+            "heading_level_1_color": "0f4c81",
+            "heading_level_2_color": "4b5563",
+            "heading_bottom_border_color": "d0d7de",
+            "heading_bottom_border_size_pt": 1.25,
             "title_align": "left",
             "body_font_size": 12,
             "body_line_spacing": 1.25,
@@ -879,6 +1102,7 @@ def test_create_document_request_normalizes_document_style():
             "table_defaults": {
                 "preset": "minimal",
                 "header_fill": "#dce6f1",
+                "body_fill": "f8fafc",
                 "header_text_color": "ffffff",
                 "banded_rows": True,
                 "banded_row_fill": "eef4fa",
@@ -893,6 +1117,10 @@ def test_create_document_request_normalizes_document_style():
 
     assert request.document_style.brief == "deep blue business report"
     assert request.document_style.heading_color == "1F4E79"
+    assert request.document_style.heading_level_1_color == "0F4C81"
+    assert request.document_style.heading_level_2_color == "4B5563"
+    assert request.document_style.heading_bottom_border_color == "D0D7DE"
+    assert request.document_style.heading_bottom_border_size_pt == 1.25
     assert request.document_style.title_align == "left"
     assert request.document_style.body_font_size == 12
     assert request.document_style.body_line_spacing == 1.25
@@ -906,6 +1134,7 @@ def test_create_document_request_normalizes_document_style():
     assert request.document_style.summary_card_defaults.list_space_after == 8
     assert request.document_style.table_defaults.preset == "minimal"
     assert request.document_style.table_defaults.header_fill == "DCE6F1"
+    assert request.document_style.table_defaults.body_fill == "F8FAFC"
     assert request.document_style.table_defaults.header_text_color == "FFFFFF"
     assert request.document_style.table_defaults.banded_rows is True
     assert request.document_style.table_defaults.banded_row_fill == "EEF4FA"
@@ -1168,7 +1397,7 @@ async def test_document_toolset_smoke_export(workspace_root: Path):
     assert loaded_doc.paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert loaded_doc.paragraphs[0].runs[0].bold is True
     assert loaded_doc.paragraphs[0].runs[0].font.color.rgb == RGBColor.from_string(
-        "AA5500"
+        "000000"
     )
     assert loaded_doc.paragraphs[1].text == "Section 1"
     assert loaded_doc.paragraphs[1].runs[0].bold is True
@@ -1275,6 +1504,7 @@ async def test_create_document_tool_applies_document_style_defaults(
     table = loaded_doc.tables[0]
 
     assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.LEFT
+    assert _paragraph_run_rgb(title_paragraph) == "0F4C81"
     assert _paragraph_run_rgb(heading_paragraph) == "0F4C81"
     assert _paragraph_run_size(body_paragraph) == 12
     assert float(body_paragraph.paragraph_format.line_spacing) == pytest.approx(1.25)
@@ -1300,6 +1530,56 @@ async def test_create_document_tool_applies_document_style_defaults(
     assert table.rows[2].cells[0].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert _table_border_size(table, "top") == "8"
     assert _table_border_color(table, "top") == "7A7A7A"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_supports_unfilled_nonbold_table_headers(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-header-style")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="表头样式",
+            output_name="table-header-style.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "headers": ["Date", "Time", "Session Title"],
+                "rows": [["Sep 20", "09:00", "Kickoff"]],
+                "header_fill_enabled": False,
+                "header_text_color": "888888",
+                "header_bold": False,
+                "border_style": "minimal",
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    header_cell = loaded_doc.tables[0].rows[0].cells[0]
+
+    assert _cell_fill(header_cell) is None
+    assert _run_rgb(header_cell) == "888888"
+    assert _run_bold(header_cell) is False
 
 
 @pytest.mark.asyncio
@@ -1520,6 +1800,65 @@ async def test_create_document_tool_applies_border_style_color_mapping(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("table_template", "expected_border_size", "expected_left_margin"),
+    [
+        ("report_grid", "3", "84"),
+        ("minimal", "2", "72"),
+    ],
+)
+async def test_create_document_tool_applies_light_default_table_borders_and_margins(
+    workspace_root: Path,
+    table_template: str,
+    expected_border_size: str,
+    expected_left_margin: str,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, f"pytest-document-default-light-table-{table_template}"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Default Light Table",
+            output_name=f"default-light-table-{table_template}.docx",
+            table_template=table_template,
+        )
+    )
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=created["document"]["document_id"],
+        blocks=[
+            {
+                "type": "table",
+                "headers": ["Metric", "Value"],
+                "rows": [["North", "100"], ["South", "200"]],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=created["document"]["document_id"],
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert _table_border_size(table, "top") == expected_border_size
+    assert _table_border_color(table, "top") == "D9E1E8"
+    assert _table_cell_margin(table, "left") == expected_left_margin
+    assert _table_cell_margin(table, "right") == expected_left_margin
+
+
+@pytest.mark.asyncio
 async def test_create_document_tool_prefers_summary_block_over_document_style_defaults(
     workspace_root: Path,
 ):
@@ -1648,6 +1987,114 @@ async def test_add_blocks_tool_supports_rich_text_paragraph_runs(
     assert rich_paragraph.runs[6].font.name == "Consolas"
     assert rich_paragraph.runs[0].text == "粗体"
     assert rich_paragraph.runs[6].text == "代码"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_supports_paragraph_run_colors(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-rich-paragraph-color")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="段落颜色",
+            output_name="rich-paragraph-color.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "标题", "bold": True, "color": "666666"},
+                    {"text": ": "},
+                    {"text": "Advanced Project Management"},
+                ],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    rich_paragraph = loaded_doc.paragraphs[1]
+
+    assert rich_paragraph.runs[0].font.color.rgb == docx.shared.RGBColor.from_string(
+        "666666"
+    )
+    assert rich_paragraph.runs[2].font.color.rgb is None
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_supports_rich_text_list_items(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-rich-list")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="列表富文本",
+            output_name="rich-list.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "list",
+                "ordered": True,
+                "items": [
+                    {
+                        "runs": [
+                            {"text": "Enhance project management skills", "bold": True},
+                            {
+                                "text": " by exploring advanced methodologies such as Agile and Scrum.",
+                            },
+                        ]
+                    },
+                    "Standard retrospective and action tracking.",
+                ],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    first_item = _find_paragraph(
+        loaded_doc,
+        "1. Enhance project management skills by exploring advanced methodologies such as Agile and Scrum.",
+    )
+    second_item = _find_paragraph(loaded_doc, "2. Standard retrospective and action tracking.")
+
+    assert first_item.runs[0].text == "1. "
+    assert first_item.runs[1].bold is True
+    assert first_item.runs[1].text == "Enhance project management skills"
+    assert first_item.runs[2].bold in {False, None}
+    assert second_item.text.startswith("2. ")
 
 
 @pytest.mark.asyncio
@@ -1912,6 +2359,126 @@ async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_spl
     assert _row_has_cant_split(table.rows[0]) is True
     assert _row_has_cant_split(table.rows[1]) is True
     assert _row_has_cant_split(table.rows[2]) is True
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_supports_table_body_row_span_vertical_merge(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-row-span")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="课程日程",
+            output_name="table-row-span.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "table",
+                "headers": ["Date", "Time", "Session Title"],
+                "rows": [
+                    [
+                        {"text": "September 20", "row_span": 2},
+                        "09:00 AM - 12:00 PM",
+                        "Advanced Project Management",
+                    ],
+                    ["01:00 PM - 04:00 PM", "Stakeholder Alignment Workshop"],
+                ],
+            }
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert table.rows[1].cells[0].text == "September 20"
+    assert _raw_row_cell_vertical_merge(table.rows[1], 0) == "restart"
+    assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
+    assert table.rows[2].cells[1].text == "01:00 PM - 04:00 PM"
+    assert table.rows[2].cells[2].text == "Stakeholder Alignment Workshop"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_accepts_empty_object_placeholders_for_vertical_merge_rows(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-table-row-span-placeholder"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="课程日程占位",
+            output_name="table-row-span-placeholder.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=document_id,
+            blocks=[
+                {
+                    "type": "table",
+                    "headers": ["Date", "Time", "Session Title"],
+                    "rows": [
+                        [
+                            {"text": "September 20", "row_span": 2},
+                            "09:00 AM - 12:00 PM",
+                            "Advanced Project Management",
+                        ],
+                        [
+                            {"text": ""},
+                            "01:00 PM - 04:00 PM",
+                            "Stakeholder Alignment Workshop",
+                        ],
+                    ],
+                }
+            ],
+        )
+    )
+
+    assert result["success"] is True
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    table = loaded_doc.tables[0]
+
+    assert table.rows[1].cells[0].text == "September 20"
+    assert _raw_row_cell_vertical_merge(table.rows[1], 0) == "restart"
+    assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
+    assert table.rows[2].cells[1].text == "01:00 PM - 04:00 PM"
+    assert table.rows[2].cells[2].text == "Stakeholder Alignment Workshop"
 
 
 def test_table_renderer_sets_cant_split_value_to_true_even_when_row_had_false():
@@ -2292,6 +2859,110 @@ async def test_add_blocks_tool_does_not_absorb_long_heading_before_table_into_ta
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_does_not_absorb_numbered_heading_before_table(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-numbered-heading-before-table"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="编号标题保留",
+            output_name="numbered-heading-before-table.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {"type": "heading", "text": "III. Training Schedule", "level": 1},
+            {
+                "type": "table",
+                "headers": ["Date", "Time", "Session Title", "Trainer"],
+                "rows": [["2026-04-10", "09:00 - 12:00", "Intro", "Alice"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    paragraph_texts = [paragraph.text for paragraph in loaded_doc.paragraphs]
+    table = loaded_doc.tables[0]
+
+    assert "III. Training Schedule" in paragraph_texts[1:]
+    assert table.rows[0].cells[0].text == "Date"
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_tool_does_not_absorb_bottom_border_heading_before_table(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-bordered-heading-before-table"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="带边线标题保留",
+            output_name="bordered-heading-before-table.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[
+            {
+                "type": "heading",
+                "text": "Training Schedule",
+                "level": 1,
+                "bottom_border": True,
+                "bottom_border_color": "D0D7DE",
+            },
+            {
+                "type": "table",
+                "headers": ["Date", "Time", "Session Title", "Trainer"],
+                "rows": [["2026-04-10", "09:00 - 12:00", "Intro", "Alice"]],
+            },
+        ],
+    )
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    heading = _find_paragraph(loaded_doc, "Training Schedule")
+    table = loaded_doc.tables[0]
+
+    assert _paragraph_bottom_border_color(heading) == "D0D7DE"
+    assert table.rows[0].cells[0].text == "Date"
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_export_callback_runs(workspace_root: Path):
     pytest.importorskip("docx")
 
@@ -2363,6 +3034,299 @@ async def test_document_toolset_preserves_positional_after_export_callback(
     assert len(callback_calls) == 1
     assert Path(callback_calls[0]).exists()
     assert Path(callback_calls[0]).name == "positional-callback.docx"
+
+
+@pytest.mark.asyncio
+async def test_export_pipeline_falls_back_to_python_backend(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-render-backend-fallback")
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    document = store.create_document(
+        CreateDocumentRequest(
+            title="Backend Fallback",
+            output_name="backend-fallback.docx",
+        )
+    )
+    request = ExportDocumentRequest(document_id=document.document_id)
+    called_backends: list[str] = []
+
+    class _FailingBackend:
+        name = "node"
+
+        def render(self, _document, _output_path):
+            called_backends.append(self.name)
+            raise RuntimeError("node renderer unavailable")
+
+    class _PythonBackend:
+        name = "python"
+
+        def render(self, _document, output_path):
+            called_backends.append(self.name)
+            output_path.write_bytes(b"fallback-ok")
+            return RenderResult(backend_name=self.name, output_path=output_path)
+
+    exported_document, output_path = await export_document_via_pipeline(
+        store=store,
+        render_backends=[_FailingBackend(), _PythonBackend()],
+        request=request,
+        source="pytest",
+    )
+
+    assert called_backends == ["node", "python"]
+    assert output_path.read_bytes() == b"fallback-ok"
+    assert exported_document.status.value == "exported"
+
+
+def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-node-render-backend")
+    entry_path = workspace_dir / "dist" / "cli.js"
+    entry_path.parent.mkdir(parents=True, exist_ok=True)
+    entry_path.write_text("// fake cli", encoding="utf-8")
+
+    document = DocumentSessionStore(workspace_dir=workspace_dir).create_document(
+        CreateDocumentRequest(
+            title="Node Backend",
+            output_name="node-backend.docx",
+        )
+    )
+    document.add_block(ParagraphBlock(text="Node payload paragraph"))
+    output_path = workspace_dir / "node-output.docx"
+    payloads: list[dict[str, object]] = []
+
+    def _fake_run(command, cwd, check, capture_output, text, encoding):
+        payload_path = Path(command[2])
+        payloads.append(json.loads(payload_path.read_text(encoding="utf-8")))
+        output_path.write_bytes(b"node-docx")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch(
+        "astrbot_plugin_office_assistant.domain.document.render_backends.subprocess.run",
+        side_effect=_fake_run,
+    ) as mocked_run:
+        backend = NodeWordRenderBackend(entry_path=entry_path)
+        result = backend.render(document, output_path)
+
+    assert mocked_run.call_count == 1
+    assert result.backend_name == "node"
+    assert result.output_path == output_path
+    assert payloads[0]["version"] == "v1"
+    assert payloads[0]["render_mode"] == "structured"
+    assert payloads[0]["document_id"] == document.document_id
+    assert payloads[0]["blocks"][0]["type"] == "paragraph"
+
+
+def test_build_document_render_payload_keeps_only_explicit_header_footer_overrides():
+    document = DocumentSessionStore().create_document(
+        CreateDocumentRequest(
+            title="Payload Header Footer",
+            header_footer={"show_page_number": False},
+        )
+    )
+    document.add_block(
+        SectionBreakBlock(
+            header_footer=HeaderFooterConfig(show_page_number=False),
+        )
+    )
+
+    payload = build_document_render_payload(document)
+
+    assert payload["metadata"]["header_footer"] == {"show_page_number": False}
+    assert payload["blocks"][0]["header_footer"] == {"show_page_number": False}
+
+
+def test_build_document_render_backends_reserves_excel_for_python():
+    backends = build_document_render_backends("excel")
+
+    assert [backend.name for backend in backends] == ["python-excel"]
+    with pytest.raises(
+        DocumentRenderBackendError,
+        match="Excel render backend is reserved for Python implementation",
+    ):
+        backends[0].render(MagicMock(), Path("out.xlsx"))
+
+
+def test_node_render_backend_renders_sections_and_table_styles(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-render-backend-structured-docx",
+    )
+    renderer_entry = (
+        Path(__file__).resolve().parents[1]
+        / "word_renderer_js"
+        / "dist"
+        / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+
+    output_path = workspace_dir / "node-structured.docx"
+    payload_path = workspace_dir / "node-structured.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "node-structured-doc",
+                "metadata": {
+                    "title": "Q3 经营复盘报告",
+                    "theme_name": "business_report",
+                    "table_template": "report_grid",
+                    "density": "comfortable",
+                    "document_style": {
+                        "heading_color": "000000",
+                        "heading_level_1_color": "0F4C81",
+                        "heading_bottom_border_color": "CBD5E1",
+                        "heading_bottom_border_size_pt": 1.5,
+                        "table_defaults": {
+                            "body_fill": "F8FAFC",
+                            "border_style": "minimal",
+                        },
+                    },
+                    "header_footer": {
+                        "header_left": "Q3 经营复盘报告 | 战略与增长委员会",
+                        "header_right": "机密 · 2024 年 10 月",
+                        "header_border_bottom": True,
+                        "footer_left": "集团战略部 · 内部机密文件",
+                        "footer_right": "第 {PAGE} 页",
+                        "footer_border_top": True,
+                    },
+                },
+                "blocks": [
+                    {
+                        "type": "heading",
+                        "text": "一、经营总览",
+                        "level": 1,
+                        "bottom_border": True,
+                    },
+                    {
+                        "type": "paragraph",
+                        "runs": [
+                            {"text": "核心结论：", "bold": True},
+                            {"text": "Q3 整体经营保持增长。"},
+                        ],
+                    },
+                    {
+                        "type": "table",
+                        "headers": ["日期", "时间", "课程"],
+                        "header_fill_enabled": False,
+                        "header_text_color": "808080",
+                        "header_bold": False,
+                        "rows": [
+                            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+                            ["13:00", "课程 B"],
+                        ],
+                        "border_style": "minimal",
+                    },
+                    {
+                        "type": "section_break",
+                        "start_type": "new_page",
+                        "page_orientation": "landscape",
+                        "restart_page_numbering": True,
+                        "header_footer": {
+                            "show_page_number": False,
+                            "header_left": "第二节页眉",
+                            "footer_left": "第二节页脚",
+                        },
+                    },
+                    {
+                        "type": "paragraph",
+                        "text": "第二节内容",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    loaded_doc = docx.Document(output_path)
+    title_paragraph = _find_paragraph(loaded_doc, "Q3 经营复盘报告")
+    header_paragraph = loaded_doc.sections[0].header.paragraphs[0]
+    footer_texts = _story_texts(loaded_doc.sections[0].footer)
+    table = loaded_doc.tables[0]
+
+    assert _paragraph_run_rgb(title_paragraph) == "000000"
+    assert _paragraph_run_rgb(_find_paragraph(loaded_doc, "一、经营总览")) == "0F4C81"
+    assert _paragraph_bottom_border_color(_find_paragraph(loaded_doc, "一、经营总览")) == (
+        "CBD5E1"
+    )
+    assert header_paragraph.text == "Q3 经营复盘报告 | 战略与增长委员会\t机密 · 2024 年 10 月"
+    assert any(
+        text.startswith("集团战略部 · 内部机密文件") for text in footer_texts
+    )
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+    assert _cell_vertical_merge(table.rows[1].cells[0]) == "restart"
+    assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
+    assert _cell_fill(table.rows[1].cells[1]) == "F7FBFF"
+    assert _section_page_number_start(loaded_doc.sections[1]) == 1
+    assert (
+        loaded_doc.sections[1].header.paragraphs[0].text
+        == "第二节页眉\t机密 · 2024 年 10 月"
+    )
+    assert loaded_doc.sections[1].footer.paragraphs[0].text == "第二节页脚"
+    assert "PAGE" not in loaded_doc.sections[1].footer._element.xml
+
+
+def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-render-backend-ppt-placeholder",
+    )
+    renderer_entry = (
+        Path(__file__).resolve().parents[1]
+        / "word_renderer_js"
+        / "dist"
+        / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+
+    output_path = workspace_dir / "node-structured.pptx"
+    payload_path = workspace_dir / "node-structured-ppt.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "node-structured-ppt",
+                "format": "ppt",
+                "metadata": {
+                    "title": "PPT 占位",
+                    "theme_name": "business_report",
+                    "table_template": "report_grid",
+                    "density": "comfortable",
+                    "document_style": {},
+                    "header_footer": {},
+                },
+                "blocks": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "FORMAT_NOT_IMPLEMENTED"
+    assert "PPT structured renderer" in error_payload["message"]
 
 
 @pytest.mark.asyncio
@@ -2928,7 +3892,7 @@ def test_word_document_builder_assigns_builtin_heading_styles(
 
     document = DocumentModel(
         document_id="heading-style-test",
-        metadata=DocumentMetadata(),
+        metadata=DocumentMetadata(title="默认标题"),
         blocks=[
             HeadingBlock(text="一级标题", level=1),
             HeadingBlock(text="三级标题", level=3),
@@ -2938,13 +3902,271 @@ def test_word_document_builder_assigns_builtin_heading_styles(
     WordDocumentBuilder().build(document, output_path)
 
     loaded_doc = docx.Document(output_path)
+    title_paragraph = _find_paragraph(loaded_doc, "默认标题")
     heading_one = _find_paragraph(loaded_doc, "一级标题")
     heading_three = _find_paragraph(loaded_doc, "三级标题")
 
     assert heading_one.style.style_id == "Heading1"
     assert heading_three.style.style_id == "Heading3"
+    assert _paragraph_run_rgb(title_paragraph) == "000000"
     assert heading_one.runs[0].bold is True
-    assert _paragraph_run_rgb(heading_one) == "1F4E79"
+    assert _paragraph_run_rgb(heading_one) == "000000"
+
+
+def test_word_document_builder_applies_heading_bottom_border(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-agent-tools-heading-bottom-border",
+    )
+    output_path = workspace_dir / "heading-bottom-border.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="heading-bottom-border-test",
+        metadata=DocumentMetadata(),
+        blocks=[
+            HeadingBlock(
+                text="I. Overview",
+                level=1,
+                bottom_border=True,
+                bottom_border_color="CCCCCC",
+            ),
+            ParagraphBlock(text="Body paragraph."),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    heading = _find_paragraph(loaded_doc, "I. Overview")
+    body = _find_paragraph(loaded_doc, "Body paragraph.")
+
+    assert _paragraph_bottom_border_color(heading) == "CCCCCC"
+    assert _paragraph_bottom_border_color(body) is None
+
+
+def test_word_document_builder_supports_level_heading_colors_and_border_size(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-agent-tools-heading-theme-variants",
+    )
+    output_path = workspace_dir / "heading-theme-variants.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="heading-theme-variants-test",
+        metadata=DocumentMetadata(
+            document_style={
+                "heading_color": "000000",
+                "heading_level_1_color": "0F4C81",
+                "heading_level_2_color": "4B5563",
+                "heading_bottom_border_color": "CBD5E1",
+                "heading_bottom_border_size_pt": 1.5,
+            }
+        ),
+        blocks=[
+            HeadingBlock(text="一、经营总览", level=1, bottom_border=True),
+            HeadingBlock(text="1.1 各区营收完成情况", level=2, bottom_border=True),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    heading_one = _find_paragraph(loaded_doc, "一、经营总览")
+    heading_two = _find_paragraph(loaded_doc, "1.1 各区营收完成情况")
+
+    assert _paragraph_run_rgb(heading_one) == "0F4C81"
+    assert _paragraph_run_rgb(heading_two) == "4B5563"
+    assert _paragraph_bottom_border_color(heading_one) == "CBD5E1"
+    assert _paragraph_bottom_border_size(heading_one) == "12"
+
+
+def test_word_document_builder_supports_header_footer_split_layout_and_dividers(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-header-footer-split-layout"
+    )
+    output_path = workspace_dir / "header-footer-split-layout.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="header-footer-split-layout-test",
+        metadata=DocumentMetadata(
+            title="Q3 经营复盘报告",
+            header_footer=HeaderFooterConfig(
+                header_left="Q3 经营复盘报告 | 战略与增长委员会",
+                header_right="机密 · 2024 年 10 月",
+                header_border_bottom=True,
+                header_border_color="D0D7DE",
+                footer_left="集团战略部 · 内部机密文件",
+                footer_right="第 {PAGE} 页",
+                footer_border_top=True,
+                footer_border_color="D0D7DE",
+            ),
+        ),
+        blocks=[ParagraphBlock(text="正文")],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    header_text = loaded_doc.sections[0].header.paragraphs[0].text
+    footer_text = loaded_doc.sections[0].footer.paragraphs[0].text
+
+    assert "Q3 经营复盘报告 | 战略与增长委员会" in header_text
+    assert "机密 · 2024 年 10 月" in header_text
+    assert "集团战略部 · 内部机密文件" in footer_text
+    assert "第 " in footer_text
+    assert _paragraph_bottom_border_color(loaded_doc.sections[0].header.paragraphs[0]) == (
+        "D0D7DE"
+    )
+    assert _paragraph_top_border_color(loaded_doc.sections[0].footer.paragraphs[0]) == (
+        "D0D7DE"
+    )
+    assert _story_has_field_code(loaded_doc.sections[0].footer, "PAGE") is True
+
+
+def test_word_document_builder_applies_table_body_cell_overrides(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-table-body-cell-overrides"
+    )
+    output_path = workspace_dir / "table-body-cell-overrides.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import TableCell
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="table-body-cell-overrides-test",
+        metadata=DocumentMetadata(
+            document_style={
+                "table_defaults": {
+                    "body_fill": "F8FAFC",
+                }
+            }
+        ),
+        blocks=[
+            TableBlock(
+                headers=["区域", "预算完成率"],
+                rows=[
+                    [
+                        "华东",
+                        TableCell(
+                            text="112%",
+                            fill="DCFCE7",
+                            text_color="166534",
+                            bold=True,
+                            align="right",
+                        ),
+                    ]
+                ],
+            )
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    table = loaded_doc.tables[0]
+
+    assert _cell_fill(table.rows[1].cells[0]) == "F8FAFC"
+    assert _cell_fill(table.rows[1].cells[1]) == "DCFCE7"
+    assert _run_rgb(table.rows[1].cells[1]) == "166534"
+    assert _run_bold(table.rows[1].cells[1]) is True
+    assert table.rows[1].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+
+
+def test_word_document_builder_renders_accent_box_and_metric_cards(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-accent-box-metric-cards"
+    )
+    output_path = workspace_dir / "accent-box-metric-cards.docx"
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import (
+        AccentBoxBlock,
+        MetricCard,
+        MetricCardsBlock,
+    )
+    from astrbot_plugin_office_assistant.document_core.models.document import (
+        DocumentMetadata,
+        DocumentModel,
+    )
+
+    document = DocumentModel(
+        document_id="accent-box-metric-cards-test",
+        metadata=DocumentMetadata(),
+        blocks=[
+            AccentBoxBlock(
+                title="核心摘要",
+                text="Q3 整体经营表现稳健，增长质量继续改善。",
+                accent_color="1F4E79",
+                fill_color="F8FAFC",
+            ),
+            MetricCardsBlock(
+                accent_color="1F4E79",
+                fill_color="F8FAFC",
+                metrics=[
+                    MetricCard(
+                        label="营业收入",
+                        value="¥4.82 亿",
+                        delta="↑ 18.4% YoY",
+                        delta_color="15803D",
+                    ),
+                    MetricCard(
+                        label="毛利率",
+                        value="32.1%",
+                        delta="↓ 0.3pp vs Q2",
+                        delta_color="DC2626",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    WordDocumentBuilder().build(document, output_path)
+
+    loaded_doc = docx.Document(output_path)
+    accent_table = loaded_doc.tables[0]
+    metric_table = loaded_doc.tables[1]
+
+    assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert _cell_fill(metric_table.rows[0].cells[0]) == "F8FAFC"
+    assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
+    assert metric_table.rows[0].cells[0].paragraphs[1].text == "¥4.82 亿"
+    assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
 
 
 def test_word_document_builder_section_break_creates_new_section_with_override(
@@ -3990,6 +5212,114 @@ def test_table_schema_allows_empty_placeholder_tables():
     assert section.rows == []
     assert block.headers == []
     assert block.rows == []
+
+
+def test_add_table_request_supports_vertical_merge_cells():
+    request = AddTableRequest(
+        document_id="doc-1",
+        headers=["日期", "时间", "课程"],
+        rows=[
+            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+            ["13:00", "课程 B"],
+        ],
+        header_fill_enabled=False,
+        header_bold=False,
+    )
+
+    assert request.rows[0][0].row_span == 2
+    assert request.header_fill_enabled is False
+    assert request.header_bold is False
+
+
+def test_add_table_request_accepts_empty_placeholder_cells_for_vertical_merge_rows():
+    request = AddTableRequest(
+        document_id="doc-1",
+        headers=["日期", "时间", "课程"],
+        rows=[
+            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+            ["", "13:00", "课程 B"],
+        ],
+    )
+
+    assert request.rows[1][0] == ""
+    assert request.rows[1][1] == "13:00"
+
+
+def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_styles():
+    request = AddBlocksRequest(
+        document_id="doc-1",
+        blocks=[
+            {
+                "type": "accent_box",
+                "title": "核心摘要",
+                "items": [
+                    {
+                        "runs": [
+                            {"text": "营业收入：", "bold": True},
+                            {"text": "保持增长"},
+                        ]
+                    }
+                ],
+                "accent_color": "1F4E79",
+                "fill_color": "F8FAFC",
+            },
+            {
+                "type": "metric_cards",
+                "metrics": [
+                    {
+                        "label": "营业收入",
+                        "value": "¥4.82 亿",
+                        "delta": "↑ 18.4% YoY",
+                        "delta_color": "15803D",
+                    }
+                ],
+                "accent_color": "1F4E79",
+            },
+            {
+                "type": "table",
+                "headers": ["区域", "预算完成率"],
+                "rows": [
+                    [
+                        "华东",
+                        {
+                            "text": "112%",
+                            "fill": "DCFCE7",
+                            "text_color": "166534",
+                            "bold": True,
+                            "align": "right",
+                        },
+                    ]
+                ],
+            },
+        ],
+    )
+
+    accent_box = request.blocks[0]
+    metric_cards = request.blocks[1]
+    table = request.blocks[2]
+
+    assert accent_box.accent_color == "1F4E79"
+    assert accent_box.items[0].runs[0].bold is True
+    assert metric_cards.metrics[0].delta_color == "15803D"
+    assert table.rows[0][1].fill == "DCFCE7"
+    assert table.rows[0][1].text_color == "166534"
+    assert table.rows[0][1].bold is True
+    assert table.rows[0][1].align == "right"
+
+
+def test_add_table_request_rejects_vertical_merge_rows_that_exceed_header_columns():
+    with pytest.raises(
+        ValidationError,
+        match=r"table row 2 exceeds column count \(2\)",
+    ):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["日期", "课程"],
+            rows=[
+                [{"text": "第一天", "row_span": 2}, "课程 A"],
+                ["09:00", "课程 B"],
+            ],
+        )
 
 
 def test_document_session_store_preserves_grouped_headers_for_table_blocks():

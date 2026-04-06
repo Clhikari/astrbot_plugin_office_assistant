@@ -149,6 +149,31 @@
             }
         }
     },
+    "render_settings": {
+        "description": "Word 渲染设置",
+        "type": "object",
+        "hint": "控制 Word 导出优先使用的渲染后端和回退行为",
+        "items": {
+            "word_render_backend": {
+                "description": "Word 渲染后端",
+                "type": "string",
+                "hint": "可选 node 或 python。node 会优先调用仓库内的 JS 渲染器；python 使用现有 python-docx 渲染链。",
+                "default": "node"
+            },
+            "word_render_fallback_enabled": {
+                "description": "启用 Python 回退",
+                "type": "bool",
+                "hint": "开启后，当 Node 渲染失败时会自动回退到 Python 渲染器，优先保证导出成功。",
+                "default": true
+            },
+            "node_renderer_entry": {
+                "description": "Node 渲染器入口",
+                "type": "string",
+                "hint": "可选，填写已构建的 Node CLI 路径。留空时默认尝试插件目录下的 word_renderer_js/dist/cli.js。",
+                "default": ""
+            }
+        }
+    },
     "debug_settings": {
         "description": "调试设置",
         "type": "object",

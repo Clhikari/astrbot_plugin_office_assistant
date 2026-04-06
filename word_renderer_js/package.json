@@ -1,0 +1,19 @@
+{
+  "name": "astrbot-office-word-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "docx": "^9.5.1",
+    "docxtemplater": "^3.67.1",
+    "pizzip": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}

@@ -28,6 +28,12 @@ class PluginSettings:
     recent_text_max_entries: int
     recent_text_cleanup_interval_seconds: int
     upload_session_cleanup_interval_seconds: int
+    word_render_backend: str
+    word_render_fallback_enabled: bool
+    ppt_render_backend: str
+    excel_render_backend: str
+    js_renderer_entry: str
+    node_renderer_entry: str
 
 
 def load_plugin_settings(config) -> PluginSettings:
@@ -35,6 +41,7 @@ def load_plugin_settings(config) -> PluginSettings:
     trigger_settings = config.get("trigger_settings", {})
     preview_settings = config.get("preview_settings", {})
     path_settings = config.get("path_settings", {})
+    render_settings = config.get("render_settings", {})
 
     auto_delete = file_settings.get("auto_delete_files", True)
     max_file_size = (
@@ -75,6 +82,25 @@ def load_plugin_settings(config) -> PluginSettings:
         10,
         min(300, upload_session_ttl_seconds),
     )
+    word_render_backend = str(render_settings.get("word_render_backend", "node"))
+    if word_render_backend not in {"node", "python"}:
+        word_render_backend = "node"
+    word_render_fallback_enabled = bool(
+        render_settings.get("word_render_fallback_enabled", True)
+    )
+    ppt_render_backend = str(render_settings.get("ppt_render_backend", "node"))
+    if ppt_render_backend not in {"node", "python"}:
+        ppt_render_backend = "node"
+    excel_render_backend = str(render_settings.get("excel_render_backend", "python"))
+    if excel_render_backend not in {"python", "node"}:
+        excel_render_backend = "python"
+    js_renderer_entry = str(
+        render_settings.get(
+            "js_renderer_entry",
+            render_settings.get("node_renderer_entry", ""),
+        )
+    ).strip()
+    node_renderer_entry = js_renderer_entry
 
     return PluginSettings(
         auto_delete=auto_delete,
@@ -96,6 +122,12 @@ def load_plugin_settings(config) -> PluginSettings:
         recent_text_max_entries=recent_text_max_entries,
         recent_text_cleanup_interval_seconds=recent_text_cleanup_interval_seconds,
         upload_session_cleanup_interval_seconds=upload_session_cleanup_interval_seconds,
+        word_render_backend=word_render_backend,
+        word_render_fallback_enabled=word_render_fallback_enabled,
+        ppt_render_backend=ppt_render_backend,
+        excel_render_backend=excel_render_backend,
+        js_renderer_entry=js_renderer_entry,
+        node_renderer_entry=node_renderer_entry,
     )
 
 

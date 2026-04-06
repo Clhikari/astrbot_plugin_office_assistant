@@ -1,0 +1,87 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "render_mode",
+    "document_id",
+    "metadata",
+    "blocks"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "render_mode": {
+      "type": "string",
+      "const": "structured"
+    },
+    "document_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "title",
+        "theme_name",
+        "table_template",
+        "density",
+        "document_style",
+        "header_footer"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "preferred_filename": {
+          "type": "string"
+        },
+        "theme_name": {
+          "type": "string"
+        },
+        "table_template": {
+          "type": "string"
+        },
+        "density": {
+          "type": "string"
+        },
+        "accent_color": {
+          "type": "string"
+        },
+        "document_style": {
+          "type": "object"
+        },
+        "header_footer": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

@@ -5,16 +5,31 @@ __all__ = [
     "BlockNormalizationContext",
     "BlockNormalizeHook",
     "CreateDocumentRequest",
+    "DocumentFormat",
+    "DocumentRenderBackend",
+    "DocumentRenderBackendConfig",
+    "DocumentRenderBackendError",
     "DocumentSessionStore",
     "DocumentSummary",
     "ExportDocumentRequest",
     "ExportDocumentResult",
     "ExportPreparationContext",
+    "NodeDocumentRenderBackend",
+    "NodeWordRenderBackend",
+    "PythonExcelRenderBackend",
+    "PythonPptRenderBackend",
+    "PythonWordRenderBackend",
     "FinalizeDocumentRequest",
+    "RenderResult",
     "ToolResult",
+    "WordRenderBackend",
+    "WordRenderBackendConfig",
     "build_document_summary",
+    "build_document_render_backends",
     "build_header_footer_schema",
+    "build_word_render_backends",
     "export_document_via_pipeline",
+    "normalize_create_document_kwargs",
     "normalize_raw_block_payloads",
     "run_after_export_hooks",
     "run_before_export_hooks",
@@ -35,6 +50,25 @@ def __getattr__(name: str):
 
         return export_document_via_pipeline
     if name in {
+        "DocumentFormat",
+        "DocumentRenderBackend",
+        "DocumentRenderBackendConfig",
+        "DocumentRenderBackendError",
+        "NodeDocumentRenderBackend",
+        "NodeWordRenderBackend",
+        "PythonExcelRenderBackend",
+        "PythonPptRenderBackend",
+        "PythonWordRenderBackend",
+        "RenderResult",
+        "WordRenderBackend",
+        "WordRenderBackendConfig",
+        "build_document_render_backends",
+        "build_word_render_backends",
+    }:
+        from .render_backends import __dict__ as render_backends_namespace
+
+        return render_backends_namespace[name]
+    if name in {
         "AddBlocksRequest",
         "CreateDocumentRequest",
         "DocumentSummary",
@@ -44,6 +78,7 @@ def __getattr__(name: str):
         "ToolResult",
         "build_document_summary",
         "build_header_footer_schema",
+        "normalize_create_document_kwargs",
         "normalize_raw_block_payloads",
     }:
         from .contracts import __dict__ as contracts_namespace

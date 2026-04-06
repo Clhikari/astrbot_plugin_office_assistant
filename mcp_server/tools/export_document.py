@@ -1,8 +1,13 @@
 from mcp.server.fastmcp import FastMCP
 
-from ...document_core.builders.word_builder import WordDocumentBuilder
 from ...domain.document.export_pipeline import export_document_via_pipeline
 from ...domain.document.hooks import AfterExportHook, BeforeExportHook
+from ...domain.document.render_backends import (
+    DocumentRenderBackend,
+    DocumentRenderBackendConfig,
+    build_document_render_backends,
+    build_word_render_backends,
+)
 from ...domain.document.session_store import DocumentSessionStore
 from ...domain.document.contracts import (
     ExportDocumentRequest,
@@ -17,8 +22,10 @@ def register_export_document_tool(
     *,
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
+    render_backends: list[DocumentRenderBackend] | None = None,
+    render_backend_config: DocumentRenderBackendConfig | None = None,
 ) -> None:
-    builder = WordDocumentBuilder()
+    resolved_render_backends = render_backends or build_word_render_backends()
 
     @server.tool(
         name="export_document",
@@ -37,9 +44,18 @@ def register_export_document_tool(
             output_dir=output_dir,
             output_name=output_name,
         )
+        document_for_routing = store.require_document(document_id)
+        current_render_backends = (
+            build_document_render_backends(
+                document_for_routing.format,
+                render_backend_config,
+            )
+            if render_backend_config is not None or document_for_routing.format != "word"
+            else resolved_render_backends
+        )
         document, output_path = await export_document_via_pipeline(
             store=store,
-            builder=builder,
+            render_backends=current_render_backends,
             request=request,
             before_export_hooks=before_export_hooks or [],
             after_export_hooks=after_export_hooks or [],

@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
@@ -8,9 +9,13 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
-from ..document_core.builders.word_builder import WordDocumentBuilder
 from ..domain.document.export_pipeline import export_document_via_pipeline
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..domain.document.render_backends import (
+    build_document_render_backends,
+    build_word_render_backends,
+    get_render_backend_config,
+)
 from ..domain.document.session_store import DocumentSessionStore
 from ..domain.document.contracts import (
     AddBlocksRequest,
@@ -21,6 +26,7 @@ from ..domain.document.contracts import (
     ToolResult,
     build_document_summary,
     build_header_footer_schema,
+    normalize_create_document_kwargs,
     normalize_raw_block_payloads,
 )
 
@@ -85,9 +91,10 @@ class CreateDocumentTool(DocumentToolBase):
     name: str = "create_document"
     description: str = (
         "Create a draft Word document session and return its document_id. "
-        "Use this before adding headings, paragraphs, lists, tables, or summary cards. "
+        "Use this before adding headings, paragraphs, accent boxes, metric cards, lists, tables, or summary cards. "
         "For whole-document styling, put document-wide defaults in document_style and keep "
-        "table block fields for local overrides."
+        "table block fields for local overrides. document_style.table_defaults does not "
+        "accept table-only flags such as header_fill_enabled or header_bold."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -130,11 +137,27 @@ class CreateDocumentTool(DocumentToolBase):
                     "properties": {
                         "brief": {
                             "type": "string",
-                            "description": "Optional natural-language style brief stored as document metadata for future preset mapping. Explicit document_style fields control rendering today.",
+                            "description": "Optional natural-language style brief stored as document metadata. If the user describes visual intent in plain language, convert it into explicit document_style fields when possible.",
                         },
                         "heading_color": {
                             "type": "string",
-                            "description": "Optional 6-digit hex color for heading text, such as 1F4E79.",
+                            "description": "Optional 6-digit hex color for the document title and heading text. Default is 000000; natural-language requests like 黑色标题 or 深蓝标题 should be mapped here.",
+                        },
+                        "heading_level_1_color": {
+                            "type": "string",
+                            "description": "Optional 6-digit hex color override for level-1 headings.",
+                        },
+                        "heading_level_2_color": {
+                            "type": "string",
+                            "description": "Optional 6-digit hex color override for level-2 headings.",
+                        },
+                        "heading_bottom_border_color": {
+                            "type": "string",
+                            "description": "Optional 6-digit hex default color for heading divider lines.",
+                        },
+                        "heading_bottom_border_size_pt": {
+                            "type": "number",
+                            "description": "Optional default thickness in points for heading divider lines.",
                         },
                         "title_align": {
                             "type": "string",
@@ -191,7 +214,7 @@ class CreateDocumentTool(DocumentToolBase):
                         },
                         "table_defaults": {
                             "type": "object",
-                            "description": "Optional default table styling applied unless a table block overrides it.",
+                            "description": "Optional default table styling applied unless a table block overrides it. Use this only for shared defaults; table-only flags like header_fill_enabled and header_bold belong on each table block.",
                             "properties": {
                                 "preset": {
                                     "type": "string",
@@ -205,6 +228,10 @@ class CreateDocumentTool(DocumentToolBase):
                                 "header_fill": {
                                     "type": "string",
                                     "description": "Optional 6-digit hex color for default table header backgrounds.",
+                                },
+                                "body_fill": {
+                                    "type": "string",
+                                    "description": "Optional 6-digit hex color for default table body cell backgrounds.",
                                 },
                                 "header_text_color": {
                                     "type": "string",
@@ -253,22 +280,27 @@ class CreateDocumentTool(DocumentToolBase):
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
+        normalized_kwargs = normalize_create_document_kwargs(kwargs)
         session_id = kwargs.get("session_id")
         if not session_id and context is not None:
             event = getattr(getattr(context, "context", None), "event", None)
             session_id = getattr(event, "unified_msg_origin", "")
         request = CreateDocumentRequest(
             session_id=str(session_id or ""),
-            title=str(kwargs.get("title") or ""),
+            title=str(normalized_kwargs.get("title") or ""),
             output_name=str(
-                kwargs.get("output_name") or kwargs.get("title") or "document.docx"
+                normalized_kwargs.get("output_name")
+                or normalized_kwargs.get("title")
+                or "document.docx"
             ),
-            theme_name=str(kwargs.get("theme_name") or "business_report"),
-            table_template=str(kwargs.get("table_template") or "report_grid"),
-            density=str(kwargs.get("density") or "comfortable"),
-            accent_color=str(kwargs.get("accent_color") or ""),
-            header_footer=dict(kwargs.get("header_footer") or {}),
-            document_style=dict(kwargs.get("document_style") or {}),
+            theme_name=str(normalized_kwargs.get("theme_name") or "business_report"),
+            table_template=str(
+                normalized_kwargs.get("table_template") or "report_grid"
+            ),
+            density=str(normalized_kwargs.get("density") or "comfortable"),
+            accent_color=str(normalized_kwargs.get("accent_color") or ""),
+            header_footer=dict(normalized_kwargs.get("header_footer") or {}),
+            document_style=dict(normalized_kwargs.get("document_style") or {}),
         )
         document = self.store.create_document(request)
         return _dump_result(
@@ -285,12 +317,13 @@ class AddBlocksTool(DocumentToolBase):
     name: str = "add_blocks"
     description: str = (
         "Append one or more blocks in order. Use this for mixed content such as "
-        "heading, paragraph, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
+        "heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
         "not as a separate heading block. For table styling, use table-specific fields like "
-        "header_fill, header_text_color, banded_rows, first_column_bold, table_align, "
-        "border_style, and caption_emphasis when the user requests a custom visual style."
+        "header_fill, header_text_color, header_bold, banded_rows, first_column_bold, table_align, "
+        "border_style, caption_emphasis, and row_span when the user requests a custom visual style. "
+        "header_fill_enabled and header_bold are table block fields, not document_style.table_defaults fields."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -302,7 +335,7 @@ class AddBlocksTool(DocumentToolBase):
                 },
                 "blocks": {
                     "type": "array",
-                    "description": "Ordered block list. Supported block types: heading, paragraph, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
+                    "description": "Ordered block list. Supported block types: heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -310,7 +343,7 @@ class AddBlocksTool(DocumentToolBase):
                             "text": {"type": "string"},
                             "runs": {
                                 "type": "array",
-                                "description": "Optional inline rich-text runs for paragraph blocks.",
+                                "description": "Optional inline rich-text runs for paragraph or list item content.",
                                 "items": {
                                     "type": "object",
                                     "properties": {
@@ -319,14 +352,52 @@ class AddBlocksTool(DocumentToolBase):
                                         "italic": {"type": "boolean"},
                                         "underline": {"type": "boolean"},
                                         "code": {"type": "boolean"},
+                                        "color": {
+                                            "type": "string",
+                                            "description": "Optional 6-digit hex color for this run, such as 666666.",
+                                        },
                                     },
                                     "required": ["text"],
                                 },
                             },
                             "level": {"type": "number"},
+                            "bottom_border": {"type": "boolean"},
+                            "bottom_border_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex color for a heading bottom border, such as D0D7DE.",
+                            },
+                            "bottom_border_size_pt": {
+                                "type": "number",
+                                "description": "Optional heading bottom border thickness in points.",
+                            },
                             "items": {
                                 "type": "array",
-                                "items": {"type": "string"},
+                                "items": {
+                                    "anyOf": [
+                                        {"type": "string"},
+                                        {
+                                            "type": "object",
+                                            "properties": {
+                                                "text": {"type": "string"},
+                                                "runs": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "text": {"type": "string"},
+                                                            "bold": {"type": "boolean"},
+                                                            "italic": {"type": "boolean"},
+                                                            "underline": {"type": "boolean"},
+                                                            "code": {"type": "boolean"},
+                                                            "color": {"type": "string"},
+                                                        },
+                                                        "required": ["text"],
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    ]
+                                },
                             },
                             "ordered": {"type": "boolean"},
                             "headers": {
@@ -337,7 +408,39 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "array",
                                 "items": {
                                     "type": "array",
-                                    "items": {"type": "string"},
+                                    "items": {
+                                        "anyOf": [
+                                            {"type": "string"},
+                                            {
+                                                "type": "object",
+                                                "properties": {
+                                                    "text": {"type": "string"},
+                                                    "row_span": {
+                                                        "type": "integer",
+                                                        "minimum": 1,
+                                                        "description": "Optional row span for vertically merged body cells.",
+                                                    },
+                                                    "fill": {
+                                                        "type": "string",
+                                                        "description": "Optional 6-digit hex fill color for this body cell.",
+                                                    },
+                                                    "text_color": {
+                                                        "type": "string",
+                                                        "description": "Optional 6-digit hex text color for this body cell.",
+                                                    },
+                                                    "bold": {
+                                                        "type": "boolean",
+                                                        "description": "Optional bold override for this body cell.",
+                                                    },
+                                                    "align": {
+                                                        "type": "string",
+                                                        "enum": ["left", "center", "right"],
+                                                        "description": "Optional alignment override for this body cell.",
+                                                    },
+                                                },
+                                            },
+                                        ]
+                                    },
                                 },
                             },
                             "header_groups": {
@@ -363,9 +466,17 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "string",
                                 "description": "Optional 6-digit hex color for the header row background, such as 1F4E79.",
                             },
+                            "header_fill_enabled": {
+                                "type": "boolean",
+                                "description": "Set false to keep the header row white or unfilled.",
+                            },
                             "header_text_color": {
                                 "type": "string",
                                 "description": "Optional 6-digit hex color for the header row text, such as FFFFFF.",
+                            },
+                            "header_bold": {
+                                "type": "boolean",
+                                "description": "Optional flag to control whether header text is bold.",
                             },
                             "banded_rows": {
                                 "type": "boolean",
@@ -401,6 +512,39 @@ class AddBlocksTool(DocumentToolBase):
                             "title": {
                                 "type": "string",
                                 "description": "Optional paragraph card title, or table title alias for table blocks.",
+                            },
+                            "accent_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex accent color for accent_box or metric_cards blocks.",
+                            },
+                            "fill_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex fill color for accent_box or metric_cards blocks.",
+                            },
+                            "title_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex title color for accent_box blocks.",
+                            },
+                            "metrics": {
+                                "type": "array",
+                                "description": "Metric card definitions for metric_cards blocks.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "value": {"type": "string"},
+                                        "delta": {"type": "string"},
+                                        "note": {"type": "string"},
+                                        "value_color": {"type": "string"},
+                                        "delta_color": {"type": "string"},
+                                        "fill_color": {"type": "string"},
+                                    },
+                                    "required": ["label", "value"],
+                                },
+                            },
+                            "label_color": {
+                                "type": "string",
+                                "description": "Optional 6-digit hex label color for metric_cards blocks.",
                             },
                             "column_widths": {
                                 "type": "array",
@@ -556,7 +700,10 @@ class ExportDocumentTool(DocumentToolBase):
             "required": ["document_id"],
         }
     )
-    builder: WordDocumentBuilder = Field(default_factory=WordDocumentBuilder)
+    render_backends: list[Any] = Field(
+        default_factory=build_word_render_backends
+    )
+    render_backend_config: Any | None = None
     before_export_hooks: list[BeforeExportHook] = Field(default_factory=list)
     after_export_hooks: list[AfterExportHook] = Field(default_factory=list)
     after_export: (
@@ -572,9 +719,20 @@ class ExportDocumentTool(DocumentToolBase):
                 output_dir=str(kwargs.get("output_dir") or ""),
                 output_name=str(kwargs.get("output_name") or ""),
             )
+            document_for_routing = self.store.require_document(request.document_id)
+            resolved_render_backends = (
+                build_document_render_backends(
+                    document_for_routing.format,
+                    self.render_backend_config
+                    or get_render_backend_config(self.store),
+                )
+                if self.render_backend_config is not None
+                or document_for_routing.format != "word"
+                else self.render_backends
+            )
             document, output_path = await export_document_via_pipeline(
                 store=self.store,
-                builder=self.builder,
+                render_backends=resolved_render_backends,
                 request=request,
                 before_export_hooks=self.before_export_hooks,
                 after_export_hooks=self.after_export_hooks,
