@@ -20,6 +20,9 @@ from astrbot_plugin_office_assistant.constants import (
 from astrbot_plugin_office_assistant.domain.document.render_backends import (
     DocumentRenderBackendConfig,
 )
+from astrbot_plugin_office_assistant.domain.document.session_store import (
+    get_document_style_defaults,
+)
 from astrbot_plugin_office_assistant.office_generator import OfficeGenerator
 from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
@@ -516,8 +519,6 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.upload_session_ttl_seconds == 600
         assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.settings.upload_session_cleanup_interval_seconds == 300
-        assert runtime.settings.word_render_backend == "node"
-        assert runtime.settings.word_render_fallback_enabled is True
         assert runtime.settings.ppt_render_backend == "node"
         assert runtime.settings.excel_render_backend == "python"
         assert runtime.settings.js_renderer_entry == ""
@@ -526,10 +527,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
             for tool in runtime.document_toolset.tools
             if getattr(tool, "name", "") == "export_document"
         )
-        assert [backend.name for backend in export_tool.render_backends] == [
-            "node",
-            "python",
-        ]
+        assert [backend.name for backend in export_tool.render_backends] == ["node"]
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
         assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
@@ -545,7 +543,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
                 pass
 
 
-def test_build_plugin_runtime_allows_python_render_backend_override():
+def test_build_plugin_runtime_ignores_legacy_word_render_settings():
     context = MagicMock()
     context.get_config.return_value = {"admins_id": ["admin-1"]}
     config = {
@@ -572,13 +570,59 @@ def test_build_plugin_runtime_allows_python_render_backend_override():
             for tool in runtime.document_toolset.tools
             if getattr(tool, "name", "") == "export_document"
         )
-        assert runtime.settings.word_render_backend == "python"
-        assert runtime.settings.word_render_fallback_enabled is False
         assert runtime.settings.ppt_render_backend == "node"
         assert runtime.settings.excel_render_backend == "python"
         assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
         assert runtime.settings.node_renderer_entry == "D:/custom/js-renderer.js"
-        assert [backend.name for backend in export_tool.render_backends] == ["python"]
+        assert [backend.name for backend in export_tool.render_backends] == ["node"]
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_applies_word_style_defaults():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
+    config = {
+        "word_style_settings": {
+            "default_font_name": "Arial",
+            "default_heading_font_name": "Arial",
+            "default_table_font_name": "Arial",
+            "default_code_font_name": "JetBrains Mono",
+        }
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        assert runtime.settings.default_word_font_name == "Arial"
+        assert runtime.settings.default_word_heading_font_name == "Arial"
+        assert runtime.settings.default_word_table_font_name == "Arial"
+        assert runtime.settings.default_word_code_font_name == "JetBrains Mono"
+        assert runtime.office_gen._default_document_style == {
+            "font_name": "Arial",
+            "heading_font_name": "Arial",
+            "table_font_name": "Arial",
+            "code_font_name": "JetBrains Mono",
+        }
+        assert get_document_style_defaults(runtime.document_toolset.document_store) == {
+            "font_name": "Arial",
+            "heading_font_name": "Arial",
+            "table_font_name": "Arial",
+            "code_font_name": "JetBrains Mono",
+        }
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()

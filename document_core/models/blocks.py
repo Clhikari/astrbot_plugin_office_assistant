@@ -133,6 +133,45 @@ class HeroBannerBlock(BlockBase):
         return normalize_optional_hex_color(value)
 
 
+PageTemplateName = Literal["business_review_cover"]
+
+
+class PageTemplateMetricItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    delta: str = ""
+    delta_color: str | None = None
+    note: str = ""
+
+    @field_validator("delta_color")
+    @classmethod
+    def validate_optional_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class BusinessReviewCoverData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    subtitle: str = ""
+    summary_title: str = "核心摘要"
+    summary_text: str = Field(min_length=1)
+    metrics: list[PageTemplateMetricItem] = Field(min_length=1, max_length=4)
+    footer_note: str = ""
+    auto_page_break: bool = False
+
+
+class PageTemplateBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    block_id: str = Field(default_factory=lambda: uuid4().hex)
+    type: Literal["page_template"] = "page_template"
+    template: PageTemplateName
+    data: BusinessReviewCoverData
+
+
 class ParagraphRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -527,7 +566,8 @@ class TocBlock(BlockBase):
 
 
 DocumentBlock = Annotated[
-    HeroBannerBlock
+    PageTemplateBlock
+    | HeroBannerBlock
     | HeadingBlock
     | ParagraphBlock
     | ListBlock

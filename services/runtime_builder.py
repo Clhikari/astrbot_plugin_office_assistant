@@ -65,10 +65,12 @@ def build_plugin_runtime(
     )
     executor = ThreadPoolExecutor(max_workers=4)
     document_render_backend_config = _build_document_render_backend_config(settings)
+    default_document_style = _build_default_document_style(settings)
     office_gen = OfficeGenerator(
         plugin_data_path,
         executor=executor,
         render_backend_config=document_render_backend_config,
+        default_document_style=default_document_style,
     )
     pdf_converter = PDFConverter(plugin_data_path, executor=executor)
     preview_gen = PreviewGenerator(dpi=settings.preview_dpi)
@@ -119,6 +121,7 @@ def build_plugin_runtime(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
         render_backend_config=document_render_backend_config,
+        default_document_style=default_document_style,
     )
     request_pipeline_services = _build_request_pipeline_services(
         settings=settings,
@@ -198,18 +201,25 @@ def _build_document_render_backend_config(
     settings: PluginSettings,
 ) -> DocumentRenderBackendConfig:
     return DocumentRenderBackendConfig(
-        preferred_backend=settings.word_render_backend,
-        fallback_enabled=settings.word_render_fallback_enabled,
+        preferred_backend="node",
+        fallback_enabled=False,
         ppt_preferred_backend=settings.ppt_render_backend,
         excel_preferred_backend=settings.excel_render_backend,
         node_renderer_entry=settings.js_renderer_entry,
     )
 
 
-def _build_word_render_backend_config(
-    settings: PluginSettings,
-) -> DocumentRenderBackendConfig:
-    return _build_document_render_backend_config(settings)
+def _build_default_document_style(settings: PluginSettings) -> dict[str, object]:
+    defaults: dict[str, object] = {}
+    if settings.default_word_font_name:
+        defaults["font_name"] = settings.default_word_font_name
+    if settings.default_word_heading_font_name:
+        defaults["heading_font_name"] = settings.default_word_heading_font_name
+    if settings.default_word_table_font_name:
+        defaults["table_font_name"] = settings.default_word_table_font_name
+    if settings.default_word_code_font_name:
+        defaults["code_font_name"] = settings.default_word_code_font_name
+    return defaults
 
 
 def _build_request_pipeline_services(

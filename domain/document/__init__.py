@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import warnings
-
 __all__ = [
     "AddBlocksRequest",
     "AfterExportHook",
@@ -36,18 +34,6 @@ __all__ = [
 ]
 
 
-# Keep __all__ and __getattr__ in sync when exports change.
-# This module uses lazy imports both for startup cost and for compatibility
-# exports, so missing an entry in either place can surface as AttributeError.
-_LEGACY_RENDER_EXPORTS = {
-    "NodeWordRenderBackend",
-    "PythonWordRenderBackend",
-    "WordRenderBackend",
-    "WordRenderBackendConfig",
-    "build_word_render_backends",
-}
-
-
 def __getattr__(name: str):
     if name == "DocumentSessionStore":
         from .session_store import DocumentSessionStore
@@ -68,16 +54,6 @@ def __getattr__(name: str):
         "RenderResult",
         "build_document_render_backends",
     }:
-        from . import render_backends as render_backends_module
-
-        return getattr(render_backends_module, name)
-    if name in _LEGACY_RENDER_EXPORTS:
-        warnings.warn(
-            f"domain.document.{name} is a legacy Word-specific export. "
-            "Use the document render backend interfaces instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         from . import render_backends as render_backends_module
 
         return getattr(render_backends_module, name)

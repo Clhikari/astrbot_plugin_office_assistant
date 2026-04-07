@@ -1,5 +1,7 @@
 import {
   AlignmentType,
+  HeightRule,
+  LineRuleType,
   Paragraph,
   ShadingType,
   Table,
@@ -39,6 +41,8 @@ import {
   resolveTableBorders,
   resolveTableCellMargin,
   resolveTableFontSize,
+  resolveTableParagraphSpacing,
+  resolveTableRowHeight,
 } from "./table-style";
 
 export function renderTable(
@@ -66,12 +70,16 @@ export function renderTable(
   const bodyAlignment =
     stringValue(asObject(block.style).cell_align) ||
     stringValue(tableDefaults.cell_align);
+  const headerParagraphSpacing = resolveTableParagraphSpacing(tableStyleName, true);
+  const headerRowHeight = resolveTableRowHeight(tableStyleName, true);
   const numericColumns = new Set(
     arrayValue(block.numeric_columns)
       .map((value) => numberValue(value))
       .filter((value): value is number => value !== undefined),
   );
   const columnWidths = normalizeColumnWidths(block, columnCount);
+  const fixedWidthTotal = columnWidths.reduce((sum, value) => sum + value, 0);
+  const hasFixedWidths = columnWidths.length > 0 && fixedWidthTotal > 0;
 
   const tableRows: TableRow[] = [];
   const caption = stringValue(block.caption) || stringValue(block.title);
@@ -86,6 +94,12 @@ export function renderTable(
             children: [
               new Paragraph({
                 alignment: AlignmentType.CENTER,
+                spacing: {
+                  before: headerParagraphSpacing.before,
+                  after: headerParagraphSpacing.after,
+                  line: headerParagraphSpacing.line,
+                  lineRule: LineRuleType.AUTO,
+                },
                 children: [
                   new TextRun({
                     text: caption,
@@ -163,6 +177,9 @@ export function renderTable(
       new TableRow({
         tableHeader: true,
         cantSplit: true,
+        height: headerRowHeight
+          ? { value: headerRowHeight.value, rule: HeightRule.ATLEAST }
+          : undefined,
         children: groupCells,
       }),
     );
@@ -174,12 +191,21 @@ export function renderTable(
       new TableRow({
         tableHeader: true,
         cantSplit: true,
+        height: headerRowHeight
+          ? { value: headerRowHeight.value, rule: HeightRule.ATLEAST }
+          : undefined,
         children: headers.map((header, columnIndex) =>
           new TableCell({
             width: resolveTableCellWidth(columnWidths, columnIndex),
             children: [
               new Paragraph({
                 alignment: AlignmentType.CENTER,
+                spacing: {
+                  before: headerParagraphSpacing.before,
+                  after: headerParagraphSpacing.after,
+                  line: headerParagraphSpacing.line,
+                  lineRule: LineRuleType.AUTO,
+                },
                 children: [
                   new TextRun({
                     text: header,
@@ -225,10 +251,14 @@ export function renderTable(
   );
 
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    alignment: resolveTableAlignment(block, tableDefaults),
-    layout: columnWidths.length > 0 ? TableLayoutType.FIXED : undefined,
-    columnWidths: columnWidths.length > 0 ? columnWidths : undefined,
+    width: hasFixedWidths
+      ? { size: fixedWidthTotal, type: WidthType.DXA }
+      : { size: 100, type: WidthType.PERCENTAGE },
+    alignment:
+      resolveTableAlignment(block, tableDefaults) ??
+      (hasFixedWidths ? AlignmentType.CENTER : undefined),
+    layout: hasFixedWidths ? TableLayoutType.FIXED : undefined,
+    columnWidths: hasFixedWidths ? columnWidths : undefined,
     style: resolveDocxTableStyle(tableStyleName),
     margins: resolveTableCellMargin(tableStyleName, block),
     borders: resolveTableBorders(block, tableDefaults, theme, tableStyleName),

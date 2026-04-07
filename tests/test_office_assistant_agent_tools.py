@@ -7,7 +7,6 @@ import struct
 import sys
 import zipfile
 import zlib
-import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,20 +38,21 @@ from astrbot_plugin_office_assistant.domain.document.render_backends import (
     DocumentRenderBackendConfig,
     DocumentRenderBackendError,
     NodeDocumentRenderBackend,
-    PythonWordRenderBackend,
     build_document_render_backends,
     RenderResult,
     build_document_render_payload,
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
+    BusinessReviewCoverData,
     ColumnBlock,
     ColumnsBlock,
     GroupBlock,
-	    HeaderFooterConfig,
-	    HeadingBlock,
+    HeaderFooterConfig,
+    HeadingBlock,
     HeroBannerBlock,
-	    ParagraphBlock,
+    PageTemplateBlock,
+    ParagraphBlock,
     ParagraphRun,
     SectionBreakBlock,
     SectionMarginsConfig,
@@ -233,6 +233,13 @@ def _paragraph_has_page_break(paragraph) -> bool:
     )
 
 
+def _paragraph_after(doc, paragraph, offset: int = 1):
+    for index, candidate in enumerate(doc.paragraphs):
+        if candidate._p is paragraph._p:
+            return doc.paragraphs[index + offset]
+    raise ValueError("paragraph is not in document")
+
+
 def _table_border_size(table, edge_name: str) -> str | None:
     from docx.oxml.ns import qn
 
@@ -378,6 +385,54 @@ def _cell_margin(cell, edge_name: str) -> str | None:
     if edge is None:
         return None
     return edge.get(qn("w:w"))
+
+
+def _cell_width(cell) -> tuple[str | None, str | None]:
+    from docx.oxml.ns import qn
+
+    tc_pr = cell._tc.tcPr
+    if tc_pr is None:
+        return None, None
+    tc_width = tc_pr.find(qn("w:tcW"))
+    if tc_width is None:
+        return None, None
+    return tc_width.get(qn("w:w")), tc_width.get(qn("w:type"))
+
+
+def _table_width(table) -> tuple[str | None, str | None]:
+    from docx.oxml.ns import qn
+
+    tbl_pr = table._tbl.tblPr
+    if tbl_pr is None:
+        return None, None
+    tbl_width = tbl_pr.find(qn("w:tblW"))
+    if tbl_width is None:
+        return None, None
+    return tbl_width.get(qn("w:w")), tbl_width.get(qn("w:type"))
+
+
+def _table_row_height(row) -> tuple[str | None, str | None]:
+    from docx.oxml.ns import qn
+
+    tr_pr = row._tr.trPr
+    if tr_pr is None:
+        return None, None
+    tr_height = tr_pr.find(qn("w:trHeight"))
+    if tr_height is None:
+        return None, None
+    return tr_height.get(qn("w:val")), tr_height.get(qn("w:hRule"))
+
+
+def _table_grid_widths(table) -> list[int]:
+    from docx.oxml.ns import qn
+
+    tbl_grid = table._tbl.tblGrid
+    if tbl_grid is None:
+        return []
+    return [
+        int(grid_col.get(qn("w:w"), "0"))
+        for grid_col in tbl_grid.iter(qn("w:gridCol"))
+    ]
 
 
 def _run_font_attr(run, attr_name: str) -> str | None:
@@ -594,149 +649,50 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
     ]
 
 
-def test_build_document_toolset_defaults_to_node_with_python_fallback():
+def test_build_document_toolset_defaults_to_node_only_for_word():
     toolset = build_document_toolset()
     export_tool = next(tool for tool in toolset.tools if tool.name == "export_document")
 
-    assert [backend.name for backend in export_tool.render_backends] == [
-        "node",
-        "python",
-    ]
-
-
-def test_document_core_word_document_builder_is_legacy_export():
-    import astrbot_plugin_office_assistant.document_core as document_core
-
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        builder_cls = document_core.WordDocumentBuilder
-
-    assert builder_cls.__name__ == "WordDocumentBuilder"
-    assert any(
-        "legacy" in str(item.message).lower() and "render backend pipeline" in str(item.message)
-        for item in captured
-    )
-    assert "WordDocumentBuilder" not in getattr(document_core, "__all__", [])
+    assert [backend.name for backend in export_tool.render_backends] == ["node"]
 
 
 @pytest.mark.parametrize(
     ("export_name", "expected_name"),
     [
-        ("NodeWordRenderBackend", "NodeDocumentRenderBackend"),
-        ("PythonWordRenderBackend", "PythonWordRenderBackend"),
-        ("WordRenderBackendConfig", "DocumentRenderBackendConfig"),
-        ("WordRenderBackend", "DocumentRenderBackend"),
-        ("build_word_render_backends", "build_word_render_backends"),
+        ("DocumentRenderBackendConfig", "DocumentRenderBackendConfig"),
+        ("DocumentRenderBackend", "DocumentRenderBackend"),
+        ("NodeDocumentRenderBackend", "NodeDocumentRenderBackend"),
     ],
 )
-def test_domain_document_word_specific_exports_are_legacy_compatibility(
+def test_domain_document_exports_document_render_interfaces(
     export_name: str,
     expected_name: str,
 ):
     import astrbot_plugin_office_assistant.domain.document as domain_document
 
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        exported = getattr(domain_document, export_name)
-
+    exported = getattr(domain_document, export_name)
     assert getattr(exported, "__name__", None) == expected_name
-    assert any(
-        "legacy word-specific export" in str(item.message).lower()
-        and export_name in str(item.message)
-        for item in captured
-    )
-    assert export_name not in getattr(domain_document, "__all__", [])
-
-
-def test_render_backends_import_does_not_require_word_builder():
-    module_name = "astrbot_plugin_office_assistant.domain.document.render_backends"
-    cached_module = sys.modules.pop(module_name, None)
-    original_import = builtins.__import__
-
-    def _guard_word_builder_import(
-        name, globals=None, locals=None, fromlist=(), level=0
-    ):
-        if name.endswith("document_core.builders.word_builder"):
-            raise ModuleNotFoundError("word builder unavailable")
-        return original_import(name, globals, locals, fromlist, level)
-
-    try:
-        with patch(
-            "builtins.__import__",
-            side_effect=_guard_word_builder_import,
-        ):
-            imported = importlib.import_module(module_name)
-        assert imported.PythonWordRenderBackend.__name__ == "PythonWordRenderBackend"
-    finally:
-        sys.modules.pop(module_name, None)
-        if cached_module is not None:
-            sys.modules[module_name] = cached_module
-        else:
-            importlib.import_module(module_name)
+    assert export_name in getattr(domain_document, "__all__", [])
 
 
 @pytest.mark.parametrize(
     ("export_name", "expected_name"),
     [
-        ("NodeWordRenderBackend", "NodeDocumentRenderBackend"),
-        ("WordRenderBackendConfig", "DocumentRenderBackendConfig"),
-        ("WordRenderBackend", "DocumentRenderBackend"),
-        ("WordRenderBackendError", "DocumentRenderBackendError"),
-        ("build_word_render_backends", "build_word_render_backends"),
+        ("DocumentRenderBackendConfig", "DocumentRenderBackendConfig"),
+        ("DocumentRenderBackend", "DocumentRenderBackend"),
+        ("DocumentRenderBackendError", "DocumentRenderBackendError"),
+        ("NodeDocumentRenderBackend", "NodeDocumentRenderBackend"),
     ],
 )
-def test_render_backends_word_specific_aliases_are_legacy_compatibility(
+def test_render_backends_exports_document_render_interfaces(
     export_name: str,
     expected_name: str,
 ):
     import astrbot_plugin_office_assistant.domain.document.render_backends as render_backends
 
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        exported = getattr(render_backends, export_name)
-
+    exported = getattr(render_backends, export_name)
     assert getattr(exported, "__name__", None) == expected_name
-    assert any(
-        "legacy word-specific alias" in str(item.message).lower()
-        and export_name in str(item.message)
-        for item in captured
-    )
-    assert export_name not in getattr(render_backends, "__all__", [])
-
-
-def test_python_word_render_backend_delays_builder_creation_until_render(
-    workspace_root: Path,
-):
-    backend = build_document_render_backends(
-        "word",
-        DocumentRenderBackendConfig(
-            preferred_backend="python",
-            fallback_enabled=False,
-        ),
-    )[0]
-    fake_builder = MagicMock()
-    fake_builder_cls = MagicMock(return_value=fake_builder)
-    document = DocumentModel(
-        document_id="doc-1",
-        session_id="session-1",
-        metadata=DocumentMetadata(title="Lazy Builder"),
-    )
-    output_path = workspace_root / "lazy-builder.docx"
-
-    with patch(
-        "astrbot_plugin_office_assistant.domain.document.render_backends._load_word_document_builder",
-        return_value=fake_builder_cls,
-    ) as loader:
-        assert backend._builder is None
-        loader.assert_not_called()
-
-        result = backend.render(document, output_path)
-
-    loader.assert_called_once_with()
-    fake_builder_cls.assert_called_once_with()
-    fake_builder.build.assert_called_once_with(document, output_path)
-    assert result.backend_name == "python"
-    assert result.output_path == output_path
+    assert export_name in getattr(render_backends, "__all__", [])
 
 
 def test_registry_import_does_not_require_fastmcp_at_runtime():
@@ -989,6 +945,21 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert run_properties["underline"]["type"] == "boolean"
     assert run_properties["code"]["type"] == "boolean"
     assert run_properties["color"]["type"] == "string"
+    assert block_properties["template"]["type"] == "string"
+    assert block_properties["data"]["type"] == "object"
+    assert block_properties["data"]["properties"]["title"]["type"] == "string"
+    assert block_properties["data"]["properties"]["summary_text"]["type"] == "string"
+    assert block_properties["data"]["properties"]["metrics"]["type"] == "array"
+    assert (
+        block_properties["data"]["properties"]["metrics"]["items"]["properties"][
+            "delta_color"
+        ]["type"]
+        == "string"
+    )
+    assert (
+        block_properties["data"]["properties"]["auto_page_break"]["type"]
+        == "boolean"
+    )
     assert block_properties["text"]["type"] == "string"
     assert block_properties["subtitle"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"
@@ -1763,6 +1734,35 @@ async def test_document_toolset_smoke_export(workspace_root: Path):
     assert loaded_doc.paragraphs[2].paragraph_format.space_after.pt == pytest.approx(
         9, abs=0.5
     )
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_uses_configured_default_fonts_when_missing():
+    toolset = build_document_toolset(
+        default_document_style={
+            "font_name": "Arial",
+            "heading_font_name": "Arial",
+            "table_font_name": "Arial",
+            "code_font_name": "JetBrains Mono",
+        }
+    )
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Font Defaults",
+            output_name="font-defaults.docx",
+            theme_name="business_report",
+            document_style={"heading_color": "1F4E79"},
+        )
+    )
+
+    assert created["document"]["document_style"]["font_name"] == "Arial"
+    assert created["document"]["document_style"]["heading_font_name"] == "Arial"
+    assert created["document"]["document_style"]["table_font_name"] == "Arial"
+    assert created["document"]["document_style"]["code_font_name"] == "JetBrains Mono"
+    assert created["document"]["document_style"]["heading_color"] == "1F4E79"
 
 
 @pytest.mark.asyncio
@@ -3562,10 +3562,10 @@ def test_build_document_render_backends_reserves_excel_for_python():
         backends[0].render(MagicMock(), Path("out.xlsx"))
 
 
-def test_build_document_render_backends_defaults_to_node_with_python_fallback_for_word():
+def test_build_document_render_backends_defaults_to_node_for_word():
     backends = build_document_render_backends("word")
 
-    assert [backend.name for backend in backends] == ["node", "python"]
+    assert [backend.name for backend in backends] == ["node"]
 
 
 def test_node_render_backend_renders_sections_and_table_styles(workspace_root: Path):
@@ -3679,10 +3679,10 @@ def test_node_render_backend_renders_sections_and_table_styles(workspace_root: P
     table = loaded_doc.tables[0]
 
     assert _paragraph_run_rgb(title_paragraph) == "000000"
-    assert _paragraph_run_rgb(_find_paragraph(loaded_doc, "一、经营总览")) == "0F4C81"
-    assert _paragraph_bottom_border_color(_find_paragraph(loaded_doc, "一、经营总览")) == (
-        "CBD5E1"
-    )
+    overview_heading = _find_paragraph(loaded_doc, "一、经营总览")
+    overview_divider = _paragraph_after(loaded_doc, overview_heading)
+    assert _paragraph_run_rgb(overview_heading) == "0F4C81"
+    assert _paragraph_bottom_border_color(overview_divider) == "CBD5E1"
     assert header_paragraph.text == "Q3 经营复盘报告 | 战略与增长委员会\t机密 · 2024 年 10 月"
     assert any(
         text.startswith("集团战略部 · 内部机密文件") for text in footer_texts
@@ -3873,6 +3873,447 @@ def test_node_renderer_schema_rejects_invalid_hero_banner_colors(workspace_root:
     assert "theme_color" in error_payload["message"]
 
 
+def test_node_renderer_supports_business_review_cover_page_template(
+    workspace_root: Path,
+):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-page-template-business-review-cover",
+        {
+            "document_id": "page-template-business-review-cover",
+            "metadata": {
+                "title": "Q3 经营复盘报告",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "font_name": "Microsoft YaHei",
+                    "heading_font_name": "Microsoft YaHei",
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "page_template",
+                    "template": "business_review_cover",
+                    "data": {
+                        "title": "Q3 经营复盘报告",
+                        "subtitle": "战略与增长委员会 · 2024 年 10 月",
+                        "summary_title": "核心摘要",
+                        "summary_text": "经营质量继续改善，现金流保持稳定，重点区域保持增长。",
+                        "metrics": [
+                            {
+                                "label": "营业收入",
+                                "value": "¥4.82 亿",
+                                "delta": "↑ 18.4% YoY",
+                                "delta_color": "15803D",
+                            },
+                            {
+                                "label": "毛利率",
+                                "value": "42.1%",
+                                "delta": "↓ 0.3pp vs Q2",
+                                "delta_color": "DC2626",
+                            },
+                        ],
+                        "footer_note": "编制：战略发展部 · 审核：CFO 办公室",
+                    },
+                },
+                {
+                    "type": "heading",
+                    "text": "一、经营总览",
+                    "level": 1,
+                    "bottom_border": True,
+                },
+                {
+                    "type": "paragraph",
+                    "text": "第二页正文应该紧接在封面页之后。",
+                },
+            ],
+        },
+    )
+
+    banner_table = loaded_doc.tables[0]
+    summary_table = loaded_doc.tables[1]
+    metrics_table = loaded_doc.tables[2]
+    footer_table = loaded_doc.tables[3]
+    heading = _find_paragraph(loaded_doc, "一、经营总览")
+
+    assert len(loaded_doc.tables) == 4
+    assert all(
+        paragraph.text != "Q3 经营复盘报告" for paragraph in loaded_doc.paragraphs
+    )
+    assert banner_table.rows[0].cells[0].paragraphs[0].text == "Q3 经营复盘报告"
+    assert banner_table.rows[0].cells[0].paragraphs[1].text == "战略与增长委员会 · 2024 年 10 月"
+    assert _cell_fill(banner_table.rows[0].cells[0]) == "1F4E79"
+    assert _table_width(banner_table) == ("9360", "dxa")
+    assert _table_row_height(banner_table.rows[0]) == ("1600", "exact")
+    assert _cell_margin(banner_table.rows[0].cells[0], "left") == "400"
+    assert _cell_margin(banner_table.rows[0].cells[0], "right") == "400"
+    assert _cell_margin(banner_table.rows[0].cells[0], "bottom") == "0"
+    assert banner_table.rows[0].cells[0].paragraphs[0].paragraph_format.space_after.pt == 0
+    assert _paragraph_run_size(banner_table.rows[0].cells[0].paragraphs[0]) == pytest.approx(
+        26.0,
+        abs=0.5,
+    )
+    assert summary_table.rows[0].cells[0].paragraphs[0].text == "核心摘要"
+    assert "经营质量继续改善" in summary_table.rows[0].cells[0].text
+    assert _table_width(summary_table) == ("9360", "dxa")
+    assert _cell_width(summary_table.rows[0].cells[0]) == ("9360", "dxa")
+    assert _cell_fill(summary_table.rows[0].cells[0]) == "EEF9F5"
+    assert _cell_border_color(summary_table.rows[0].cells[0], "left") == "0F6E56"
+    assert _cell_border_size(summary_table.rows[0].cells[0], "left") == "64"
+    assert metrics_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
+    assert metrics_table.rows[0].cells[1].paragraphs[0].text == "毛利率"
+    assert metrics_table.rows[0].cells[2].paragraphs[0].text == ""
+    assert _table_width(metrics_table) == ("9360", "dxa")
+    assert _cell_width(metrics_table.rows[0].cells[0]) == ("3120", "dxa")
+    assert _cell_width(metrics_table.rows[0].cells[1]) == ("3120", "dxa")
+    assert _cell_width(metrics_table.rows[0].cells[2]) == ("3120", "dxa")
+    assert _cell_fill(metrics_table.rows[0].cells[0]) == "F2F7FC"
+    assert _paragraph_run_size(metrics_table.rows[0].cells[0].paragraphs[1]) == pytest.approx(
+        17.0,
+        abs=0.2,
+    )
+    assert _paragraph_run_rgb(metrics_table.rows[0].cells[0].paragraphs[2]) == "15803D"
+    assert _paragraph_run_rgb(metrics_table.rows[0].cells[1].paragraphs[2]) == "DC2626"
+    assert _table_width(footer_table) == ("9360", "dxa")
+    assert _cell_width(footer_table.rows[0].cells[0]) == ("160", "dxa")
+    assert _cell_width(footer_table.rows[0].cells[1]) == ("9200", "dxa")
+    assert _cell_fill(footer_table.rows[0].cells[0]) == "1F4E79"
+    assert _cell_fill(footer_table.rows[0].cells[1]) == "EEF3FB"
+    assert footer_table.rows[0].cells[1].paragraphs[0].text == "编制：战略发展部 · 审核：CFO 办公室"
+    assert not any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
+    assert heading.text == "一、经营总览"
+    assert _find_paragraph(loaded_doc, "第二页正文应该紧接在封面页之后。").text == (
+        "第二页正文应该紧接在封面页之后。"
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert document_xml.count('w:pStyle w:val="Heading1"') == 1
+
+
+def test_node_renderer_suppresses_page_template_auto_page_break_when_body_follows(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-page-template-auto-break-suppressed",
+        {
+            "document_id": "page-template-auto-break-suppressed",
+            "metadata": {
+                "title": "Q3 经营复盘报告",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {},
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "page_template",
+                    "template": "business_review_cover",
+                    "data": {
+                        "title": "Q3 经营复盘报告",
+                        "subtitle": "战略与增长委员会 · 2024 年 10 月",
+                        "summary_text": "经营质量继续改善，现金流保持稳定。",
+                        "metrics": [
+                            {
+                                "label": "营业收入",
+                                "value": "¥4.82 亿",
+                                "delta": "↑ 18.4% YoY",
+                            }
+                        ],
+                        "auto_page_break": True,
+                    },
+                },
+                {"type": "heading", "text": "一、经营总览", "level": 1},
+            ],
+        },
+    )
+
+    assert not any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
+    assert _find_paragraph(loaded_doc, "一、经营总览").text == "一、经营总览"
+
+
+def test_node_renderer_infers_compact_table_widths_for_short_business_tables(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-compact-table-widths",
+        {
+            "document_id": "compact-table-widths",
+            "metadata": {
+                "title": "经营复盘",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "font_name": "Microsoft YaHei",
+                    "table_font_name": "Microsoft YaHei",
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["区域", "收入", "完成率", "备注"],
+                    "rows": [
+                        ["华东", "¥4.82 亿", "112%", "重点项目提前交付"],
+                        ["华北", "¥3.14 亿", "95%", "渠道结构优化中"],
+                    ],
+                }
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+    grid_widths = _table_grid_widths(table)
+
+    assert _table_width(table)[1] == "dxa"
+    assert len(grid_widths) == 4
+    assert grid_widths[3] > grid_widths[0]
+    assert grid_widths[1] < grid_widths[3]
+    assert sum(grid_widths) < 9000
+
+
+def test_node_renderer_uses_relaxed_report_grid_defaults_for_business_tables(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-relaxed-report-grid-defaults",
+        {
+            "document_id": "relaxed-report-grid-defaults",
+            "metadata": {
+                "title": "",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "table_font_name": "Microsoft YaHei",
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["区域", "营收 (万元)", "同比 (YoY)", "预算完成率", "备注"],
+                    "rows": [
+                        ["华东大区", "18,450", "+15.2%", "108.5%", "核心项目提前交付"],
+                        ["华南大区", "14,200", "+10.8%", "105.2%", "新签客户放量明显"],
+                    ],
+                }
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+
+    assert _table_width(table) == ("9360", "dxa")
+    assert _table_grid_widths(table) == [1720, 1280, 1280, 1280, 3800]
+    assert _table_cell_margin(table, "left") == "108"
+    assert _table_cell_margin(table, "top") == "136"
+    assert _table_row_height(table.rows[0]) == ("520", "atLeast")
+    assert _table_row_height(table.rows[1]) == ("480", "atLeast")
+
+
+def test_node_renderer_uses_business_report_heading_dividers_when_theme_name_is_blank(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-blank-theme-name-heading-divider",
+        {
+            "document_id": "blank-theme-name-heading-divider",
+            "metadata": {
+                "title": "",
+                "theme_name": "",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {
+                    "heading_color": "1F4E79",
+                    "table_font_name": "Microsoft YaHei",
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "heading",
+                    "text": "一、分区业绩",
+                    "level": 1,
+                },
+                {
+                    "type": "heading",
+                    "text": "1.1 各区营收完成情况",
+                    "level": 2,
+                },
+            ],
+        },
+    )
+
+    level_1_heading = _find_paragraph(loaded_doc, "一、分区业绩")
+    level_1_divider = _paragraph_after(loaded_doc, level_1_heading)
+    level_2_heading = _find_paragraph(loaded_doc, "1.1 各区营收完成情况")
+    level_2_divider = _paragraph_after(loaded_doc, level_2_heading)
+
+    assert _paragraph_bottom_border_color(level_1_divider) == "1F4E79"
+    assert _paragraph_bottom_border_color(level_2_divider) == "1F4E79"
+
+
+def test_node_renderer_business_report_metric_cards_use_fixed_cover_widths(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-business-report-metric-widths",
+        {
+            "document_id": "business-report-metric-widths",
+            "metadata": {
+                "title": "",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "compact",
+                "document_style": {
+                    "font_name": "Source Han Sans SC",
+                    "heading_font_name": "Source Han Sans SC",
+                    "table_font_name": "Arial",
+                },
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "metric_cards",
+                    "metrics": [
+                        {
+                            "label": "营业收入",
+                            "value": "4.28 亿",
+                            "delta": "+12.4% YoY",
+                        },
+                        {
+                            "label": "毛利率",
+                            "value": "38.5%",
+                            "delta": "+2.1 pct YoY",
+                        },
+                        {
+                            "label": "净新增客户",
+                            "value": "156",
+                            "delta": "+12% vs Q2",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+
+    metric_table = loaded_doc.tables[0]
+    grid_widths = _table_grid_widths(metric_table)
+
+    assert _table_width(metric_table) == ("9360", "dxa")
+    assert grid_widths == [3120, 3120, 3120]
+    assert _cell_width(metric_table.rows[0].cells[0]) == ("3120", "dxa")
+    assert _cell_width(metric_table.rows[0].cells[1]) == ("3120", "dxa")
+    assert _cell_width(metric_table.rows[0].cells[2]) == ("3120", "dxa")
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_exports_business_review_cover_page_template(
+    workspace_root: Path,
+):
+    loaded_doc, _ = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-page-template-business-review-cover",
+        create_kwargs={
+            "title": "Q3 经营复盘报告",
+            "output_name": "business-review-cover-template.docx",
+            "theme_name": "business_report",
+            "header_footer": {
+                "header_left": "Q3 经营复盘报告 | 战略与增长委员会",
+                "header_right": "机密 · 2024 年 10 月",
+                "footer_left": "集团战略部 · 内部机密文件",
+                "footer_right": "第 {PAGE} 页",
+            },
+        },
+        blocks=[
+            {
+                "type": "page_template",
+                "template": "business_review_cover",
+                "data": {
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会 · 2024 年 10 月",
+                    "summary_text": "Q3 整体经营表现稳健，增长质量继续改善。",
+                    "metrics": [
+                        {
+                            "label": "营业收入",
+                            "value": "¥4.82 亿",
+                            "delta": "↑ 18.4% YoY",
+                            "delta_color": "15803D",
+                        },
+                        {
+                            "label": "净新增客户",
+                            "value": "184",
+                            "delta": "↑ 12.0% QoQ",
+                            "delta_color": "15803D",
+                        },
+                    ],
+                    "footer_note": "编制：战略发展部 · 审核：CFO 办公室",
+                },
+            },
+            {
+                "type": "heading",
+                "text": "一、分区业绩",
+                "level": 1,
+                "bottom_border": True,
+            },
+            {
+                "type": "paragraph",
+                "text": "华东和华南区域继续承担主要增长贡献。",
+            },
+        ],
+    )
+
+    assert len(loaded_doc.tables) == 4
+    assert loaded_doc.tables[0].rows[0].cells[0].paragraphs[0].text == "Q3 经营复盘报告"
+    assert _table_width(loaded_doc.tables[0]) == ("9360", "dxa")
+    assert _table_row_height(loaded_doc.tables[0].rows[0]) == ("1600", "exact")
+    assert loaded_doc.tables[1].rows[0].cells[0].paragraphs[0].text == "核心摘要"
+    summary_width, summary_width_type = _cell_width(loaded_doc.tables[1].rows[0].cells[0])
+    assert summary_width_type == "dxa"
+    assert int(summary_width) > 9300
+    assert loaded_doc.tables[2].rows[0].cells[0].paragraphs[0].text == "营业收入"
+    assert loaded_doc.tables[2].rows[0].cells[2].paragraphs[0].text == ""
+    assert _cell_width(loaded_doc.tables[2].rows[0].cells[0]) == ("3120", "dxa")
+    assert _cell_width(loaded_doc.tables[2].rows[0].cells[1]) == ("3120", "dxa")
+    assert _cell_width(loaded_doc.tables[2].rows[0].cells[2]) == ("3120", "dxa")
+    assert _cell_fill(loaded_doc.tables[2].rows[0].cells[0]) == "F2F7FC"
+    assert _cell_width(loaded_doc.tables[3].rows[0].cells[0]) == ("160", "dxa")
+    assert _cell_width(loaded_doc.tables[3].rows[0].cells[1]) == ("9200", "dxa")
+    assert loaded_doc.tables[3].rows[0].cells[1].paragraphs[0].text == "编制：战略发展部 · 审核：CFO 办公室"
+    assert all(
+        paragraph.text != "Q3 经营复盘报告" for paragraph in loaded_doc.paragraphs
+    )
+    assert not any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
+    overview_heading = _find_paragraph(loaded_doc, "一、分区业绩")
+    assert overview_heading.text == "一、分区业绩"
+    overview_divider = _paragraph_after(loaded_doc, overview_heading)
+    assert _paragraph_bottom_border_color(overview_divider) == "1F4E79"
+    assert _paragraph_bottom_border_size(overview_divider) == "6"
+    assert overview_divider.paragraph_format.space_before.pt == pytest.approx(1.5, abs=0.3)
+    assert overview_heading.paragraph_format.space_before.pt == pytest.approx(8, abs=0.2)
+    assert overview_heading.paragraph_format.space_after.pt == pytest.approx(0, abs=0.2)
+    assert (
+        _find_paragraph(loaded_doc, "华东和华南区域继续承担主要增长贡献。").text
+        == "华东和华南区域继续承担主要增长贡献。"
+    )
+
+
 def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
     workspace_root: Path,
 ):
@@ -3949,6 +4390,8 @@ def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
     assert _cell_fill(table.rows[1].cells[1]) == "DCFCE7"
     assert _run_rgb(table.rows[1].cells[1]) == "166534"
     assert _run_bold(table.rows[1].cells[1]) is True
+    assert _table_width(accent_table) == ("9360", "dxa")
+    assert _table_grid_widths(accent_table) == [9360]
     assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
     assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
     assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
@@ -4074,6 +4517,7 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
 
     assert hero_table.rows[0].cells[0].text.startswith("Q3 经营复盘报告")
     assert _cell_fill(hero_table.rows[0].cells[0]) == "1F4E79"
+    assert _table_width(hero_table) == ("9360", "dxa")
     assert _run_font_attr(hero_table.rows[0].cells[0].paragraphs[0].runs[0], "ascii") == (
         "Source Han Sans SC"
     )
@@ -4086,12 +4530,19 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
     assert _run_font_attr(body_paragraph.runs[0], "eastAsia") == "Microsoft YaHei"
     assert _run_font_attr(body_paragraph.runs[1], "ascii") == "Consolas"
     assert _run_font_attr(body_paragraph.runs[1], "eastAsia") == "Consolas"
+    assert _table_width(accent_table) == ("9360", "dxa")
+    assert _table_grid_widths(accent_table) == [9360]
+    assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
+    accent_width, accent_width_type = _cell_width(accent_table.rows[0].cells[0])
+    assert accent_width_type == "dxa"
+    assert int(accent_width) > 9300
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
     assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
     assert _cell_border_color(accent_table.rows[0].cells[0], "top") == "CBD5E1"
     assert _cell_border_color(accent_table.rows[0].cells[0], "right") == "CBD5E1"
     assert _cell_border_color(accent_table.rows[0].cells[0], "bottom") == "CBD5E1"
-    assert _cell_border_size(accent_table.rows[0].cells[0], "left") == "24"
     assert _cell_border_size(accent_table.rows[0].cells[0], "top") == "6"
+    assert _cell_border_size(accent_table.rows[0].cells[0], "left") == "24"
     assert _cell_margin(accent_table.rows[0].cells[0], "left") == "320"
     assert metric_table.rows[0].cells[0].paragraphs[1].runs[0].font.size.pt > (
         metric_table.rows[0].cells[0].paragraphs[0].runs[0].font.size.pt
@@ -4107,6 +4558,8 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
     )
     assert _table_cell_margin(data_table, "left") == "160"
     assert _table_cell_margin(data_table, "top") == "120"
+    assert _table_row_height(data_table.rows[2]) == ("520", "atLeast")
+    assert _table_row_height(data_table.rows[3]) == ("480", "atLeast")
     assert _paragraph_run_size(data_table.rows[2].cells[0].paragraphs[0]) == pytest.approx(
         11.5, abs=0.2
     )
@@ -4116,6 +4569,41 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
     with zipfile.ZipFile(output_path) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
     assert document_xml.count('w:pStyle w:val="Heading1"') == 1
+
+
+def test_node_renderer_suppresses_document_title_when_hero_banner_is_first(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-hero-banner-hides-document-title",
+        {
+            "document_id": "node-hero-banner-hide-title",
+            "metadata": {
+                "title": "Q3 经营复盘报告",
+                "theme_name": "business_report",
+                "table_template": "report_grid",
+                "density": "comfortable",
+                "document_style": {},
+                "header_footer": {},
+            },
+            "blocks": [
+                {
+                    "type": "hero_banner",
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会 · 2024 年 10 月",
+                    "theme_color": "1F4E79",
+                },
+                {"type": "paragraph", "text": "正文内容"},
+            ],
+        },
+    )
+
+    assert loaded_doc.tables[0].rows[0].cells[0].paragraphs[0].text == "Q3 经营复盘报告"
+    assert sum(
+        1 for paragraph in loaded_doc.paragraphs if paragraph.text == "Q3 经营复盘报告"
+    ) == 0
+    assert _find_paragraph(loaded_doc, "正文内容").text == "正文内容"
 
 
 def test_node_renderer_supports_section_inheritance_and_cover_normalization(
@@ -4241,8 +4729,10 @@ def test_node_renderer_supports_heading_styles_and_split_header_footer(
     assert _paragraph_run_rgb(title_paragraph) == "000000"
     assert _paragraph_run_rgb(heading_one) == "0F4C81"
     assert _paragraph_run_rgb(heading_two) == "4B5563"
-    assert _paragraph_bottom_border_color(heading_one) == "CBD5E1"
-    assert _paragraph_bottom_border_size(heading_one) == "12"
+    heading_one_divider = _paragraph_after(loaded_doc, heading_one)
+    assert _paragraph_bottom_border_color(heading_one_divider) == "CBD5E1"
+    assert _paragraph_bottom_border_size(heading_one_divider) == "12"
+    assert heading_one_divider.paragraph_format.space_before.pt == pytest.approx(1.5, abs=0.3)
     assert "Q3 经营复盘报告 | 战略与增长委员会" in header_paragraph.text
     assert "机密 · 2024 年 10 月" in header_paragraph.text
     assert "集团战略部 · 内部机密文件" in footer_paragraph.text
@@ -4307,7 +4797,8 @@ def test_node_renderer_uses_accent_fallback_and_header_footer_fonts(
     footer_paragraph = loaded_doc.sections[0].footer.paragraphs[0]
 
     assert _paragraph_run_rgb(heading) == accent_color
-    assert _cell_fill(accent_table.rows[0].cells[0]) == _blend_hex(
+    assert _cell_fill(accent_table.rows[0].cells[0]) == accent_color
+    assert _cell_fill(accent_table.rows[0].cells[1]) == _blend_hex(
         accent_color,
         "FFFFFF",
         0.92,
@@ -4832,6 +5323,7 @@ async def test_node_document_toolset_exports_q3_business_review_golden_sample(
     assert "PAGE" in loaded_doc.sections[0].footer._element.xml
     assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
     assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
     assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
     assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
     assert _paragraph_run_rgb(metric_table.rows[0].cells[1].paragraphs[2]) == "DC2626"
@@ -4987,7 +5479,7 @@ async def test_node_document_toolset_exports_low_frequency_parity_sample(
         for text in _story_texts(loaded_doc.sections[1].footer)
     )
     assert "PAGE" in loaded_doc.sections[1].footer._element.xml
-    assert _paragraph_bottom_border_color(detail_heading) is not None
+    assert _paragraph_bottom_border_color(_paragraph_after(loaded_doc, detail_heading)) is not None
     assert detail_table.rows[0].cells[0].text == "经营数据"
     assert detail_table.rows[1].cells[0].text == "区域"
     assert (
@@ -5004,7 +5496,7 @@ async def test_node_document_toolset_exports_low_frequency_parity_sample(
     assert 'w:type w:val="nextPage"' in document_xml
 
 
-def test_summary_card_defaults_match_between_python_and_node(workspace_root: Path):
+def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
     docx = pytest.importorskip("docx")
 
     renderer_entry = (
@@ -5013,7 +5505,7 @@ def test_summary_card_defaults_match_between_python_and_node(workspace_root: Pat
     if shutil.which("node") is None or not renderer_entry.exists():
         pytest.skip("node renderer build is not available")
 
-    workspace_dir = _make_workspace(workspace_root, "pytest-summary-card-python-node")
+    workspace_dir = _make_workspace(workspace_root, "pytest-summary-card-node")
     document = DocumentModel(
         document_id="summary-card-parity",
         session_id="pytest-session",
@@ -5040,33 +5532,20 @@ def test_summary_card_defaults_match_between_python_and_node(workspace_root: Pat
         ],
     )
 
-    python_output = workspace_dir / "summary-card-python.docx"
     node_output = workspace_dir / "summary-card-node.docx"
 
-    PythonWordRenderBackend().render(document, python_output)
     NodeDocumentRenderBackend(renderer_entry).render(document, node_output)
 
-    python_doc = docx.Document(python_output)
     node_doc = docx.Document(node_output)
 
-    python_title = _find_paragraph(python_doc, "结论与行动计划")
     node_title = _find_paragraph(node_doc, "结论与行动计划")
-    python_item = _find_paragraph(python_doc, "• 统一节奏")
     node_item = _find_paragraph(node_doc, "• 统一节奏")
 
-    assert python_title.alignment == node_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
-    assert python_title.runs[0].bold is True
+    assert node_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert node_title.runs[0].bold is True
-    assert _paragraph_run_size(python_title) == pytest.approx(12.5, abs=0.1)
     assert _paragraph_run_size(node_title) == pytest.approx(12.5, abs=0.1)
-    assert _paragraph_run_size(python_title) == pytest.approx(
-        _paragraph_run_size(node_title), abs=0.01
-    )
-    assert python_title.paragraph_format.space_before.pt == pytest.approx(10, abs=0.1)
     assert node_title.paragraph_format.space_before.pt == pytest.approx(10, abs=0.1)
-    assert python_title.paragraph_format.space_after.pt == pytest.approx(3, abs=0.1)
     assert node_title.paragraph_format.space_after.pt == pytest.approx(3, abs=0.1)
-    assert python_item.paragraph_format.space_after.pt == pytest.approx(7, abs=0.1)
     assert node_item.paragraph_format.space_after.pt == pytest.approx(7, abs=0.1)
 
 
@@ -6298,6 +6777,90 @@ def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_style
     assert table.rows[0][1].align == "right"
 
 
+def test_normalize_raw_block_payloads_flattens_nested_block_aliases():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "hero_banner",
+                "hero_banner": {
+                    "text": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会",
+                    "title_color": "FFFFFF",
+                },
+            },
+            {
+                "type": "accent_box",
+                "accent_box": {
+                    "title": "核心摘要",
+                    "content": "经营质量继续改善。",
+                },
+            },
+            {
+                "type": "metric_cards",
+                "metric_cards": {
+                    "cards": [
+                        {
+                            "label": "营业收入",
+                            "value": "¥4.82 亿",
+                            "delta": "+12.4% YoY",
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "table",
+                "table": {
+                    "headers": [
+                        {"text": "区域"},
+                        {"text": "营收（万）"},
+                        {"text": "备注"},
+                    ],
+                    "rows": [
+                        {
+                            "cells": [
+                                {"text": "华东大区"},
+                                {"text": "18,450"},
+                                {"text": "重点项目提前交付"},
+                            ]
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "paragraph",
+                "paragraph": {
+                    "runs": [
+                        {"text": "供应链风险：", "bold": True},
+                        {"text": "需建立多元供应商体系。"},
+                    ],
+                    "layout": {"alignment": "right"},
+                },
+            },
+        ]
+    )
+
+    hero_banner = normalized[0]
+    accent_box = normalized[1]
+    metric_cards = normalized[2]
+    table = normalized[3]
+    paragraph = normalized[4]
+
+    assert hero_banner["title"] == "Q3 经营复盘报告"
+    assert hero_banner["subtitle"] == "战略与增长委员会"
+    assert hero_banner["text_color"] == "FFFFFF"
+    assert "hero_banner" not in hero_banner
+    assert accent_box["text"] == "经营质量继续改善。"
+    assert "content" not in accent_box
+    assert metric_cards["metrics"][0]["value"] == "¥4.82 亿"
+    assert "cards" not in metric_cards
+    assert table["headers"] == ["区域", "营收（万）", "备注"]
+    assert table["rows"][0][0]["text"] == "华东大区"
+    assert table["rows"][0][1]["text"] == "18,450"
+    assert table["rows"][0][2]["text"] == "重点项目提前交付"
+    assert paragraph["runs"][0]["text"] == "供应链风险："
+    assert paragraph["style"]["align"] == "right"
+
+
 def test_add_blocks_request_accepts_hero_banner_and_report_style_fields():
     request = AddBlocksRequest(
         document_id="doc-1",
@@ -6397,6 +6960,43 @@ def test_add_blocks_request_accepts_hero_banner_and_report_style_fields():
     assert table.body_font_scale == pytest.approx(0.95)
     assert table.cell_padding_horizontal_pt == pytest.approx(8)
     assert table.rows[0][1].font_scale == pytest.approx(1.2)
+
+
+def test_add_blocks_request_accepts_page_template_business_review_cover():
+    request = AddBlocksRequest(
+        document_id="doc-1",
+        blocks=[
+            {
+                "type": "page_template",
+                "template": "business_review_cover",
+                "data": {
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会 · 2024 年 10 月",
+                    "summary_text": "Q3 营收同比增长 18.4%，整体毛利率保持稳定。",
+                    "metrics": [
+                        {
+                            "label": "营业收入",
+                            "value": "¥4.82 亿",
+                            "delta": "↑ 18.4% YoY",
+                            "delta_color": "15803D",
+                        },
+                        {
+                            "label": "毛利率",
+                            "value": "42.1%",
+                            "delta": "↓ 0.3pp vs Q2",
+                        },
+                    ],
+                    "footer_note": "编制：战略发展部 · 审核：CFO 办公室",
+                },
+            }
+        ],
+    )
+
+    block = request.blocks[0]
+    assert block.template == "business_review_cover"
+    assert block.data.summary_title == "核心摘要"
+    assert block.data.metrics[0].delta_color == "15803D"
+    assert block.data.auto_page_break is False
 
 
 def test_add_table_request_rejects_vertical_merge_rows_that_exceed_header_columns():
@@ -6542,6 +7142,47 @@ def test_document_session_store_preserves_hero_banner_and_report_style_fields():
     assert table.header_font_scale == pytest.approx(1.1)
     assert table.body_font_scale == pytest.approx(0.95)
     assert table.rows[0][0].font_scale == pytest.approx(1.15)
+
+
+def test_document_session_store_preserves_page_template_block():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="经营复盘"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "page_template",
+                    "template": "business_review_cover",
+                    "data": {
+                        "title": "Q3 经营复盘报告",
+                        "subtitle": "战略与增长委员会 · 2024 年 10 月",
+                        "summary_text": "Q3 营收同比增长 18.4%，整体毛利率保持稳定。",
+                        "metrics": [
+                            {
+                                "label": "营业收入",
+                                "value": "¥4.82 亿",
+                                "delta": "↑ 18.4% YoY",
+                                "delta_color": "15803D",
+                            }
+                        ],
+                        "footer_note": "编制：战略发展部 · 审核：CFO 办公室",
+                    },
+                }
+            ],
+        )
+    )
+
+    block = updated.blocks[0]
+
+    assert isinstance(block, PageTemplateBlock)
+    assert block.template == "business_review_cover"
+    assert isinstance(block.data, BusinessReviewCoverData)
+    assert block.data.title == "Q3 经营复盘报告"
+    assert block.data.metrics[0].label == "营业收入"
+    assert block.data.metrics[0].delta_color == "15803D"
+    assert block.data.auto_page_break is False
 
 
 def test_document_session_store_add_table_preserves_grouped_headers():

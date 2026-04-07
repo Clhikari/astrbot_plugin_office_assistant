@@ -35,6 +35,7 @@ export function resolveTheme(metadata: JsonObject): ThemeConfig {
   return {
     ...baseTheme,
     ...densityOverrides,
+    themeName: themeName || "business_report",
     accent: accentColor,
     accentSoft: usesCustomAccent
       ? blendHex(accentColor, "FFFFFF", 0.84)

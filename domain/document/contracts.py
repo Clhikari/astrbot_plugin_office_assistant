@@ -37,6 +37,7 @@ SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
 SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
 SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
+SUPPORTED_PAGE_TEMPLATES = {"business_review_cover"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 DEFAULT_DOCX_FILENAME = "document.docx"
 MAX_BLOCK_NORMALIZE_DEPTH = 32
@@ -169,9 +170,17 @@ def _extract_text_from_column_alias(value: object) -> str:
 def _normalize_table_header_alias(block: dict) -> None:
     if block.get("type") != "table":
         return
-    if block.get("headers"):
-        block.pop("columns", None)
-        return
+    raw_headers = block.get("headers")
+    if isinstance(raw_headers, list) and raw_headers:
+        normalized_headers = [
+            text
+            for text in (_extract_text_from_column_alias(header) for header in raw_headers)
+            if text
+        ]
+        if normalized_headers:
+            block["headers"] = normalized_headers
+            block.pop("columns", None)
+            return
     raw_columns = block.get("columns")
     if not isinstance(raw_columns, list):
         return
@@ -188,6 +197,18 @@ def _normalize_table_header_alias(block: dict) -> None:
 def _normalize_table_row_alias(block: dict) -> None:
     if block.get("type") != "table":
         return
+    raw_rows = block.get("rows")
+    if isinstance(raw_rows, list):
+        normalized_rows: list[object] = []
+        changed = False
+        for row in raw_rows:
+            if isinstance(row, Mapping) and isinstance(row.get("cells"), list):
+                normalized_rows.append(copy.deepcopy(row["cells"]))
+                changed = True
+                continue
+            normalized_rows.append(row)
+        if changed:
+            block["rows"] = normalized_rows
     raw_items = block.pop("items", None)
     if raw_items is None or block.get("rows"):
         return
@@ -234,6 +255,75 @@ def _normalize_block_style_and_layout(block: dict) -> None:
                     max(float(value), DOCUMENT_BLOCK_SPACING_MIN),
                     DOCUMENT_BLOCK_SPACING_MAX,
                 )
+
+
+_NESTED_BLOCK_ALIAS_KEYS = (
+    "hero_banner",
+    "accent_box",
+    "metric_cards",
+    "heading",
+    "table",
+    "paragraph",
+)
+
+
+def _merge_missing_mapping_fields(target: dict, key: str, value: object) -> None:
+    if not isinstance(value, Mapping):
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+        return
+    existing = target.get(key)
+    if isinstance(existing, Mapping):
+        merged = dict(value)
+        merged.update(existing)
+        target[key] = merged
+        return
+    if key not in target:
+        target[key] = copy.deepcopy(value)
+
+
+def _normalize_nested_block_payload_alias(block: dict) -> None:
+    block_type = block.get("type")
+    if not isinstance(block_type, str) or not block_type.strip():
+        for alias_key in _NESTED_BLOCK_ALIAS_KEYS:
+            if isinstance(block.get(alias_key), Mapping):
+                block["type"] = alias_key
+                block_type = alias_key
+                break
+    if not isinstance(block_type, str) or not block_type.strip():
+        return
+
+    nested_payload = block.get(block_type)
+    if isinstance(nested_payload, Mapping):
+        for key, value in nested_payload.items():
+            if key == "type":
+                continue
+            _merge_missing_mapping_fields(block, key, value)
+        block.pop(block_type, None)
+
+    if block_type == "accent_box":
+        content = block.pop("content", None)
+        if isinstance(content, str) and content.strip() and not block.get("text"):
+            block["text"] = content.strip()
+    elif block_type == "hero_banner":
+        title_color = block.pop("title_color", None)
+        if isinstance(title_color, str) and title_color.strip() and not block.get("text_color"):
+            block["text_color"] = title_color.strip()
+        text = block.pop("text", None)
+        if isinstance(text, str) and text.strip() and not block.get("title"):
+            block["title"] = text.strip()
+    elif block_type == "metric_cards":
+        cards = block.pop("cards", None)
+        if isinstance(cards, list) and not block.get("metrics"):
+            block["metrics"] = copy.deepcopy(cards)
+    elif block_type == "paragraph":
+        layout = block.get("layout")
+        if isinstance(layout, Mapping):
+            alignment = layout.get("alignment")
+            if isinstance(alignment, str) and alignment.strip():
+                style = dict(block.get("style") or {})
+                style.setdefault("align", alignment.strip())
+                block["style"] = style
 
 
 def _drop_unsupported_block_aliases(block: dict) -> None:
@@ -359,6 +449,9 @@ def normalize_raw_block_payloads(
                     )
                 normalized_columns.append(normalized_column)
             block["columns"] = normalized_columns
+
+        _normalize_nested_block_payload_alias(block)
+        block_type = block.get("type")
 
         if block_type == "toc" and not block.get("title"):
             toc_text = block.pop("text", "")
@@ -993,6 +1086,51 @@ class SectionHeroBannerInput(BaseModel):
         return normalize_optional_hex_color(value)
 
 
+class PageTemplateMetricInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    delta: str = ""
+    delta_color: str | None = None
+    note: str = ""
+
+    @field_validator("delta_color")
+    @classmethod
+    def validate_optional_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class BusinessReviewCoverDataInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    subtitle: str = ""
+    summary_title: str = "核心摘要"
+    summary_text: str = Field(min_length=1)
+    metrics: list[PageTemplateMetricInput] = Field(min_length=1, max_length=4)
+    footer_note: str = ""
+    auto_page_break: bool = False
+
+
+class SectionPageTemplateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["page_template"] = "page_template"
+    template: Literal["business_review_cover"] = "business_review_cover"
+    data: BusinessReviewCoverDataInput
+
+    @field_validator("template")
+    @classmethod
+    def validate_template(cls, value: str) -> str:
+        candidate = value.strip()
+        if candidate not in SUPPORTED_PAGE_TEMPLATES:
+            raise ValueError(
+                f"unsupported page_template template: {candidate or value!r}"
+            )
+        return candidate
+
+
 class AddSummaryCardRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1112,7 +1250,8 @@ class BlockColumnsInput(BaseModel):
 
 
 BlockInput = Annotated[
-    SectionHeroBannerInput
+    SectionPageTemplateInput
+    | SectionHeroBannerInput
     | BlockHeadingInput
     | SectionParagraphInput
     | SectionAccentBoxInput

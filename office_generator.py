@@ -16,7 +16,6 @@ from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
 from ._executor_mixin import ExecutorOwnerMixin
 from .document_core.models.blocks import (
     DocumentBlock,
-    HeadingBlock,
     ParagraphBlock,
     TableBlock,
 )
@@ -37,6 +36,8 @@ from .domain.document.render_backends import (
     render_document_with_backends,
 )
 from .domain.document.session_store import DocumentSessionStore
+from .domain.document.session_store import attach_document_style_defaults
+from .domain.document.session_store import merge_document_style_defaults
 
 _BLOCK_INPUT_ADAPTER = TypeAdapter(BlockInput)
 
@@ -49,10 +50,12 @@ class OfficeGenerator(ExecutorOwnerMixin):
         data_path: Path,
         executor: ThreadPoolExecutor | None = None,
         render_backend_config: DocumentRenderBackendConfig | None = None,
+        default_document_style: dict[str, object] | None = None,
     ):
         self.data_path = data_path
         self.support = self._check_support()
         self._render_backend_config = render_backend_config
+        self._default_document_style = dict(default_document_style or {})
         self._init_executor(executor, label="文件生成器")
 
     # 定义映射表
@@ -347,8 +350,13 @@ class OfficeGenerator(ExecutorOwnerMixin):
     ) -> DocumentModel:
         metadata = metadata.model_copy(deep=True)
         metadata.preferred_filename = file_path.name
+        metadata.document_style = merge_document_style_defaults(
+            metadata.document_style,
+            self._default_document_style,
+        )
 
         temp_store = DocumentSessionStore(workspace_dir=self.data_path)
+        attach_document_style_defaults(temp_store, self._default_document_style)
         created_document = temp_store.create_document(
             CreateDocumentRequest(
                 session_id=str(content.get("session_id") or ""),
@@ -423,6 +431,10 @@ class OfficeGenerator(ExecutorOwnerMixin):
         metadata = DocumentMetadata(
             title=str(content.get("title", "")),
             preferred_filename=file_path.name,
+        )
+        metadata.document_style = merge_document_style_defaults(
+            metadata.document_style,
+            self._default_document_style,
         )
         blocks: list[DocumentBlock] = []
 

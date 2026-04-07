@@ -16,6 +16,7 @@ from ..domain.document.render_backends import (
     get_render_backend_config,
 )
 from ..domain.document.session_store import DocumentSessionStore
+from ..domain.document.session_store import attach_document_style_defaults
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -194,10 +195,12 @@ def build_document_store(
     workspace_dir: Path | None = None,
     *,
     render_backend_config=None,
+    default_document_style: dict[str, object] | None = None,
 ) -> DocumentSessionStore:
     store = DocumentSessionStore(workspace_dir=workspace_dir)
     attach_render_backend_config(
         store,
         render_backend_config or DocumentRenderBackendConfig(),
     )
+    attach_document_style_defaults(store, default_document_style)
     return store

@@ -205,11 +205,11 @@ export function resolveTableFontSize(
   header: boolean,
   cellFontScale?: number,
 ): number {
-  const baseSize = theme.tableFontSize;
-  const blockFontScale =
+  const baseSize = header ? theme.tableFontSize + 0.5 : theme.tableFontSize;
+  const defaultScale =
     numberValue(header ? block.header_font_scale : block.body_font_scale) ?? 1;
-  const effectiveCellScale = cellFontScale ?? 1;
-  const scaledBaseSize = baseSize * blockFontScale * effectiveCellScale;
+  const effectiveScale = cellFontScale ?? defaultScale;
+  const scaledBaseSize = baseSize * effectiveScale;
   if (tableStyleName === "metrics_compact") {
     return Math.max(scaledBaseSize - 0.5, 9);
   }
@@ -255,9 +255,14 @@ export function resolveTableCellMargin(
   const horizontalPadding = numberValue(block?.cell_padding_horizontal_pt);
   const verticalPadding = numberValue(block?.cell_padding_vertical_pt);
   return {
-    top: verticalPadding !== undefined ? Math.round(verticalPadding * 20) : undefined,
+    top:
+      verticalPadding !== undefined
+        ? Math.round(verticalPadding * 20)
+        : spec.verticalMargin,
     bottom:
-      verticalPadding !== undefined ? Math.round(verticalPadding * 20) : undefined,
+      verticalPadding !== undefined
+        ? Math.round(verticalPadding * 20)
+        : spec.verticalMargin,
     left:
       horizontalPadding !== undefined
         ? Math.round(horizontalPadding * 20)
@@ -272,4 +277,40 @@ export function resolveTableCellMargin(
 
 export function resolveDocxTableStyle(tableStyleName: string): string | undefined {
   return DOCX_TABLE_STYLE_MAP[tableStyleName];
+}
+
+export function resolveTableParagraphSpacing(
+  tableStyleName: string,
+  header: boolean,
+): {
+  before?: number;
+  after?: number;
+  line?: number;
+} {
+  if (tableStyleName === "report_grid") {
+    return header
+      ? { before: 10, after: 10, line: 300 }
+      : { before: 8, after: 8, line: 312 };
+  }
+  if (tableStyleName === "metrics_compact") {
+    return header
+      ? { before: 6, after: 6, line: 264 }
+      : { before: 4, after: 4, line: 252 };
+  }
+  return header
+    ? { before: 4, after: 4, line: 252 }
+    : { before: 3, after: 3, line: 240 };
+}
+
+export function resolveTableRowHeight(
+  tableStyleName: string,
+  header: boolean,
+): { value: number; rule: "atLeast" } | undefined {
+  if (tableStyleName !== "report_grid") {
+    return undefined;
+  }
+  return {
+    value: header ? 520 : 480,
+    rule: "atLeast",
+  };
 }

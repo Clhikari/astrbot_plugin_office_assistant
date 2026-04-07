@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-import warnings
-
 from .models.blocks import (
     HeadingBlock,
     ImageBlock,
@@ -18,16 +14,3 @@ __all__ = [
     "TableBlock",
     "ImageBlock",
 ]
-
-
-def __getattr__(name: str):
-    if name == "WordDocumentBuilder":
-        warnings.warn(
-            "document_core.WordDocumentBuilder is legacy. Use the document render backend pipeline instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        from .builders.word_builder import WordDocumentBuilder
-
-        return WordDocumentBuilder
-    raise AttributeError(name)

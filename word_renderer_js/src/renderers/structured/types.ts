@@ -7,6 +7,7 @@ export type Block = JsonObject & { type: string };
 export type HeaderFooterConfig = JsonObject;
 
 export type ThemeConfig = {
+  themeName: string;
   accent: string;
   accentSoft: string;
   fontName: string;
@@ -19,6 +20,7 @@ export type ThemeConfig = {
   headingSize: number;
   headingSpaceBefore: number;
   headingSpaceAfter: number;
+  headingBottomBorder: boolean;
   bodySize: number;
   bodyIndent: number;
   bodySpaceAfter: number;

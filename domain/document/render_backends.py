@@ -3,24 +3,19 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Sequence
+from typing import Any, Literal, Protocol, Sequence
 
 from astrbot.api import logger
 
 from ...document_core.models.document import DocumentModel
-
-if TYPE_CHECKING:
-    from ...document_core.builders.word_builder import WordDocumentBuilder
 
 DocumentFormat = Literal["word", "ppt", "excel"]
 RenderBackendKind = Literal["python", "node"]
 
 _STORE_RENDER_BACKEND_CONFIG_ATTR = "_document_render_backend_config"
 _LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR = "_legacy_document_render_backend_config"
-_WORD_LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR = "_word_render_backend_config"
 
 
 @dataclass(slots=True)
@@ -63,10 +58,12 @@ class DocumentRenderBackend(Protocol):
 
     def render(self, document: DocumentModel, output_path: Path) -> RenderResult: ...
 
+
 class DocumentRenderBackendError(RuntimeError):
     def __init__(self, backend_name: str, message: str):
         super().__init__(message)
         self.backend_name = backend_name
+
 
 def attach_render_backend_config(
     store: object,
@@ -74,7 +71,6 @@ def attach_render_backend_config(
 ) -> None:
     setattr(store, _STORE_RENDER_BACKEND_CONFIG_ATTR, config)
     setattr(store, _LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR, config)
-    setattr(store, _WORD_LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR, config)
 
 
 def get_render_backend_config(
@@ -86,11 +82,6 @@ def get_render_backend_config(
     legacy_config = getattr(store, _LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR, None)
     if isinstance(legacy_config, DocumentRenderBackendConfig):
         return legacy_config
-    word_config = getattr(
-        store, _WORD_LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR, None
-    )
-    if isinstance(word_config, DocumentRenderBackendConfig):
-        return word_config
     return None
 
 
@@ -145,32 +136,6 @@ def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
     }
 
 
-class _DocumentBuilder(Protocol):
-    def build(self, document: DocumentModel, output_path: Path) -> None: ...
-
-
-def _load_word_document_builder() -> type["WordDocumentBuilder"]:
-    from ...document_core.builders.word_builder import WordDocumentBuilder
-
-    return WordDocumentBuilder
-
-
-class PythonWordRenderBackend:
-    name = "python"
-
-    def __init__(self, builder: _DocumentBuilder | None = None) -> None:
-        self._builder = builder
-
-    def _get_builder(self) -> _DocumentBuilder:
-        if self._builder is None:
-            self._builder = _load_word_document_builder()()
-        return self._builder
-
-    def render(self, document: DocumentModel, output_path: Path) -> RenderResult:
-        self._get_builder().build(document, output_path)
-        return RenderResult(backend_name=self.name, output_path=output_path)
-
-
 class NodeDocumentRenderBackend:
     name = "node"
 
@@ -195,6 +160,16 @@ class NodeDocumentRenderBackend:
             )
 
         payload = build_document_render_payload(document)
+        logger.warning(
+            "[office-assistant] js renderer entry=%s document=%s",
+            entry_path,
+            document.document_id,
+        )
+        logger.warning(
+            "[office-assistant] js renderer metadata document=%s metadata=%s",
+            document.document_id,
+            payload.get("metadata"),
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -319,15 +294,7 @@ def build_document_render_backends(
     resolved = config or DocumentRenderBackendConfig()
 
     if document_format == "word":
-        python_backend = PythonWordRenderBackend()
-        if resolved.preferred_backend_for("word") == "python":
-            return [python_backend]
-        node_backend = NodeDocumentRenderBackend(
-            entry_path=resolved.js_renderer_entry or None
-        )
-        if resolved.fallback_enabled_for("word"):
-            return [node_backend, python_backend]
-        return [node_backend]
+        return [NodeDocumentRenderBackend(entry_path=resolved.js_renderer_entry or None)]
 
     if document_format == "ppt":
         if resolved.preferred_backend_for("ppt") == "python":
@@ -343,36 +310,6 @@ def build_document_render_backends(
         return [PythonExcelRenderBackend()]
 
     raise ValueError(f"Unsupported document format: {document_format}")
-
-
-def _build_word_render_backends_compat(
-    config: DocumentRenderBackendConfig | None = None,
-) -> list[DocumentRenderBackend]:
-    return build_document_render_backends("word", config)
-
-
-_build_word_render_backends_compat.__name__ = "build_word_render_backends"
-
-
-_LEGACY_EXPORTS = {
-    "WordRenderBackendConfig": DocumentRenderBackendConfig,
-    "WordRenderBackend": DocumentRenderBackend,
-    "WordRenderBackendError": DocumentRenderBackendError,
-    "NodeWordRenderBackend": NodeDocumentRenderBackend,
-    "build_word_render_backends": _build_word_render_backends_compat,
-}
-
-
-def __getattr__(name: str):
-    if name in _LEGACY_EXPORTS:
-        warnings.warn(
-            f"render_backends.{name} is a legacy Word-specific alias. "
-            "Use the document render backend interfaces instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _LEGACY_EXPORTS[name]
-    raise AttributeError(name)
 
 
 __all__ = [

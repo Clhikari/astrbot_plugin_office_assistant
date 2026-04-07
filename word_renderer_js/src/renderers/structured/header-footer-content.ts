@@ -3,6 +3,7 @@ import {
   BorderStyle,
   Paragraph,
   SimpleField,
+  Tab,
   TabStopPosition,
   TabStopType,
   TextRun,
@@ -11,7 +12,13 @@ import {
 import { JsonObject } from "../../core/payload";
 import { DEFAULT_DIVIDER_COLOR } from "./constants";
 import { HeaderFooterConfig, ThemeConfig } from "./types";
-import { booleanValue, mapAlignment, normalizeHexColor, stringValue } from "./utils";
+import {
+  booleanValue,
+  halfPoint,
+  mapAlignment,
+  normalizeHexColor,
+  stringValue,
+} from "./utils";
 import { buildFontAttributes } from "./inline";
 import {
   containsPagePlaceholder,
@@ -66,6 +73,7 @@ export function buildHeaderFooterParagraphs(
             position: TabStopPosition.MAX,
           },
         ],
+        spacing: { before: 0, after: 0 },
         children: buildSplitHeaderFooterRuns(left, right, theme),
       }),
     ];
@@ -76,10 +84,12 @@ export function buildHeaderFooterParagraphs(
       return [
         new Paragraph({
           border: buildHeaderFooterDivider(config, kind),
+          spacing: { before: 0, after: 0 },
           children: buildInlineRuns(left, theme),
         }),
         new Paragraph({
           alignment: resolvePageNumberAlignment(config),
+          spacing: { before: 0, after: 0 },
           children: [new SimpleField("PAGE")],
         }),
       ];
@@ -88,6 +98,7 @@ export function buildHeaderFooterParagraphs(
       new Paragraph({
         border: buildHeaderFooterDivider(config, kind),
         alignment: resolvePageNumberAlignment(config),
+        spacing: { before: 0, after: 0 },
         children: [new SimpleField("PAGE")],
       }),
     ];
@@ -96,6 +107,7 @@ export function buildHeaderFooterParagraphs(
   return [
     new Paragraph({
       border: buildHeaderFooterDivider(config, kind),
+      spacing: { before: 0, after: 0 },
       children: buildInlineRuns(left, theme),
     }),
   ];
@@ -113,8 +125,8 @@ function buildSplitHeaderFooterRuns(
   if (left.trim() || right.trim()) {
     children.push(
       new TextRun({
-        text: "\t",
-        font: buildFontAttributes(theme.fontName),
+        children: [new Tab()],
+        ...buildHeaderFooterRunStyle(theme),
       }),
     );
   }
@@ -123,7 +135,7 @@ function buildSplitHeaderFooterRuns(
   }
   return children.length > 0
     ? children
-    : [new TextRun({ text: "", font: buildFontAttributes(theme.fontName) })];
+    : [new TextRun({ text: "", ...buildHeaderFooterRunStyle(theme) })];
 }
 
 function buildInlineRuns(
@@ -134,7 +146,7 @@ function buildInlineRuns(
     return [
       new TextRun({
         text,
-        font: buildFontAttributes(theme.fontName),
+        ...buildHeaderFooterRunStyle(theme),
       }),
     ];
   }
@@ -145,7 +157,7 @@ function buildInlineRuns(
       children.push(
         new TextRun({
           text: part,
-          font: buildFontAttributes(theme.fontName),
+          ...buildHeaderFooterRunStyle(theme),
         }),
       );
     }
@@ -154,6 +166,14 @@ function buildInlineRuns(
     }
   });
   return children.length > 0 ? children : [new SimpleField("PAGE")];
+}
+
+function buildHeaderFooterRunStyle(theme: ThemeConfig) {
+  return {
+    font: buildFontAttributes(theme.fontName),
+    size: halfPoint(8),
+    color: "595959",
+  };
 }
 
 function resolvePageNumberAlignment(config: HeaderFooterConfig) {

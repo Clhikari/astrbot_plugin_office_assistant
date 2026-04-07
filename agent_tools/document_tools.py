@@ -336,7 +336,7 @@ class AddBlocksTool(DocumentToolBase):
     name: str = "add_blocks"
     description: str = (
         "Append one or more blocks in order. Use this for mixed content such as "
-        "hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
+        "page_template, hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
         "not as a separate heading block. For table styling, use table-specific fields like "
@@ -354,11 +354,60 @@ class AddBlocksTool(DocumentToolBase):
                 },
                 "blocks": {
                     "type": "array",
-                    "description": "Ordered block list. Supported block types: hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
+                    "description": "Ordered block list. Supported block types: page_template, hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, columns.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "type": {"type": "string"},
+                            "template": {
+                                "type": "string",
+                                "description": "Template name for page_template blocks. First supported value is business_review_cover.",
+                            },
+                            "data": {
+                                "type": "object",
+                                "description": "Template payload for page_template blocks.",
+                                "properties": {
+                                    "title": {
+                                        "type": "string",
+                                        "description": "Primary title for the template page.",
+                                    },
+                                    "subtitle": {
+                                        "type": "string",
+                                        "description": "Optional subtitle for the template page.",
+                                    },
+                                    "summary_title": {
+                                        "type": "string",
+                                        "description": "Optional summary box title. Default is 核心摘要.",
+                                    },
+                                    "summary_text": {
+                                        "type": "string",
+                                        "description": "Main summary paragraph for the template page.",
+                                    },
+                                    "metrics": {
+                                        "type": "array",
+                                        "description": "Metric items rendered inside the template page. First version supports 1 to 4 items.",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "label": {"type": "string"},
+                                                "value": {"type": "string"},
+                                                "delta": {"type": "string"},
+                                                "delta_color": {"type": "string"},
+                                                "note": {"type": "string"},
+                                            },
+                                            "required": ["label", "value"],
+                                        },
+                                    },
+                                    "footer_note": {
+                                        "type": "string",
+                                        "description": "Optional footer note on cover. DO NOT USE THIS for document '编制人/日期'. To add '编制人' information, you MUST append a right-aligned paragraph block with color 595959 as the VERY LAST block of the entire document.",
+                                    },
+                                    "auto_page_break": {
+                                        "type": "boolean",
+                                        "description": "Whether the template page should end with an automatic page break.",
+                                    },
+                                },
+                            },
                             "text": {"type": "string"},
                             "subtitle": {"type": "string"},
                             "runs": {

@@ -13,7 +13,7 @@ import { RenderCliError } from "../../core/errors";
 import { DocumentRenderPayload, JsonObject } from "../../core/payload";
 import {
   renderDocumentTitle,
-  renderHeading,
+  renderHeadingBlock,
   renderList,
   renderParagraph,
   renderSummaryCard,
@@ -35,6 +35,10 @@ import {
   usesEvenPageVariants,
   usesFirstPageVariants,
 } from "./header-footer";
+import { createSpacingParagraph } from "./layout-spacing";
+import {
+  renderPageTemplate,
+} from "./page-templates";
 import { renderTable } from "./table";
 import { buildPageMargins, resolveTheme } from "./theme";
 import {
@@ -53,6 +57,7 @@ import {
   numberValue,
   stringValue,
 } from "./utils";
+import { buildBusinessReviewFooterNote } from "./page-templates/business-review-cover";
 
 export async function renderStructuredDocument(
   payload: DocumentRenderPayload,
@@ -60,6 +65,7 @@ export async function renderStructuredDocument(
 ): Promise<void> {
   const metadata = asObject(payload.metadata);
   const theme = resolveTheme(metadata);
+  const structuredBlocks = payload.blocks.map((block) => block as Block);
   const defaultHeaderFooter = asObject(metadata.header_footer);
   const sections: SectionState[] = [
     {
@@ -70,13 +76,15 @@ export async function renderStructuredDocument(
     },
   ];
 
-  const titleParagraph = renderDocumentTitle(metadata, theme);
+  const titleParagraph = shouldRenderDocumentTitle(structuredBlocks)
+    ? renderDocumentTitle(metadata, theme)
+    : null;
   if (titleParagraph) {
     sections[0].children.push(titleParagraph);
   }
 
   appendBlocksToSections(
-    payload.blocks.map((block) => block as Block),
+    structuredBlocks,
     metadata,
     theme,
     sections,
@@ -115,6 +123,11 @@ export async function renderStructuredDocument(
   await BunLike.writeFile(outputPath, buffer);
 }
 
+function shouldRenderDocumentTitle(blocks: Block[]): boolean {
+  const firstBlockType = blocks[0]?.type;
+  return firstBlockType !== "page_template" && firstBlockType !== "hero_banner";
+}
+
 function appendBlocksToSections(
   blocks: Block[],
   metadata: JsonObject,
@@ -123,8 +136,15 @@ function appendBlocksToSections(
   currentHeaderFooter: HeaderFooterConfig,
 ): HeaderFooterConfig {
   let activeHeaderFooter = currentHeaderFooter;
+  const deferredTrailingChildren: FileChild[] = [];
 
-  for (const block of blocks) {
+  for (const [index, rawBlock] of blocks.entries()) {
+    const pageTemplateOverride =
+      rawBlock.type === "page_template" && index < blocks.length - 1
+        ? prepareTrailingPageTemplate(rawBlock, theme, deferredTrailingChildren)
+        : null;
+    const block = pageTemplateOverride ?? rawBlock;
+
     if (block.type === "section_break") {
       activeHeaderFooter = appendSectionBreak(
         block,
@@ -156,7 +176,7 @@ function appendBlocksToSections(
               "Section state is empty",
             );
           }
-          section.children.push(new Paragraph(""));
+          section.children.push(createSpacingParagraph({ afterPt: 3 }));
         }
 
         activeHeaderFooter = appendBlocksToSections(
@@ -178,9 +198,72 @@ function appendBlocksToSections(
       );
     }
     section.children.push(...renderBlock(block, metadata, theme));
+    const interBlockSpacingAfterPt = resolveInterBlockSpacingAfterPt(block, metadata);
+    if (interBlockSpacingAfterPt > 0) {
+      section.children.push(createSpacingParagraph({ afterPt: interBlockSpacingAfterPt }));
+    }
+  }
+
+  if (deferredTrailingChildren.length > 0) {
+    const lastSection = sections.at(-1);
+    if (!lastSection) {
+      throw new RenderCliError(
+        "SECTION_STATE_INVALID",
+        "Section state is empty",
+      );
+    }
+    lastSection.children.push(...deferredTrailingChildren);
   }
 
   return activeHeaderFooter;
+}
+
+function resolveInterBlockSpacingAfterPt(block: Block, metadata: JsonObject): number {
+  const layout = asObject(block.layout);
+  const explicitSpacingAfter = numberValue(layout.spacing_after);
+  if (explicitSpacingAfter !== undefined) {
+    return explicitSpacingAfter;
+  }
+  if (stringValue(metadata.theme_name) !== "business_report") {
+    return 0;
+  }
+  switch (block.type) {
+    case "hero_banner":
+      return 6;
+    case "accent_box":
+      return 5;
+    case "metric_cards":
+      return 7;
+    case "table":
+      return 6;
+    default:
+      return 0;
+  }
+}
+
+function prepareTrailingPageTemplate(
+  block: Block,
+  theme: ThemeConfig,
+  deferredTrailingChildren: FileChild[],
+): Block | null {
+  if (block.type !== "page_template") {
+    return null;
+  }
+  const data = asObject(block.data);
+  const templateName = stringValue(block.template);
+  const footerNote = stringValue(data.footer_note).trim();
+  if (templateName === "business_review_cover" && footerNote) {
+    deferredTrailingChildren.push(...buildBusinessReviewFooterNote(footerNote, theme));
+  }
+
+  return {
+    ...block,
+    data: {
+      ...data,
+      auto_page_break: false,
+      footer_note: "",
+    },
+  } as Block;
 }
 
 function appendSectionBreak(
@@ -271,10 +354,12 @@ function renderBlock(
   theme: ThemeConfig,
 ): FileChild[] {
   switch (block.type) {
+    case "page_template":
+      return renderPageTemplate(block, metadata, theme);
     case "hero_banner":
       return [renderHeroBanner(block, theme)];
     case "heading":
-      return [renderHeading(block, metadata, theme)];
+      return renderHeadingBlock(block, metadata, theme);
     case "paragraph":
       return renderParagraph(block, metadata, theme);
     case "list":

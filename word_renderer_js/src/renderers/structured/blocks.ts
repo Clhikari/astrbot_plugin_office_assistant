@@ -11,6 +11,7 @@ import {
 import { JsonObject } from "../../core/payload";
 import { DEFAULT_DIVIDER_COLOR } from "./constants";
 import { Block, FileChild, ThemeConfig } from "./types";
+import { createSpacingParagraph } from "./layout-spacing";
 import {
   arrayValue,
   asObject,
@@ -67,6 +68,7 @@ export function renderHeading(
   theme: ThemeConfig,
 ): Paragraph {
   const documentStyle = asObject(metadata.document_style);
+  const isBusinessReport = theme.themeName === "business_report";
   const level = numberValue(block.level) ?? 1;
   const style = asObject(block.style);
   const layout = asObject(block.layout);
@@ -78,34 +80,48 @@ export function renderHeading(
   const fontScale = numberValue(style.font_scale) ?? 1;
   const baseSize =
     level <= 1 ? theme.headingSize : Math.max(theme.bodySize + 1, 11.5);
-  const border =
-    booleanValue(block.bottom_border) === true
-      ? {
-          bottom: {
-            color:
-              stringValue(block.bottom_border_color) ||
-              stringValue(documentStyle.heading_bottom_border_color) ||
-              DEFAULT_DIVIDER_COLOR,
-            style: BorderStyle.SINGLE,
-            size: Math.max(
-              4,
-              Math.round(
-                (numberValue(block.bottom_border_size_pt) ||
-                  numberValue(documentStyle.heading_bottom_border_size_pt) ||
-                  0.5) * 8,
-              ),
+  const showBorder =
+    booleanValue(block.bottom_border) ??
+    booleanValue(documentStyle.heading_bottom_border) ??
+    theme.headingBottomBorder;
+  const useDedicatedDivider = isBusinessReport && level <= 2 && showBorder;
+  const border = !useDedicatedDivider && showBorder
+    ? {
+        bottom: {
+          color:
+            stringValue(block.bottom_border_color) ||
+            stringValue(documentStyle.heading_bottom_border_color) ||
+            (isBusinessReport ? theme.accent : DEFAULT_DIVIDER_COLOR),
+          style: BorderStyle.SINGLE,
+          size: Math.max(
+            4,
+            Math.round(
+              (numberValue(block.bottom_border_size_pt) ||
+                numberValue(documentStyle.heading_bottom_border_size_pt) ||
+                (isBusinessReport ? 0.75 : 0.5)) * 8,
             ),
-          },
-        }
-      : undefined;
+          ),
+        },
+      }
+    : undefined;
+  const spacingBefore =
+    numberValue(layout.spacing_before) ??
+    (isBusinessReport && level <= 2 ? (level <= 1 ? 8 : 4) : theme.headingSpaceBefore);
+  const spacingAfter =
+    numberValue(layout.spacing_after) ??
+    (useDedicatedDivider
+      ? 0
+      : isBusinessReport && level <= 2
+        ? (level <= 1 ? 7 : 5)
+        : theme.headingSpaceAfter);
 
   return new Paragraph({
     heading: mapHeadingLevel(level),
     alignment: mapAlignment(stringValue(style.align)) ?? AlignmentType.LEFT,
     border,
     spacing: {
-      before: point(numberValue(layout.spacing_before) ?? theme.headingSpaceBefore),
-      after: point(numberValue(layout.spacing_after) ?? theme.headingSpaceAfter),
+      before: point(spacingBefore),
+      after: point(spacingAfter),
     },
     children: [
       new TextRun({
@@ -119,6 +135,68 @@ export function renderHeading(
   });
 }
 
+export function renderHeadingBlock(
+  block: Block,
+  metadata: JsonObject,
+  theme: ThemeConfig,
+): FileChild[] {
+  const documentStyle = asObject(metadata.document_style);
+  const isBusinessReport = theme.themeName === "business_report";
+  const level = numberValue(block.level) ?? 1;
+  const showBorder =
+    booleanValue(block.bottom_border) ??
+    booleanValue(documentStyle.heading_bottom_border) ??
+    theme.headingBottomBorder;
+  const useDedicatedDivider = isBusinessReport && level <= 2 && showBorder;
+  const heading = renderHeading(block, metadata, theme);
+
+  if (!useDedicatedDivider) {
+    return [heading];
+  }
+
+  const dividerColor =
+    stringValue(block.bottom_border_color) ||
+    stringValue(documentStyle.heading_bottom_border_color) ||
+    theme.accent;
+  const dividerSize = Math.max(
+    4,
+    Math.round(
+      (numberValue(block.bottom_border_size_pt) ||
+        numberValue(documentStyle.heading_bottom_border_size_pt) ||
+        0.75) * 8,
+    ),
+  );
+  const dividerSpacingAfterPt =
+    numberValue(asObject(block.layout).spacing_after) ??
+    (level <= 1 ? 7 : 5);
+
+  return [
+    heading,
+    new Paragraph({
+      border: {
+        bottom: {
+          color: dividerColor,
+          style: BorderStyle.SINGLE,
+          size: dividerSize,
+        },
+      },
+      spacing: {
+        before: point(level <= 1 ? 1.5 : 1),
+        after: 0,
+        line: point(level <= 1 ? 4 : 3.5),
+        lineRule: LineRuleType.EXACT,
+      },
+      children: [
+        new TextRun({
+          text: " ",
+          size: 6,
+        }),
+      ],
+    }),
+    createSpacingParagraph({ afterPt: dividerSpacingAfterPt }),
+  ];
+}
+
 export function renderParagraph(
   block: Block,
   metadata: JsonObject,
@@ -128,7 +206,10 @@ export function renderParagraph(
   const style = asObject(block.style);
   const layout = asObject(block.layout);
   const variant = stringValue(block.variant) || "body";
-  const bodyFontSize = numberValue(documentStyle.body_font_size) || theme.bodySize;
+  const bodyFontSize =
+    numberValue(block.base_font_size) ||
+    numberValue(documentStyle.body_font_size) ||
+    theme.bodySize;
   const bodyLineSpacing =
     numberValue(documentStyle.body_line_spacing) || theme.bodyLineSpacing;
 
@@ -164,7 +245,7 @@ export function renderParagraph(
             numberValue(documentStyle.paragraph_space_after) ??
             theme.bodySpaceAfter,
         ),
-        line: point(bodyFontSize * bodyLineSpacing),
+        line: Math.round(bodyLineSpacing * 240),
         lineRule: LineRuleType.AUTO,
       },
       indent: {

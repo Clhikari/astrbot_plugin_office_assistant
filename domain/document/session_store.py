@@ -13,6 +13,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from ...document_core.macros import summary_card_defaults_from_config
 from ...document_core.models.blocks import (
     AccentBoxBlock,
+    BusinessReviewCoverData,
     ColumnBlock,
     ColumnsBlock,
     DocumentBlock,
@@ -22,6 +23,8 @@ from ...document_core.models.blocks import (
     ListBlock,
     MetricCard,
     MetricCardsBlock,
+    PageTemplateBlock,
+    PageTemplateMetricItem,
     PageBreakBlock,
     ParagraphBlock,
     SectionBreakBlock,
@@ -34,6 +37,7 @@ from ...document_core.models.document import (
     DocumentModel,
     DocumentStatus,
     DocumentSummaryCardDefaults,
+    DocumentStyleConfig,
 )
 from .contracts import (
     AddBlocksRequest,
@@ -51,6 +55,7 @@ from .contracts import (
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
+    SectionPageTemplateInput,
     SectionBreakInput,
     SectionAccentBoxInput,
     SectionCardInput,
@@ -86,6 +91,7 @@ SummaryCardDefaultsResolver = Callable[
     dict[str, object | None],
 ]
 RuntimeBlock = DocumentBlock
+_STORE_DOCUMENT_STYLE_DEFAULTS_ATTR = "_document_style_defaults"
 
 
 def _default_workspace_dir() -> Path:
@@ -102,6 +108,37 @@ def _is_within_workspace(path: Path, workspace_dir: Path) -> bool:
 
 def _looks_like_numbered_heading(text: str) -> bool:
     return bool(TABLE_CAPTION_NUMBERED_HEADING_RE.match(text.strip()))
+
+
+def attach_document_style_defaults(
+    store: object,
+    defaults: dict[str, object] | None,
+) -> None:
+    setattr(store, _STORE_DOCUMENT_STYLE_DEFAULTS_ATTR, dict(defaults or {}))
+
+
+def get_document_style_defaults(store: object) -> dict[str, object]:
+    defaults = getattr(store, _STORE_DOCUMENT_STYLE_DEFAULTS_ATTR, None)
+    return dict(defaults) if isinstance(defaults, dict) else {}
+
+
+def merge_document_style_defaults(
+    document_style: DocumentStyleConfig,
+    defaults: dict[str, object] | None,
+) -> DocumentStyleConfig:
+    resolved_defaults = dict(defaults or {})
+    if not resolved_defaults:
+        return document_style
+
+    explicit_fields = set(getattr(document_style, "model_fields_set", set()))
+    merged_payload = document_style.model_dump(mode="python")
+    for field_name, value in resolved_defaults.items():
+        if field_name in explicit_fields:
+            continue
+        if value in (None, ""):
+            continue
+        merged_payload[field_name] = value
+    return DocumentStyleConfig.model_validate(merged_payload)
 
 
 class DocumentSessionStore:
@@ -164,6 +201,10 @@ class DocumentSessionStore:
     def create_document(self, request: CreateDocumentRequest) -> DocumentModel:
         with self._lock:
             document_id = uuid4().hex
+            document_style = merge_document_style_defaults(
+                request.document_style,
+                get_document_style_defaults(self),
+            )
             document = DocumentModel(
                 document_id=document_id,
                 session_id=request.session_id,
@@ -175,7 +216,7 @@ class DocumentSessionStore:
                     density=request.density,
                     accent_color=request.accent_color,
                     header_footer=request.header_footer,
-                    document_style=request.document_style,
+                    document_style=document_style,
                 ),
             )
             self._documents[document_id] = document
@@ -355,6 +396,28 @@ class DocumentSessionStore:
         block: BlockInput,
         document: DocumentModel,
     ) -> RuntimeBlock:
+        if isinstance(block, SectionPageTemplateInput):
+            return PageTemplateBlock(
+                template=block.template,
+                data=BusinessReviewCoverData(
+                    title=block.data.title,
+                    subtitle=block.data.subtitle,
+                    summary_title=block.data.summary_title,
+                    summary_text=block.data.summary_text,
+                    metrics=[
+                        PageTemplateMetricItem(
+                            label=metric.label,
+                            value=metric.value,
+                            delta=metric.delta,
+                            delta_color=metric.delta_color,
+                            note=metric.note,
+                        )
+                        for metric in block.data.metrics
+                    ],
+                    footer_note=block.data.footer_note,
+                    auto_page_break=block.data.auto_page_break,
+                ),
+            )
         if isinstance(block, SectionHeroBannerInput):
             return HeroBannerBlock(
                 title=block.title,

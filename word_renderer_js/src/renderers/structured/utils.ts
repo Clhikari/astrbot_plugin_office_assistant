@@ -124,6 +124,40 @@ export function resolveBoxPadding(
   };
 }
 
+export function resolveBoxPaddingEdges(
+  layout: JsonObject,
+  defaults: { top: number; right: number; bottom: number; left: number },
+): {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+  marginUnitType: (typeof WidthType)[keyof typeof WidthType];
+} {
+  const top = numberValue(layout.padding_top_pt) ?? defaults.top;
+  const right = numberValue(layout.padding_right_pt) ?? defaults.right;
+  const bottom = numberValue(layout.padding_bottom_pt) ?? defaults.bottom;
+  const left = numberValue(layout.padding_left_pt) ?? defaults.left;
+
+  return {
+    top: point(top),
+    right: point(right),
+    bottom: point(bottom),
+    left: point(left),
+    marginUnitType: WidthType.DXA,
+  };
+}
+
+export function resolveContentWidthDxa(
+  theme: ThemeConfig,
+  sideInsetCm = 0,
+): number {
+  const pageWidthCm = 21;
+  const usableWidthCm =
+    pageWidthCm - theme.margins.leftCm - theme.margins.rightCm - sideInsetCm * 2;
+  return Math.max(cmToTwip(usableWidthCm), 4000);
+}
+
 export function resolveBold(
   defaultBold: boolean,
   emphasis: string | undefined,

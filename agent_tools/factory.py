@@ -19,6 +19,7 @@ def build_document_toolset(
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
     render_backend_config: DocumentRenderBackendConfig | None = None,
+    default_document_style: dict[str, object] | None = None,
 ) -> ToolSet:
     return build_document_toolset_from_registry(
         workspace_dir=workspace_dir,
@@ -26,6 +27,7 @@ def build_document_toolset(
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
         render_backend_config=render_backend_config,
+        default_document_style=default_document_style,
     )
 
 
