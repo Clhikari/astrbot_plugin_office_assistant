@@ -8,9 +8,12 @@ import pytest
 
 
 # Ensure tests can import the package when pytest is run from the project root.
-PROJECT_PARENT = Path(__file__).resolve().parents[2]
-if str(PROJECT_PARENT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_PARENT))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_IMPORT_BASE = (
+    PROJECT_ROOT.parent if (PROJECT_ROOT / "__init__.py").exists() else PROJECT_ROOT
+)
+if str(PACKAGE_IMPORT_BASE) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_IMPORT_BASE))
 
 
 @pytest.fixture
