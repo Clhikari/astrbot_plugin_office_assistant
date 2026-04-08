@@ -612,6 +612,21 @@ def test_build_document_render_payload_preserves_runs_when_text_and_runs_exist()
     assert payload["blocks"][0]["runs"][0]["text"] == "rich"
     assert payload["blocks"][0]["runs"][1]["text"] == " content"
 
+def test_build_document_render_payload_keeps_default_metadata_fields():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Default Metadata"),
+    )
+
+    payload = build_document_render_payload(document)
+
+    assert payload["metadata"]["preferred_filename"] == "document.docx"
+    assert payload["metadata"]["theme_name"] == "business_report"
+    assert payload["metadata"]["table_template"] == "report_grid"
+    assert payload["metadata"]["density"] == "comfortable"
+
 def test_build_document_render_payload_omits_unset_heading_bottom_border():
     document = DocumentModel(
         document_id="doc-1",

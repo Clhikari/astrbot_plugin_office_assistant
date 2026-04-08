@@ -86,7 +86,7 @@ def get_render_backend_config(
 
 
 def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
-    metadata = document.metadata.model_dump(mode="json", exclude_unset=True)
+    metadata = document.metadata.model_dump(mode="json")
     metadata["document_style"] = document.metadata.document_style.model_dump(
         mode="json",
         exclude_unset=True,
