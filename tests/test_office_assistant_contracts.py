@@ -611,6 +611,23 @@ def test_build_document_render_payload_preserves_runs_when_text_and_runs_exist()
     assert payload["blocks"][0]["runs"][0]["text"] == "rich"
     assert payload["blocks"][0]["runs"][1]["text"] == " content"
 
+def test_build_document_render_payload_omits_unset_heading_bottom_border():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Heading Defaults"),
+        blocks=[
+            HeadingBlock(text="默认分割线标题", level=1),
+            HeadingBlock(text="显式关闭分割线标题", level=1, bottom_border=False),
+        ],
+    )
+
+    payload = build_document_render_payload(document)
+
+    assert "bottom_border" not in payload["blocks"][0]
+    assert payload["blocks"][1]["bottom_border"] is False
+
 def test_create_document_request_normalizes_document_style():
     request = CreateDocumentRequest(
         title="Styled",

@@ -1,6 +1,8 @@
 import {
   AlignmentType,
+  BorderStyle,
   HeightRule,
+  LineRuleType,
   Paragraph,
   ShadingType,
   Table,
@@ -11,10 +13,11 @@ import {
   WidthType,
 } from "docx";
 
-import { Block, ThemeConfig } from "./types";
+import { Block, FileChild, ThemeConfig } from "./types";
 import { buildFontAttributes } from "./inline";
 import {
   asObject,
+  borderSize,
   booleanValue,
   halfPoint,
   mapAlignment,
@@ -135,4 +138,41 @@ export function renderHeroBanner(block: Block, theme: ThemeConfig): Table {
       }),
     ],
   });
+}
+
+export function renderHeroBannerBlock(
+  block: Block,
+  theme: ThemeConfig,
+): FileChild[] {
+  const children: FileChild[] = [renderHeroBanner(block, theme)];
+
+  if (theme.themeName !== "business_report") {
+    return children;
+  }
+
+  children.push(
+    new Paragraph({
+      border: {
+        bottom: {
+          color: theme.heroBannerDividerColor,
+          style: BorderStyle.SINGLE,
+          size: borderSize(undefined, theme.heroBannerDividerSizePt),
+        },
+      },
+      spacing: {
+        before: point(2),
+        after: 0,
+        line: point(4),
+        lineRule: LineRuleType.EXACT,
+      },
+      children: [
+        new TextRun({
+          text: " ",
+          size: 6,
+        }),
+      ],
+    }),
+  );
+
+  return children;
 }

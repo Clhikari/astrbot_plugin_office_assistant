@@ -20,7 +20,7 @@ import {
   renderToc,
 } from "./blocks";
 import { renderAccentBox, renderMetricCards } from "./cards";
-import { renderHeroBanner } from "./hero-banner";
+import { renderHeroBannerBlock } from "./hero-banner";
 import {
   EXTERNAL_WORD_STYLES_XML,
   ORDERED_NUMBERING_REFERENCE,
@@ -357,7 +357,7 @@ function renderBlock(
     case "page_template":
       return renderPageTemplate(block, metadata, theme);
     case "hero_banner":
-      return [renderHeroBanner(block, theme)];
+      return renderHeroBannerBlock(block, theme);
     case "heading":
       return renderHeadingBlock(block, metadata, theme);
     case "paragraph":

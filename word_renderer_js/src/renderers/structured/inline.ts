@@ -37,6 +37,28 @@ export function normalizeInlineItem(
   return { runs: buildRuns({ text: stringValue(obj.text) }, theme, defaults) };
 }
 
+function normalizeLineBreaks(text: string): string {
+  return text.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+}
+
+function buildTextRuns(
+  text: string,
+  options: Record<string, unknown>,
+): TextRun[] {
+  const normalizedText = normalizeLineBreaks(text);
+  const segments = normalizedText.split("\n");
+  if (segments.length === 1) {
+    return [new TextRun({ ...options, text: normalizedText })];
+  }
+  return segments.map((segment, index) =>
+    new TextRun({
+      ...options,
+      text: segment,
+      break: index === 0 ? undefined : 1,
+    }),
+  );
+}
+
 export function buildRuns(
   block: JsonObject,
   theme: ThemeConfig,
@@ -51,25 +73,21 @@ export function buildRuns(
 
   if (runs.length === 0) {
     const fontName = defaults?.fontName;
-    return [
-      new TextRun({
-        text: stringValue(block.text),
-        bold: resolveBold(false, defaults?.emphasis),
-        color: defaultColor,
-        size: defaultSize,
-        font: fontName ? buildFontAttributes(fontName) : undefined,
-      }),
-    ];
+    return buildTextRuns(stringValue(block.text), {
+      bold: resolveBold(false, defaults?.emphasis),
+      color: defaultColor,
+      size: defaultSize,
+      font: fontName ? buildFontAttributes(fontName) : undefined,
+    });
   }
 
-  return runs.map((rawRun) => {
+  return runs.flatMap((rawRun) => {
     const run = asObject(rawRun);
     const codeFontName = defaults?.codeFontName || "Consolas";
     const bodyFontName = defaults?.fontName;
     const fontName =
       booleanValue(run.code) === true ? codeFontName : bodyFontName;
-    return new TextRun({
-      text: stringValue(run.text),
+    return buildTextRuns(stringValue(run.text), {
       bold: resolveBold(booleanValue(run.bold) === true, defaults?.emphasis),
       italics: booleanValue(run.italic) === true,
       underline: booleanValue(run.underline) === true ? {} : undefined,
@@ -83,9 +101,9 @@ export function buildRuns(
 export function paragraphPlainText(block: Block): string {
   const runs = arrayValue(block.runs);
   if (runs.length > 0) {
-    return runs.map((run) => stringValue(asObject(run).text)).join("");
+    return runs.map((run) => normalizeLineBreaks(stringValue(asObject(run).text))).join("");
   }
-  return stringValue(block.text);
+  return normalizeLineBreaks(stringValue(block.text));
 }
 
 export function mergeStyleDefaults(

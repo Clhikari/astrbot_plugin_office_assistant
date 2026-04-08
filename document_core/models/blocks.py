@@ -107,7 +107,7 @@ class HeadingBlock(BlockBase):
     type: Literal["heading"] = "heading"
     text: str = Field(min_length=1)
     level: int = Field(default=1, ge=1, le=6)
-    bottom_border: bool = False
+    bottom_border: bool | None = None
     bottom_border_color: str | None = None
     bottom_border_size_pt: float | None = Field(default=None, gt=0, le=6)
 

@@ -10,6 +10,10 @@ export type ThemeConfig = {
   themeName: string;
   accent: string;
   accentSoft: string;
+  accentBoxStripColor: string;
+  headingBottomBorderColor: string;
+  heroBannerDividerColor: string;
+  heroBannerDividerSizePt: number;
   fontName: string;
   headingFontName: string;
   tableFontName: string;
@@ -21,6 +25,7 @@ export type ThemeConfig = {
   headingSpaceBefore: number;
   headingSpaceAfter: number;
   headingBottomBorder: boolean;
+  headingBottomBorderSizePt: number;
   bodySize: number;
   bodyIndent: number;
   bodySpaceAfter: number;

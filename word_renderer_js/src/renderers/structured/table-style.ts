@@ -229,6 +229,9 @@ export function resolveTableBodyAlignment(
   if (explicit) {
     return explicit;
   }
+  if (tableStyleName === "report_grid") {
+    return AlignmentType.CENTER;
+  }
   if (numericColumns.has(columnIndex)) {
     return AlignmentType.RIGHT;
   }

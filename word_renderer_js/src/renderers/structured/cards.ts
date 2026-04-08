@@ -28,6 +28,13 @@ import {
 
 const BUSINESS_REPORT_CONTENT_WIDTH_DXA = 9360;
 
+function isBusinessReportSummaryBox(block: Block, useStripLayout: boolean): boolean {
+  if (!useStripLayout) {
+    return false;
+  }
+  return stringValue(block.title).includes("核心摘要");
+}
+
 export function renderAccentBox(
   block: Block,
   metadata: JsonObject,
@@ -36,8 +43,14 @@ export function renderAccentBox(
   const documentStyle = asObject(metadata.document_style);
   const isBusinessReport = stringValue(metadata.theme_name) === "business_report";
   const useStripLayout = isBusinessReport && booleanValue(block.strip_layout) !== false;
-  const accentColor = stringValue(block.accent_color) || theme.accent;
-  const fillColor = stringValue(block.fill_color) || theme.summaryFill;
+  const isSummaryBox = isBusinessReportSummaryBox(block, useStripLayout);
+  const accentColor = isSummaryBox
+    ? "0F6E56"
+    : stringValue(block.accent_color) ||
+      (useStripLayout ? theme.accentBoxStripColor : theme.accent);
+  const fillColor = isSummaryBox
+    ? "EEF9F5"
+    : stringValue(block.fill_color) || theme.summaryFill;
   const titleColor =
     stringValue(block.title_color) || (useStripLayout ? "595959" : accentColor);
   const borderColor = stringValue(block.border_color) || "D9E1E8";

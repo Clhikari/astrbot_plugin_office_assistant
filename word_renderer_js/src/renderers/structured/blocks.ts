@@ -91,14 +91,14 @@ export function renderHeading(
           color:
             stringValue(block.bottom_border_color) ||
             stringValue(documentStyle.heading_bottom_border_color) ||
-            (isBusinessReport ? theme.accent : DEFAULT_DIVIDER_COLOR),
+            (isBusinessReport ? theme.headingBottomBorderColor : DEFAULT_DIVIDER_COLOR),
           style: BorderStyle.SINGLE,
           size: Math.max(
             4,
             Math.round(
               (numberValue(block.bottom_border_size_pt) ||
                 numberValue(documentStyle.heading_bottom_border_size_pt) ||
-                (isBusinessReport ? 0.75 : 0.5)) * 8,
+                theme.headingBottomBorderSizePt) * 8,
             ),
           ),
         },
@@ -157,13 +157,13 @@ export function renderHeadingBlock(
   const dividerColor =
     stringValue(block.bottom_border_color) ||
     stringValue(documentStyle.heading_bottom_border_color) ||
-    theme.accent;
+    theme.headingBottomBorderColor;
   const dividerSize = Math.max(
     4,
     Math.round(
       (numberValue(block.bottom_border_size_pt) ||
         numberValue(documentStyle.heading_bottom_border_size_pt) ||
-        0.75) * 8,
+        theme.headingBottomBorderSizePt) * 8,
     ),
   );
   const dividerSpacingAfterPt =
@@ -181,7 +181,7 @@ export function renderHeadingBlock(
         },
       },
       spacing: {
-        before: point(level <= 1 ? 1.5 : 1),
+        before: point(level <= 1 ? 2.5 : 2),
         after: 0,
         line: point(level <= 1 ? 4 : 3.5),
         lineRule: LineRuleType.EXACT,

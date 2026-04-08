@@ -759,8 +759,8 @@ async def test_node_document_toolset_exports_business_review_cover_page_template
     assert overview_heading.text == "一、分区业绩"
     overview_divider = _paragraph_after(loaded_doc, overview_heading)
     assert _paragraph_bottom_border_color(overview_divider) == "1F4E79"
-    assert _paragraph_bottom_border_size(overview_divider) == "6"
-    assert overview_divider.paragraph_format.space_before.pt == pytest.approx(1.5, abs=0.3)
+    assert _paragraph_bottom_border_size(overview_divider) == "12"
+    assert overview_divider.paragraph_format.space_before.pt == pytest.approx(2.5, abs=0.3)
     assert overview_heading.paragraph_format.space_before.pt == pytest.approx(8, abs=0.2)
     assert overview_heading.paragraph_format.space_after.pt == pytest.approx(0, abs=0.2)
     assert (
@@ -988,6 +988,38 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
     assert _cell_border_color(accent_table.rows[0].cells[0], "right") == "CBD5E1"
     assert _cell_border_color(accent_table.rows[0].cells[0], "bottom") == "CBD5E1"
     assert _cell_border_size(accent_table.rows[0].cells[0], "top") == "6"
+
+def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_box(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-business-report-default-strip-and-divider",
+        {
+            "document_id": "business-report-default-strip-and-divider",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [
+                {
+                    "type": "hero_banner",
+                    "title": "Q3 经营复盘报告",
+                    "subtitle": "战略与增长委员会",
+                },
+                {
+                    "type": "accent_box",
+                    "title": "核心摘要",
+                    "text": "经营质量稳中有升。",
+                },
+            ],
+        },
+    )
+
+    hero_divider = loaded_doc.paragraphs[0]
+    accent_table = loaded_doc.tables[1]
+
+    assert _paragraph_bottom_border_color(hero_divider) == "2E75B6"
+    assert _paragraph_bottom_border_size(hero_divider) == "12"
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "EEF9F5"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "0F6E56"
     assert _cell_border_size(accent_table.rows[0].cells[0], "left") == "24"
     assert _cell_margin(accent_table.rows[0].cells[0], "left") == "320"
     assert metric_table.rows[0].cells[0].paragraphs[1].runs[0].font.size.pt > (
@@ -1163,7 +1195,7 @@ def test_node_renderer_supports_heading_styles_and_split_header_footer(
     heading_one_divider = _paragraph_after(loaded_doc, heading_one)
     assert _paragraph_bottom_border_color(heading_one_divider) == "CBD5E1"
     assert _paragraph_bottom_border_size(heading_one_divider) == "12"
-    assert heading_one_divider.paragraph_format.space_before.pt == pytest.approx(1.5, abs=0.3)
+    assert heading_one_divider.paragraph_format.space_before.pt == pytest.approx(2.5, abs=0.3)
     assert "Q3 经营复盘报告 | 战略与增长委员会" in header_paragraph.text
     assert "机密 · 2024 年 10 月" in header_paragraph.text
     assert "集团战略部 · 内部机密文件" in footer_paragraph.text
