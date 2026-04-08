@@ -75,7 +75,7 @@ export function buildTableBodyRows(
       if (rawCell === undefined) {
         throw new RenderCliError(
           "TABLE_ROW_SHAPE_INVALID",
-          `Table row exceeds logical column count (${columnCount})`,
+          `Table row is missing cells (expected ${columnCount})`,
         );
       }
       rowCursor += 1;
@@ -109,23 +109,14 @@ export function buildTableBodyRows(
                 line: bodyParagraphSpacing.line,
                 lineRule: LineRuleType.AUTO,
               },
-              children: [
-                new TextRun({
-                  text: cell.text,
-                  bold: cell.bold ?? (firstColumnBold && columnIndex === 0),
-                  color: cell.textColor,
-                  size: halfPoint(
-                    resolveTableFontSize(
-                      block,
-                      tableStyleName,
-                      theme,
-                      false,
-                      cell.fontScale,
-                    ),
-                  ),
-                  font: buildFontAttributes(theme.tableFontName),
-                }),
-              ],
+              children: buildTableCellTextRuns(
+                cell,
+                firstColumnBold,
+                columnIndex,
+                block,
+                tableStyleName,
+                theme,
+              ),
             }),
           ],
           verticalMerge:
@@ -175,6 +166,38 @@ export function normalizeTableCell(cell: unknown): TableCellValue {
     align: stringValue(obj.align) || undefined,
     fontScale: numberValue(obj.font_scale),
   };
+}
+
+function buildTableCellTextRuns(
+  cell: TableCellValue,
+  firstColumnBold: boolean,
+  columnIndex: number,
+  block: Block,
+  tableStyleName: string,
+  theme: ThemeConfig,
+): TextRun[] {
+  const resolvedFontSize = halfPoint(
+    resolveTableFontSize(
+      block,
+      tableStyleName,
+      theme,
+      false,
+      cell.fontScale,
+    ),
+  );
+  const textLines = cell.text.replace(/\\n/g, "\n").split(/\r?\n/);
+
+  return textLines.map(
+    (line, lineIndex) =>
+      new TextRun({
+        text: line,
+        break: lineIndex > 0 ? 1 : undefined,
+        bold: cell.bold ?? (firstColumnBold && columnIndex === 0),
+        color: cell.textColor,
+        size: resolvedFontSize,
+        font: buildFontAttributes(theme.tableFontName),
+      }),
+  );
 }
 
 export function resolveTableColumnCount(headers: string[], rows: unknown[]): number {

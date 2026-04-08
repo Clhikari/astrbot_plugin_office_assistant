@@ -27,9 +27,12 @@ from ...document_core.models.blocks import (
     PageTemplateMetricItem,
     PageBreakBlock,
     ParagraphBlock,
+    ResumeSection,
+    ResumeSectionEntry,
     SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
+    TechnicalResumeData,
     TocBlock,
 )
 from ...document_core.models.document import (
@@ -397,6 +400,41 @@ class DocumentSessionStore:
         document: DocumentModel,
     ) -> RuntimeBlock:
         if isinstance(block, SectionPageTemplateInput):
+            if block.template == "technical_resume":
+                return PageTemplateBlock(
+                    template=block.template,
+                    data=TechnicalResumeData(
+                        name=block.data.name,
+                        headline=block.data.headline,
+                        contact_line=block.data.contact_line,
+                        sections=[
+                            ResumeSection(
+                                title=section.title,
+                                entries=[
+                                    ResumeSectionEntry(
+                                        heading=entry.heading,
+                                        date=entry.date,
+                                        subtitle=entry.subtitle,
+                                        details=[
+                                            detail
+                                            if isinstance(detail, str)
+                                            else detail.model_copy(deep=True)
+                                            for detail in entry.details
+                                        ],
+                                    )
+                                    for entry in section.entries
+                                ],
+                                lines=[
+                                    line
+                                    if isinstance(line, str)
+                                    else line.model_copy(deep=True)
+                                    for line in section.lines
+                                ],
+                            )
+                            for section in block.data.sections
+                        ],
+                    ),
+                )
             return PageTemplateBlock(
                 template=block.template,
                 data=BusinessReviewCoverData(
@@ -648,6 +686,9 @@ class DocumentSessionStore:
                     BlockHeadingInput(
                         text=request.text,
                         level=request.level,
+                        bottom_border=request.bottom_border,
+                        bottom_border_color=request.bottom_border_color,
+                        bottom_border_size_pt=request.bottom_border_size_pt,
                         style=request.style.model_copy(deep=True),
                         layout=request.layout.model_copy(deep=True),
                     )

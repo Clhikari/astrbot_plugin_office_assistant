@@ -101,6 +101,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 from tests._docx_test_helpers import *  # noqa: F401,F403
+from tests._docx_test_helpers import _technical_resume_block
 
 
 
@@ -627,6 +628,22 @@ def test_build_document_render_payload_omits_unset_heading_bottom_border():
 
     assert "bottom_border" not in payload["blocks"][0]
     assert payload["blocks"][1]["bottom_border"] is False
+
+def test_normalize_raw_block_payloads_moves_legacy_layout_alignment_into_style():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "paragraph": {
+                    "text": "右对齐段落",
+                    "layout": {"alignment": "right", "spacing_after": 6},
+                }
+            }
+        ]
+    )
+
+    assert normalized[0]["type"] == "paragraph"
+    assert normalized[0]["style"]["align"] == "right"
+    assert normalized[0]["layout"] == {"spacing_after": 6}
 
 def test_create_document_request_normalizes_document_style():
     request = CreateDocumentRequest(

@@ -32,6 +32,11 @@ from astrbot_plugin_office_assistant.domain.document.session_store import (
     DocumentSessionStore,
 )
 from tests._docx_test_helpers import *  # noqa: F401,F403
+from tests._docx_test_helpers import (
+    _export_docx_via_node_toolset,
+    _render_structured_payload_with_node,
+    _technical_resume_block,
+)
 
 
 def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: Path):
@@ -792,11 +797,12 @@ def test_node_renderer_supports_technical_resume_page_template(
     )
     contact_divider = _paragraph_after(loaded_doc, contact_paragraph)
     education_heading = _find_paragraph(loaded_doc, "教育背景")
-    education_entry = _find_paragraph(loaded_doc, "北京大学2019.09 – 2023.06")
-    subtitle = _find_paragraph(loaded_doc, "计算机科学与技术  |  工学学士")
+    education_entry = _find_paragraph(
+        loaded_doc, "北京大学\t2019.09 – 2023.06\n计算机科学与技术  |  工学学士"
+    )
     detail = _find_paragraph(
         loaded_doc,
-        "主导优化推荐引擎召回模块，将离线 Embedding 索引构建耗时从 4.2h 降至 1.1h，上线后 CTR 提升 3.2%。",
+        "GPA 3.86/4.0，连续三年一等奖学金，排名前 5%",
     )
 
     assert all(
@@ -824,10 +830,32 @@ def test_node_renderer_supports_technical_resume_page_template(
     assert _paragraph_tab_positions(education_entry) == ["9026"]
     assert education_entry.runs[0].bold is True
     assert _paragraph_run_rgb(education_entry) == "1A1A1A"
-    assert subtitle.runs[0].italic is True
-    assert _paragraph_run_rgb(subtitle) == "444444"
-    assert detail.runs[0].bold is True
+    assert education_entry.runs[2].italic is True
+    assert detail.runs[0].bold is False
     assert _paragraph_run_size(detail) == pytest.approx(10.0, abs=0.2)
+
+
+def test_node_renderer_preserves_multiline_table_cell_text(workspace_root: Path):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-multiline-table-cell",
+        {
+            "document_id": "multiline-table-cell",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["阶段", "说明"],
+                    "rows": [["Q1", {"text": "第一行\\n第二行"}]],
+                }
+            ],
+        },
+    )
+
+    body_cell_paragraph = loaded_doc.tables[0].rows[1].cells[1].paragraphs[0]
+
+    assert body_cell_paragraph.text == "第一行\n第二行"
+    assert "<w:br" in body_cell_paragraph._p.xml
 
 
 @pytest.mark.asyncio
@@ -849,7 +877,7 @@ async def test_node_document_toolset_exports_technical_resume_page_template(
         "zhangmingyuan@email.com  ·  138-0000-0000  ·  北京 | 可远程  ·  github.com/zhangmy",
     )
     experience_entry = _find_paragraph(
-        loaded_doc, "字节跳动 · 基础架构部2022.07 – 2022.12"
+        loaded_doc, "字节跳动 · 基础架构部\t2022.07 – 2022.12\n后端开发实习生 · 推荐系统组"
     )
     skills_heading = _find_paragraph(loaded_doc, "技术栈")
 

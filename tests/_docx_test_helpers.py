@@ -573,6 +573,8 @@ def _technical_resume_block(
     }
 
 
+
+
 def _summary_card_block(
     *,
     title: str = "Conclusion",
@@ -706,3 +708,10 @@ def _section_margin_twips(section, edge_name: str) -> int | None:
         return None
     value = page_margin.get(qn(f"w:{edge_name}"))
     return int(value) if value is not None else None
+
+
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith("_") and not name.startswith("__")
+]

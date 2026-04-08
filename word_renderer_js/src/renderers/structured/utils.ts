@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+
 import {
   AlignmentType,
   HeadingLevel,
@@ -178,9 +180,9 @@ export function resolveTextColor(
   return undefined;
 }
 
-export const BunLike = {
-  async writeFile(path: string, data: Buffer): Promise<void> {
-    const fs = await import("node:fs/promises");
-    await fs.writeFile(path, data);
-  },
-};
+export async function writeBufferToFile(
+  path: string,
+  data: Buffer,
+): Promise<void> {
+  await writeFile(path, data);
+}

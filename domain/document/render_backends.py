@@ -85,43 +85,21 @@ def get_render_backend_config(
     return None
 
 
-def _serialize_explicit_pydantic_fields(model: Any) -> Any:
-    fields_set = getattr(model, "model_fields_set", None)
-    model_fields = getattr(type(model), "model_fields", None)
-    if not isinstance(fields_set, set) or model_fields is None:
-        return model
-
-    serialized: dict[str, Any] = {}
-    for field_name in model_fields:
-        if field_name not in fields_set:
-            continue
-        value = getattr(model, field_name)
-        if isinstance(value, list):
-            serialized[field_name] = [
-                _serialize_explicit_pydantic_fields(item) for item in value
-            ]
-            continue
-        serialized[field_name] = _serialize_explicit_pydantic_fields(value)
-    return serialized
-
-
 def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
-    metadata = document.metadata.model_dump(mode="json", exclude_none=True)
+    metadata = document.metadata.model_dump(mode="json", exclude_unset=True)
     metadata["document_style"] = document.metadata.document_style.model_dump(
         mode="json",
-        exclude_none=True,
+        exclude_unset=True,
     )
-    metadata["header_footer"] = _serialize_explicit_pydantic_fields(
-        document.metadata.header_footer
+    metadata["header_footer"] = document.metadata.header_footer.model_dump(
+        mode="json",
+        exclude_unset=True,
     )
 
     blocks: list[dict[str, Any]] = []
     for block in document.blocks:
-        block_payload = block.model_dump(mode="json", exclude_none=True)
-        if hasattr(block, "header_footer"):
-            block_payload["header_footer"] = _serialize_explicit_pydantic_fields(
-                getattr(block, "header_footer")
-            )
+        block_payload = block.model_dump(mode="json", exclude_unset=True)
+        block_payload["type"] = block.type
         blocks.append(block_payload)
 
     return {

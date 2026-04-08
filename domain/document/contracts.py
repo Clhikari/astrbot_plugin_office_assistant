@@ -319,11 +319,13 @@ def _normalize_nested_block_payload_alias(block: dict) -> None:
     elif block_type == "paragraph":
         layout = block.get("layout")
         if isinstance(layout, Mapping):
-            alignment = layout.get("alignment")
+            normalized_layout = dict(layout)
+            alignment = normalized_layout.pop("alignment", None)
             if isinstance(alignment, str) and alignment.strip():
                 style = dict(block.get("style") or {})
                 style.setdefault("align", alignment.strip())
                 block["style"] = style
+            block["layout"] = normalized_layout
 
 
 def _drop_unsupported_block_aliases(block: dict) -> None:

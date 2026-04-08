@@ -101,6 +101,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 from tests._docx_test_helpers import *  # noqa: F401,F403
+from tests._docx_test_helpers import _technical_resume_block
 
 
 
@@ -597,8 +598,20 @@ def test_document_session_store_add_helpers_build_typed_blocks(
 
     monkeypatch.setattr(DocumentSessionStore, "add_blocks", _capture_add_blocks)
 
-    store.add_heading(AddHeadingRequest(document_id="doc-1", text="标题", level=2))
+    store.add_heading(
+        AddHeadingRequest(
+            document_id="doc-1",
+            text="标题",
+            level=2,
+            bottom_border=True,
+            bottom_border_color="D0D7DE",
+            bottom_border_size_pt=1.25,
+        )
+    )
     assert isinstance(captured["request"].blocks[0], BlockHeadingInput)
+    assert captured["request"].blocks[0].bottom_border is True
+    assert captured["request"].blocks[0].bottom_border_color == "D0D7DE"
+    assert captured["request"].blocks[0].bottom_border_size_pt == pytest.approx(1.25)
 
     store.add_paragraph(
         AddParagraphRequest(document_id="doc-1", text="正文", title="摘要")

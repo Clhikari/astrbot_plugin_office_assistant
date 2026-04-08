@@ -49,13 +49,13 @@ import {
   ThemeConfig,
 } from "./types";
 import {
-  BunLike,
   arrayValue,
   asObject,
   booleanValue,
   mapPageOrientation,
   numberValue,
   stringValue,
+  writeBufferToFile,
 } from "./utils";
 import { buildBusinessReviewFooterNote } from "./page-templates/business-review-cover";
 
@@ -122,7 +122,7 @@ export async function renderStructuredDocument(
   });
 
   const buffer = await Packer.toBuffer(doc);
-  await BunLike.writeFile(outputPath, buffer);
+  await writeBufferToFile(outputPath, buffer);
 }
 
 function resolveDefaultSectionMargins(blocks: Block[]): JsonObject | undefined {
