@@ -58,6 +58,7 @@ def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: 
     def _fake_run(command, cwd, check, capture_output, text, encoding):
         payload_path = Path(command[2])
         payloads.append(json.loads(payload_path.read_text(encoding="utf-8")))
+        assert cwd == str(entry_path.parent)
         output_path.write_bytes(b"node-docx")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 

@@ -160,7 +160,7 @@ class NodeDocumentRenderBackend:
             json.dump(payload, payload_file, ensure_ascii=False)
 
         command = ["node", str(entry_path), str(payload_path), str(output_path)]
-        cwd = entry_path.parents[1] if len(entry_path.parents) >= 2 else entry_path.parent
+        cwd = entry_path.parent
         try:
             logger.debug(
                 "[office-assistant] invoking js renderer entry=%s payload=%s output=%s",

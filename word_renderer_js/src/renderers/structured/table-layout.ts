@@ -270,6 +270,7 @@ type ColumnMetric = {
 
 const MIN_TABLE_TOTAL_WIDTH_CM = [0, 8.2, 9.8, 11.0, 12.0, 13.2, 14.2];
 const MAX_TABLE_TOTAL_WIDTH_CM = [0, 9.8, 11.2, 12.6, 13.8, 14.8, 15.4];
+const MAX_COLUMN_INFERENCE_SAMPLE_ROWS = 50;
 
 function inferColumnWidths(block: Block, columnCount: number): number[] {
   if (columnCount <= 0) {
@@ -355,7 +356,7 @@ function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[]
   const rows = arrayValue(block.rows);
   const pendingRowSpans = new Array(Math.max(columnCount, 0)).fill(0);
 
-  for (const row of rows) {
+  for (const row of rows.slice(0, MAX_COLUMN_INFERENCE_SAMPLE_ROWS)) {
     const rowItems = arrayValue(row);
     let rowCursor = 0;
 

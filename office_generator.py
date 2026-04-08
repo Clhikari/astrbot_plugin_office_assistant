@@ -100,6 +100,11 @@ class OfficeGenerator(ExecutorOwnerMixin):
 
         return support
 
+    def _is_generation_supported(self, office_type: OfficeType) -> bool:
+        if office_type == OfficeType.WORD:
+            return True
+        return self.support.get(office_type, False)
+
     async def generate(
         self,
         event: AstrMessageEvent,
@@ -108,7 +113,7 @@ class OfficeGenerator(ExecutorOwnerMixin):
         content: dict,
     ):
         """生成Office文件"""
-        if not self.support.get(office_type, False):
+        if not self._is_generation_supported(office_type):
             await event.send(
                 MessageChain().message(
                     f"[文件生成器] {office_type}文件生成不支持，缺少相关库"
@@ -399,11 +404,15 @@ class OfficeGenerator(ExecutorOwnerMixin):
             )
 
         status_value = content.get("status", DocumentStatus.DRAFT)
-        if isinstance(status_value, str):
+        if isinstance(status_value, DocumentStatus):
+            pass
+        elif isinstance(status_value, str):
             try:
                 status_value = DocumentStatus(status_value)
             except ValueError:
                 status_value = DocumentStatus.DRAFT
+        else:
+            status_value = DocumentStatus.DRAFT
 
         created_document.document_id = str(content.get("document_id") or file_path.stem)
         created_document.session_id = str(content.get("session_id") or "")
