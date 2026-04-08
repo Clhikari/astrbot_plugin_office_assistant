@@ -536,6 +536,25 @@ def test_document_session_store_preserves_page_template_block():
     assert block.data.metrics[0].delta_color == "15803D"
     assert block.data.auto_page_break is False
 
+
+def test_document_session_store_preserves_technical_resume_page_template_block():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="简历"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[_technical_resume_block()],
+        )
+    )
+
+    block = updated.blocks[0]
+
+    assert isinstance(block, PageTemplateBlock)
+    assert block.template == "technical_resume"
+    assert block.data.name == "张明远"
+    assert block.data.sections[0].title == "教育背景"
+
 def test_document_session_store_add_table_preserves_grouped_headers():
     store = DocumentSessionStore()
     document = store.create_document(CreateDocumentRequest(title="Legacy Table"))

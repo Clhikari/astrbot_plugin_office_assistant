@@ -244,6 +244,22 @@ def _paragraph_top_border_color(paragraph) -> str | None:
     return top.get(qn("w:color"))
 
 
+def _paragraph_tab_positions(paragraph) -> list[str]:
+    from docx.oxml.ns import qn
+
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return []
+    tabs = p_pr.find(qn("w:tabs"))
+    if tabs is None:
+        return []
+    return [
+        tab.get(qn("w:pos"), "")
+        for tab in tabs.findall(qn("w:tab"))
+        if tab.get(qn("w:pos")) is not None
+    ]
+
+
 def _cell_vertical_merge(cell) -> str | None:
     from docx.oxml.ns import qn
 
@@ -494,6 +510,69 @@ def _business_review_cover_block(
     }
 
 
+def _technical_resume_block(
+    *,
+    name: str = "张明远",
+    headline: str = "后端开发工程师  ·  分布式系统 / 高并发架构",
+    contact_line: str = "zhangmingyuan@email.com  ·  138-0000-0000  ·  北京 | 可远程  ·  github.com/zhangmy",
+    sections: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "type": "page_template",
+        "template": "technical_resume",
+        "data": {
+            "name": name,
+            "headline": headline,
+            "contact_line": contact_line,
+            "sections": sections
+            or [
+                {
+                    "title": "教育背景",
+                    "entries": [
+                        {
+                            "heading": "北京大学",
+                            "date": "2019.09 – 2023.06",
+                            "subtitle": "计算机科学与技术  |  工学学士",
+                            "details": [
+                                "GPA 3.86/4.0，连续三年一等奖学金，排名前 5%",
+                                "荣誉：ACM-ICPC 亚洲区决赛银奖（2021）、校优秀毕业论文",
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "title": "实习经历",
+                    "entries": [
+                        {
+                            "heading": "字节跳动 · 基础架构部",
+                            "date": "2022.07 – 2022.12",
+                            "subtitle": "后端开发实习生 · 推荐系统组",
+                            "details": [
+                                {
+                                    "runs": [
+                                        {"text": "主导优化推荐引擎召回模块，", "bold": True},
+                                        {
+                                            "text": "将离线 Embedding 索引构建耗时从 4.2h 降至 1.1h，上线后 CTR 提升 3.2%。"
+                                        },
+                                    ]
+                                },
+                                "设计并落地 A/B 实验流量分桶系统，支持动态扩容，日均承载 12 亿次请求，P99 < 8ms。",
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "title": "技术栈",
+                    "lines": [
+                        "语言：Go（熟练）、Java（熟练）、Python、SQL",
+                        "框架/中间件：Spring Boot、Gin、gRPC、Kafka、Redis、MySQL、Elasticsearch",
+                    ],
+                },
+            ],
+        },
+    }
+
+
 def _summary_card_block(
     *,
     title: str = "Conclusion",
@@ -617,3 +696,13 @@ async def _export_docx_via_node_toolset(
     assert exported["success"] is True, exported["message"]
 
     return docx.Document(exported["file_path"]), Path(exported["file_path"])
+
+
+def _section_margin_twips(section, edge_name: str) -> int | None:
+    from docx.oxml.ns import qn
+
+    page_margin = section._sectPr.find(qn("w:pgMar"))
+    if page_margin is None:
+        return None
+    value = page_margin.get(qn(f"w:{edge_name}"))
+    return int(value) if value is not None else None

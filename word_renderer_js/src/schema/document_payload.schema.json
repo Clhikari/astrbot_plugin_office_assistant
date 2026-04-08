@@ -126,8 +126,30 @@
               "properties": {
                 "template": {
                   "type": "string",
-                  "const": "business_review_cover"
+                  "enum": [
+                    "business_review_cover",
+                    "technical_resume"
+                  ]
                 },
+                "data": {
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "page_template"
+                },
+                "template": {
+                  "const": "business_review_cover"
+                }
+              }
+            },
+            "then": {
+              "properties": {
                 "data": {
                   "type": "object",
                   "required": [
@@ -187,6 +209,192 @@
                     },
                     "auto_page_break": {
                       "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "page_template"
+                },
+                "template": {
+                  "const": "technical_resume"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "headline",
+                    "contact_line",
+                    "sections"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "headline": {
+                      "type": "string"
+                    },
+                    "contact_line": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sections": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "title"
+                        ],
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "entries": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "heading"
+                              ],
+                              "properties": {
+                                "heading": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "date": {
+                                  "type": "string"
+                                },
+                                "subtitle": {
+                                  "type": "string"
+                                },
+                                "details": {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "runs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "text": {
+                                                  "type": "string"
+                                                },
+                                                "bold": {
+                                                  "type": "boolean"
+                                                },
+                                                "italic": {
+                                                  "type": "boolean"
+                                                },
+                                                "underline": {
+                                                  "type": "boolean"
+                                                },
+                                                "code": {
+                                                  "type": "boolean"
+                                                },
+                                                "color": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "text"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "additionalProperties": true
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "additionalProperties": true
+                            }
+                          },
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "runs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "bold": {
+                                            "type": "boolean"
+                                          },
+                                          "italic": {
+                                            "type": "boolean"
+                                          },
+                                          "underline": {
+                                            "type": "boolean"
+                                          },
+                                          "code": {
+                                            "type": "boolean"
+                                          },
+                                          "color": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "text"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "additionalProperties": true
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "additionalProperties": true,
+                        "anyOf": [
+                          {
+                            "required": [
+                              "entries"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "lines"
+                            ]
+                          }
+                        ]
+                      }
                     }
                   },
                   "additionalProperties": true

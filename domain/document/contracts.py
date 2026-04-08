@@ -37,7 +37,7 @@ SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
 SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
 SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
-SUPPORTED_PAGE_TEMPLATES = {"business_review_cover"}
+SUPPORTED_PAGE_TEMPLATES = {"business_review_cover", "technical_resume"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 DEFAULT_DOCX_FILENAME = "document.docx"
 MAX_BLOCK_NORMALIZE_DEPTH = 32
@@ -1113,12 +1113,46 @@ class BusinessReviewCoverDataInput(BaseModel):
     auto_page_break: bool = False
 
 
+class ResumeSectionEntryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    heading: str = Field(min_length=1)
+    date: str = ""
+    subtitle: str = ""
+    details: list[str | ListItemInput] = Field(default_factory=list)
+
+
+class ResumeSectionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    entries: list[ResumeSectionEntryInput] = Field(default_factory=list)
+    lines: list[str | ListItemInput] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> ResumeSectionInput:
+        if self.entries or self.lines:
+            return self
+        raise ValueError("resume section requires entries or lines")
+
+
+class TechnicalResumeDataInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    headline: str = ""
+    contact_line: str = Field(min_length=1)
+    sections: list[ResumeSectionInput] = Field(min_length=1)
+
+
 class SectionPageTemplateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["page_template"] = "page_template"
-    template: Literal["business_review_cover"] = "business_review_cover"
-    data: BusinessReviewCoverDataInput
+    template: Literal["business_review_cover", "technical_resume"] = (
+        "business_review_cover"
+    )
+    data: BusinessReviewCoverDataInput | TechnicalResumeDataInput
 
     @field_validator("template")
     @classmethod
@@ -1129,6 +1163,17 @@ class SectionPageTemplateInput(BaseModel):
                 f"unsupported page_template template: {candidate or value!r}"
             )
         return candidate
+
+    @model_validator(mode="after")
+    def validate_template_data(self) -> SectionPageTemplateInput:
+        expected_type = (
+            BusinessReviewCoverDataInput
+            if self.template == "business_review_cover"
+            else TechnicalResumeDataInput
+        )
+        if isinstance(self.data, expected_type):
+            return self
+        raise ValueError(f"page_template data does not match template {self.template!r}")
 
 
 class AddSummaryCardRequest(BaseModel):

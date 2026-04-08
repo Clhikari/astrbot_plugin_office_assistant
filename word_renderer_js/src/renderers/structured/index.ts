@@ -67,10 +67,12 @@ export async function renderStructuredDocument(
   const theme = resolveTheme(metadata);
   const structuredBlocks = payload.blocks.map((block) => block as Block);
   const defaultHeaderFooter = asObject(metadata.header_footer);
+  const defaultMargins = resolveDefaultSectionMargins(structuredBlocks);
   const sections: SectionState[] = [
     {
       children: [],
       headerFooter: defaultHeaderFooter,
+      margins: defaultMargins,
       restartPageNumbering: false,
       inheritPreviousHeaderFooter: false,
     },
@@ -121,6 +123,22 @@ export async function renderStructuredDocument(
 
   const buffer = await Packer.toBuffer(doc);
   await BunLike.writeFile(outputPath, buffer);
+}
+
+function resolveDefaultSectionMargins(blocks: Block[]): JsonObject | undefined {
+  const firstBlock = blocks[0];
+  if (
+    firstBlock?.type === "page_template" &&
+    stringValue(firstBlock.template) === "technical_resume"
+  ) {
+    return {
+      top_cm: 1.905,
+      right_cm: 2.2225,
+      bottom_cm: 1.905,
+      left_cm: 2.2225,
+    };
+  }
+  return undefined;
 }
 
 function shouldRenderDocumentTitle(blocks: Block[]): boolean {

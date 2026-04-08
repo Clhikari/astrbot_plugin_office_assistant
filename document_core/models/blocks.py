@@ -133,7 +133,7 @@ class HeroBannerBlock(BlockBase):
         return normalize_optional_hex_color(value)
 
 
-PageTemplateName = Literal["business_review_cover"]
+PageTemplateName = Literal["business_review_cover", "technical_resume"]
 
 
 class PageTemplateMetricItem(BaseModel):
@@ -163,13 +163,56 @@ class BusinessReviewCoverData(BaseModel):
     auto_page_break: bool = False
 
 
+class ResumeSectionEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    heading: str = Field(min_length=1)
+    date: str = ""
+    subtitle: str = ""
+    details: list[str | ListItem] = Field(default_factory=list)
+
+
+class ResumeSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    entries: list[ResumeSectionEntry] = Field(default_factory=list)
+    lines: list[str | ListItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> ResumeSection:
+        if self.entries or self.lines:
+            return self
+        raise ValueError("resume section requires entries or lines")
+
+
+class TechnicalResumeData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    headline: str = ""
+    contact_line: str = Field(min_length=1)
+    sections: list[ResumeSection] = Field(min_length=1)
+
+
 class PageTemplateBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     block_id: str = Field(default_factory=lambda: uuid4().hex)
     type: Literal["page_template"] = "page_template"
     template: PageTemplateName
-    data: BusinessReviewCoverData
+    data: BusinessReviewCoverData | TechnicalResumeData
+
+    @model_validator(mode="after")
+    def validate_template_data(self) -> PageTemplateBlock:
+        expected_type = (
+            BusinessReviewCoverData
+            if self.template == "business_review_cover"
+            else TechnicalResumeData
+        )
+        if isinstance(self.data, expected_type):
+            return self
+        raise ValueError(f"page_template data does not match template {self.template!r}")
 
 
 class ParagraphRun(BaseModel):

@@ -1330,6 +1330,41 @@ def test_add_blocks_request_accepts_page_template_business_review_cover():
     assert block.data.metrics[0].delta_color == "15803D"
     assert block.data.auto_page_break is False
 
+
+def test_add_blocks_request_accepts_page_template_technical_resume():
+    request = AddBlocksRequest(
+        document_id="doc-1",
+        blocks=[
+            _technical_resume_block(
+                sections=[
+                    {
+                        "title": "教育背景",
+                        "entries": [
+                            {
+                                "heading": "北京大学",
+                                "date": "2019.09 – 2023.06",
+                                "subtitle": "计算机科学与技术  |  工学学士",
+                                "details": [
+                                    "GPA 3.86/4.0，连续三年一等奖学金，排名前 5%"
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "title": "技术栈",
+                        "lines": ["语言：Go（熟练）、Java（熟练）、Python、SQL"],
+                    },
+                ]
+            )
+        ],
+    )
+
+    block = request.blocks[0]
+    assert block.template == "technical_resume"
+    assert block.data.name == "张明远"
+    assert block.data.sections[0].entries[0].heading == "北京大学"
+    assert block.data.sections[1].lines[0] == "语言：Go（熟练）、Java（熟练）、Python、SQL"
+
 def test_add_table_request_rejects_vertical_merge_rows_that_exceed_header_columns():
     with pytest.raises(
         ValidationError,

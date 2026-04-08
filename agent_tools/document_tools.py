@@ -361,7 +361,7 @@ class AddBlocksTool(DocumentToolBase):
                             "type": {"type": "string"},
                             "template": {
                                 "type": "string",
-                                "description": "Template name for page_template blocks. First supported value is business_review_cover.",
+                                "description": "Template name for page_template blocks. Supported values include business_review_cover and technical_resume.",
                             },
                             "data": {
                                 "type": "object",
@@ -405,6 +405,98 @@ class AddBlocksTool(DocumentToolBase):
                                     "auto_page_break": {
                                         "type": "boolean",
                                         "description": "Whether the template page should end with an automatic page break.",
+                                    },
+                                    "name": {
+                                        "type": "string",
+                                        "description": "Resume owner name for technical_resume.",
+                                    },
+                                    "headline": {
+                                        "type": "string",
+                                        "description": "Centered resume headline under the name.",
+                                    },
+                                    "contact_line": {
+                                        "type": "string",
+                                        "description": "Single centered contact line rendered above the first divider.",
+                                    },
+                                    "sections": {
+                                        "type": "array",
+                                        "description": "Resume sections for technical_resume. Each section needs a title plus entries or lines.",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "title": {"type": "string"},
+                                                "entries": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "heading": {"type": "string"},
+                                                            "date": {"type": "string"},
+                                                            "subtitle": {"type": "string"},
+                                                            "details": {
+                                                                "type": "array",
+                                                                "items": {
+                                                                    "anyOf": [
+                                                                        {"type": "string"},
+                                                                        {
+                                                                            "type": "object",
+                                                                            "properties": {
+                                                                                "text": {"type": "string"},
+                                                                                "runs": {
+                                                                                    "type": "array",
+                                                                                    "items": {
+                                                                                        "type": "object",
+                                                                                        "properties": {
+                                                                                            "text": {"type": "string"},
+                                                                                            "bold": {"type": "boolean"},
+                                                                                            "italic": {"type": "boolean"},
+                                                                                            "underline": {"type": "boolean"},
+                                                                                            "code": {"type": "boolean"},
+                                                                                            "color": {"type": "string"},
+                                                                                        },
+                                                                                        "required": ["text"],
+                                                                                    },
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                    ]
+                                                                },
+                                                            },
+                                                        },
+                                                        "required": ["heading"],
+                                                    },
+                                                },
+                                                "lines": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "anyOf": [
+                                                            {"type": "string"},
+                                                            {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                    "text": {"type": "string"},
+                                                                    "runs": {
+                                                                        "type": "array",
+                                                                        "items": {
+                                                                            "type": "object",
+                                                                            "properties": {
+                                                                                "text": {"type": "string"},
+                                                                                "bold": {"type": "boolean"},
+                                                                                "italic": {"type": "boolean"},
+                                                                                "underline": {"type": "boolean"},
+                                                                                "code": {"type": "boolean"},
+                                                                                "color": {"type": "string"},
+                                                                            },
+                                                                            "required": ["text"],
+                                                                        },
+                                                                    },
+                                                                },
+                                                            },
+                                                        ]
+                                                    },
+                                                },
+                                            },
+                                        },
                                     },
                                 },
                             },

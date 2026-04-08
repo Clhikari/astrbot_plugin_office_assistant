@@ -769,6 +769,98 @@ async def test_node_document_toolset_exports_business_review_cover_page_template
     )
 
 
+def test_node_renderer_supports_technical_resume_page_template(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-page-template-technical-resume",
+        {
+            "document_id": "page-template-technical-resume",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [_technical_resume_block()],
+        },
+    )
+
+    name_paragraph = _find_paragraph(loaded_doc, "张明远")
+    headline_paragraph = _find_paragraph(
+        loaded_doc, "后端开发工程师  ·  分布式系统 / 高并发架构"
+    )
+    contact_paragraph = _find_paragraph(
+        loaded_doc,
+        "zhangmingyuan@email.com  ·  138-0000-0000  ·  北京 | 可远程  ·  github.com/zhangmy",
+    )
+    contact_divider = _paragraph_after(loaded_doc, contact_paragraph)
+    education_heading = _find_paragraph(loaded_doc, "教育背景")
+    education_entry = _find_paragraph(loaded_doc, "北京大学2019.09 – 2023.06")
+    subtitle = _find_paragraph(loaded_doc, "计算机科学与技术  |  工学学士")
+    detail = _find_paragraph(
+        loaded_doc,
+        "主导优化推荐引擎召回模块，将离线 Embedding 索引构建耗时从 4.2h 降至 1.1h，上线后 CTR 提升 3.2%。",
+    )
+
+    assert all(
+        paragraph.text != "张明远 - 后端开发工程师简历"
+        for paragraph in loaded_doc.paragraphs
+    )
+    assert _section_margin_twips(loaded_doc.sections[0], "top") == 1080
+    assert _section_margin_twips(loaded_doc.sections[0], "right") == 1260
+    assert _section_margin_twips(loaded_doc.sections[0], "bottom") == 1080
+    assert _section_margin_twips(loaded_doc.sections[0], "left") == 1260
+    assert name_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert _paragraph_run_size(name_paragraph) == pytest.approx(28.0, abs=0.2)
+    assert _paragraph_run_rgb(name_paragraph) == "1A1A1A"
+    assert headline_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert _paragraph_run_rgb(headline_paragraph) == "444444"
+    assert _paragraph_run_size(headline_paragraph) == pytest.approx(10.0, abs=0.2)
+    assert contact_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert _paragraph_bottom_border_color(contact_paragraph) is None
+    assert _paragraph_bottom_border_color(contact_divider) == "000000"
+    assert _paragraph_bottom_border_size(contact_divider) == "4"
+    assert _paragraph_run_size(contact_paragraph) == pytest.approx(9.0, abs=0.2)
+    assert _paragraph_bottom_border_color(education_heading) == "000000"
+    assert _paragraph_bottom_border_size(education_heading) == "4"
+    assert _paragraph_run_rgb(education_heading) == "1A1A1A"
+    assert _paragraph_tab_positions(education_entry) == ["9026"]
+    assert education_entry.runs[0].bold is True
+    assert _paragraph_run_rgb(education_entry) == "1A1A1A"
+    assert subtitle.runs[0].italic is True
+    assert _paragraph_run_rgb(subtitle) == "444444"
+    assert detail.runs[0].bold is True
+    assert _paragraph_run_size(detail) == pytest.approx(10.0, abs=0.2)
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_exports_technical_resume_page_template(
+    workspace_root: Path,
+):
+    loaded_doc, _ = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-page-template-technical-resume",
+        create_kwargs={
+            "title": "张明远_个人简历",
+            "output_name": "technical-resume-template.docx",
+        },
+        blocks=[_technical_resume_block()],
+    )
+
+    contact_paragraph = _find_paragraph(
+        loaded_doc,
+        "zhangmingyuan@email.com  ·  138-0000-0000  ·  北京 | 可远程  ·  github.com/zhangmy",
+    )
+    experience_entry = _find_paragraph(
+        loaded_doc, "字节跳动 · 基础架构部2022.07 – 2022.12"
+    )
+    skills_heading = _find_paragraph(loaded_doc, "技术栈")
+
+    assert _find_paragraph(loaded_doc, "张明远").text == "张明远"
+    assert _section_margin_twips(loaded_doc.sections[0], "left") == 1260
+    assert _section_margin_twips(loaded_doc.sections[0], "right") == 1260
+    assert _paragraph_bottom_border_color(_paragraph_after(loaded_doc, contact_paragraph)) == "000000"
+    assert _paragraph_bottom_border_color(skills_heading) == "000000"
+    assert _paragraph_tab_positions(experience_entry) == ["9026"]
+
+
 def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
     workspace_root: Path,
 ):
