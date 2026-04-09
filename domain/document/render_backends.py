@@ -99,6 +99,8 @@ def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
     for block in document.blocks:
         block_payload = block.model_dump(mode="json", exclude_unset=True)
+        if getattr(block, "type", "") == "page_template" and hasattr(block, "data"):
+            block_payload["data"] = block.data.model_dump(mode="json")
         block_payload["type"] = block.type
         blocks.append(block_payload)
 
@@ -138,16 +140,6 @@ class NodeDocumentRenderBackend:
             )
 
         payload = build_document_render_payload(document)
-        logger.warning(
-            "[office-assistant] js renderer entry=%s document=%s",
-            entry_path,
-            document.document_id,
-        )
-        logger.warning(
-            "[office-assistant] js renderer metadata document=%s metadata=%s",
-            document.document_id,
-            payload.get("metadata"),
-        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w",

@@ -114,6 +114,30 @@ def test_build_word_document_model_supports_hero_banner_blocks(
     assert isinstance(document.blocks[1], ParagraphBlock)
 
 
+def test_build_word_document_model_preserves_runtime_block_instances(
+    workspace_root: Path,
+):
+    generator = OfficeGenerator(data_path=workspace_root)
+    file_path = workspace_root / "report.docx"
+
+    document = generator._build_word_document_model(
+        file_path,
+        {
+            "metadata": {"title": "Quarterly Report"},
+            "blocks": [
+                HeadingBlock(text="一、经营总览", level=1),
+                ParagraphBlock(text="正文内容"),
+            ],
+        },
+    )
+
+    assert len(document.blocks) == 2
+    assert isinstance(document.blocks[0], HeadingBlock)
+    assert document.blocks[0].text == "一、经营总览"
+    assert isinstance(document.blocks[1], ParagraphBlock)
+    assert document.blocks[1].text == "正文内容"
+
+
 def test_build_word_document_model_expands_summary_card_blocks(
     workspace_root: Path,
 ):

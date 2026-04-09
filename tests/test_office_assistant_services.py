@@ -573,8 +573,37 @@ def test_build_plugin_runtime_ignores_legacy_word_render_settings():
         assert runtime.settings.ppt_render_backend == "node"
         assert runtime.settings.excel_render_backend == "python"
         assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
-        assert runtime.settings.node_renderer_entry == "D:/custom/js-renderer.js"
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_accepts_legacy_node_renderer_entry_alias():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
+    config = {
+        "render_settings": {
+            "node_renderer_entry": "D:/custom/legacy-renderer.js",
+        }
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        assert runtime.settings.js_renderer_entry == "D:/custom/legacy-renderer.js"
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()

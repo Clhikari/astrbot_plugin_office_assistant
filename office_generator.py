@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -360,6 +360,8 @@ class OfficeGenerator(ExecutorOwnerMixin):
             self._default_document_style,
         )
 
+        # 这里借一个临时 session store，是为了复用 create_document/add_blocks
+        # 现有的校验、规范化和运行时 block 构建逻辑，避免在生成链再维护一套平行实现。
         temp_store = DocumentSessionStore(workspace_dir=self.data_path)
         attach_document_style_defaults(temp_store, self._default_document_style)
         created_document = temp_store.create_document(
@@ -382,7 +384,16 @@ class OfficeGenerator(ExecutorOwnerMixin):
             )
         )
 
-        normalized_payloads = normalize_raw_block_payloads(list(content.get("blocks") or []))
+        normalized_payloads = normalize_raw_block_payloads(
+            [
+                (
+                    block.model_dump(mode="json", exclude={"block_id"})
+                    if isinstance(block, BaseModel)
+                    else block
+                )
+                for block in list(content.get("blocks") or [])
+            ]
+        )
         validated_blocks: list[BlockInput] = []
         for idx, block_payload in enumerate(normalized_payloads):
             try:

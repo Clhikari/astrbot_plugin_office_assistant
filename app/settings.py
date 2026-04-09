@@ -31,7 +31,6 @@ class PluginSettings:
     ppt_render_backend: str
     excel_render_backend: str
     js_renderer_entry: str
-    node_renderer_entry: str
     default_word_font_name: str
     default_word_heading_font_name: str
     default_word_table_font_name: str
@@ -97,7 +96,6 @@ def load_plugin_settings(config) -> PluginSettings:
             render_settings.get("node_renderer_entry", ""),
         )
     ).strip()
-    node_renderer_entry = js_renderer_entry
     default_word_font_name = str(
         word_style_settings.get("default_font_name", "")
     ).strip()
@@ -134,7 +132,6 @@ def load_plugin_settings(config) -> PluginSettings:
         ppt_render_backend=ppt_render_backend,
         excel_render_backend=excel_render_backend,
         js_renderer_entry=js_renderer_entry,
-        node_renderer_entry=node_renderer_entry,
         default_word_font_name=default_word_font_name,
         default_word_heading_font_name=default_word_heading_font_name,
         default_word_table_font_name=default_word_table_font_name,

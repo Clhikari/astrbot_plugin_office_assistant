@@ -54,10 +54,12 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     PageTemplateBlock,
     ParagraphBlock,
     ParagraphRun,
+    ResumeSection,
     SectionBreakBlock,
     SectionMarginsConfig,
     SummaryCardBlock,
     TableBlock,
+    TechnicalResumeData,
     TocBlock,
 )
 from astrbot_plugin_office_assistant.document_core.models.document import (
@@ -626,6 +628,33 @@ def test_build_document_render_payload_keeps_default_metadata_fields():
     assert payload["metadata"]["theme_name"] == "business_report"
     assert payload["metadata"]["table_template"] == "report_grid"
     assert payload["metadata"]["density"] == "comfortable"
+
+def test_build_document_render_payload_keeps_page_template_required_defaults():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        blocks=[
+            PageTemplateBlock(
+                template="technical_resume",
+                data=TechnicalResumeData(
+                    name="张明远",
+                    contact_line="zhang@example.com",
+                    sections=[
+                        ResumeSection(
+                            title="技术栈",
+                            lines=["Go", "Python"],
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+    payload = build_document_render_payload(document)
+
+    assert payload["blocks"][0]["type"] == "page_template"
+    assert payload["blocks"][0]["data"]["headline"] == ""
 
 def test_build_document_render_payload_omits_unset_heading_bottom_border():
     document = DocumentModel(
