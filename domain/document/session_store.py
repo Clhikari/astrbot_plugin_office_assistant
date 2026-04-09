@@ -371,6 +371,12 @@ class DocumentSessionStore:
                 and not follows_landscape_section
                 and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
                 and (
+                    # Table caption promotion intentionally preserves two common patterns:
+                    # - numbered headings without bottom borders, such as "1.1 ..." or "III. ..."
+                    # - unnumbered display headings that opt into a divider line
+                    # Executive brief is the only theme that treats bordered headings before
+                    # tables as table titles, because that template uses divider-style titles
+                    # for summary tables by design.
                     (has_bottom_border == is_numbered_heading)
                     or (has_bottom_border and uses_executive_brief_table_titles)
                 )

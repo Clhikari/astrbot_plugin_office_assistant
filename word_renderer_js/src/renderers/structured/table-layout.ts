@@ -464,6 +464,11 @@ function resolveHeuristicColumnWidth(
   );
   const dateLike = /(日期|时间|月份|季度|周期|date|time|month|quarter)/i.test(header);
 
+  // These ranges are tuned to keep generated tables readable in Word:
+  // - remark/comment columns stay noticeably wider
+  // - numeric and date-like columns stay compact
+  // - all inferred widths remain bounded so the later total-width scaling step can
+  //   normalize the table without producing extreme single-column growth
   if (remarkLike) {
     return clampWidth(3.9 + Math.min(1.6, Math.max(textUnits - 6, 0) * 0.14), 4.2, 5.6);
   }
