@@ -52,3 +52,5 @@ TEST_CHECKLIST.md
 # agent相关
 .gitnexus
 .claude
+node_modules/
+word_renderer_js/dist/

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Sequence
 
 from astrbot.api import logger
 
-from ...document_core.builders.word_builder import WordDocumentBuilder
 from ...document_core.models.document import DocumentModel
 from .contracts import ExportDocumentRequest
 from .hooks import (
@@ -15,13 +15,15 @@ from .hooks import (
     run_after_export_hooks,
     run_before_export_hooks,
 )
+from .render_backends import DocumentRenderBackend
+from .render_backends import render_document_with_backends
 from .session_store import DocumentSessionStore
 
 
 async def export_document_via_pipeline(
     *,
     store: DocumentSessionStore,
-    builder: WordDocumentBuilder,
+    render_backends: Sequence[DocumentRenderBackend],
     request: ExportDocumentRequest,
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
@@ -49,11 +51,16 @@ async def export_document_via_pipeline(
             export_context.document.document_id,
             export_context.output_path,
         )
-    builder.build(export_context.document, export_context.output_path)
+    result = render_document_with_backends(
+        export_context.document,
+        export_context.output_path,
+        render_backends,
+    )
     logger.debug(
-        "[office-assistant] document build completed for document=%s output=%s",
+        "[office-assistant] document build completed for document=%s output=%s backend=%s",
         export_context.document.document_id,
         export_context.output_path,
+        result.backend_name,
     )
     document = store.complete_export(request.document_id)
     after_context = AfterExportContext(

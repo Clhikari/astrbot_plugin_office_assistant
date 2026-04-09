@@ -1,4 +1,3 @@
-from .builders.word_builder import WordDocumentBuilder
 from .models.blocks import (
     HeadingBlock,
     ImageBlock,
@@ -14,5 +13,4 @@ __all__ = [
     "ParagraphBlock",
     "TableBlock",
     "ImageBlock",
-    "WordDocumentBuilder",
 ]

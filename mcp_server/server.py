@@ -5,7 +5,14 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
-from ..domain.document.session_store import DocumentSessionStore
+from ..domain.document.render_backends import (
+    DocumentRenderBackendConfig,
+    attach_render_backend_config,
+)
+from ..domain.document.session_store import (
+    DocumentSessionStore,
+    attach_document_style_defaults,
+)
 from .tools import register_document_tools
 
 
@@ -14,6 +21,8 @@ def create_server(
     *,
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
+    render_backend_config: DocumentRenderBackendConfig | None = None,
+    default_document_style: dict[str, object] | None = None,
 ) -> FastMCP:
     server = FastMCP(
         name="astrbot-office-assistant",
@@ -23,6 +32,8 @@ def create_server(
         ),
     )
     store = DocumentSessionStore(workspace_dir=workspace_dir)
+    attach_render_backend_config(store, render_backend_config)
+    attach_document_style_defaults(store, default_document_style)
     register_document_tools(
         server,
         store,

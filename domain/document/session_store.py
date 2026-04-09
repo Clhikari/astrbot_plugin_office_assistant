@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 from threading import RLock
 from uuid import uuid4
 
@@ -11,17 +12,27 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from ...document_core.macros import summary_card_defaults_from_config
 from ...document_core.models.blocks import (
+    AccentBoxBlock,
+    BusinessReviewCoverData,
     ColumnBlock,
     ColumnsBlock,
     DocumentBlock,
     GroupBlock,
     HeadingBlock,
+    HeroBannerBlock,
     ListBlock,
+    MetricCard,
+    MetricCardsBlock,
+    PageTemplateBlock,
+    PageTemplateMetricItem,
     PageBreakBlock,
     ParagraphBlock,
+    ResumeSection,
+    ResumeSectionEntry,
     SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
+    TechnicalResumeData,
     TocBlock,
 )
 from ...document_core.models.document import (
@@ -29,6 +40,7 @@ from ...document_core.models.document import (
     DocumentModel,
     DocumentStatus,
     DocumentSummaryCardDefaults,
+    DocumentStyleConfig,
 )
 from .contracts import (
     AddBlocksRequest,
@@ -46,9 +58,13 @@ from .contracts import (
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
+    SectionPageTemplateInput,
     SectionBreakInput,
+    SectionAccentBoxInput,
     SectionCardInput,
+    SectionHeroBannerInput,
     SectionListInput,
+    SectionMetricCardsInput,
     SectionPageBreakInput,
     SectionParagraphInput,
     SectionTableInput,
@@ -70,11 +86,15 @@ BLOCK_TYPE_TABLE = "table"
 BLOCK_TYPE_SUMMARY_CARD = "summary_card"
 BLOCK_TYPE_PAGE_BREAK = "page_break"
 MAX_HEADING_LENGTH_FOR_TABLE_TITLE = 24
+TABLE_CAPTION_NUMBERED_HEADING_RE = re.compile(
+    r"^(?:[IVXLCDM]+\.\s+|\d+(?:\.\d+)*[.)]?\s+|[一二三四五六七八九十百千万]+、)"
+)
 SummaryCardDefaultsResolver = Callable[
     [DocumentSummaryCardDefaults | None],
     dict[str, object | None],
 ]
 RuntimeBlock = DocumentBlock
+_STORE_DOCUMENT_STYLE_DEFAULTS_ATTR = "_document_style_defaults"
 
 
 def _default_workspace_dir() -> Path:
@@ -87,6 +107,41 @@ def _is_within_workspace(path: Path, workspace_dir: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _looks_like_numbered_heading(text: str) -> bool:
+    return bool(TABLE_CAPTION_NUMBERED_HEADING_RE.match(text.strip()))
+
+
+def attach_document_style_defaults(
+    store: object,
+    defaults: dict[str, object] | None,
+) -> None:
+    setattr(store, _STORE_DOCUMENT_STYLE_DEFAULTS_ATTR, dict(defaults or {}))
+
+
+def get_document_style_defaults(store: object) -> dict[str, object]:
+    defaults = getattr(store, _STORE_DOCUMENT_STYLE_DEFAULTS_ATTR, None)
+    return dict(defaults) if isinstance(defaults, dict) else {}
+
+
+def merge_document_style_defaults(
+    document_style: DocumentStyleConfig,
+    defaults: dict[str, object] | None,
+) -> DocumentStyleConfig:
+    resolved_defaults = dict(defaults or {})
+    if not resolved_defaults:
+        return document_style
+
+    explicit_fields = set(getattr(document_style, "model_fields_set", set()))
+    merged_payload = document_style.model_dump(mode="python", exclude_unset=True)
+    for field_name, value in resolved_defaults.items():
+        if field_name in explicit_fields:
+            continue
+        if value in (None, ""):
+            continue
+        merged_payload[field_name] = value
+    return DocumentStyleConfig.model_validate(merged_payload)
 
 
 class DocumentSessionStore:
@@ -149,6 +204,10 @@ class DocumentSessionStore:
     def create_document(self, request: CreateDocumentRequest) -> DocumentModel:
         with self._lock:
             document_id = uuid4().hex
+            document_style = merge_document_style_defaults(
+                request.document_style,
+                get_document_style_defaults(self),
+            )
             document = DocumentModel(
                 document_id=document_id,
                 session_id=request.session_id,
@@ -160,7 +219,7 @@ class DocumentSessionStore:
                     density=request.density,
                     accent_color=request.accent_color,
                     header_footer=request.header_footer,
-                    document_style=request.document_style,
+                    document_style=document_style,
                 ),
             )
             self._documents[document_id] = document
@@ -181,6 +240,10 @@ class DocumentSessionStore:
     def add_blocks(self, request: AddBlocksRequest) -> DocumentModel:
         with self._lock:
             document = self.require_document(request.document_id)
+            if document.status != DocumentStatus.DRAFT:
+                raise ValueError(
+                    "add_blocks is only allowed while the document status is draft"
+                )
             self._append_blocks_locked(document, request.blocks)
             return document
 
@@ -291,10 +354,19 @@ class DocumentSessionStore:
                 if isinstance(next_block, SectionTableInput)
                 else ""
             )
+            uses_executive_brief_table_titles = (
+                context.document.metadata.theme_name == "executive_brief"
+            )
             follows_landscape_section = (
                 isinstance(previous_block, SectionBreakInput)
                 and previous_block.page_orientation == "landscape"
             )
+            has_bottom_border = (
+                bool(current.bottom_border)
+                if isinstance(current, BlockHeadingInput)
+                else False
+            )
+            is_numbered_heading = _looks_like_numbered_heading(current_text)
 
             if (
                 isinstance(current, BlockHeadingInput)
@@ -302,6 +374,16 @@ class DocumentSessionStore:
                 and not (next_caption or next_title)
                 and not follows_landscape_section
                 and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
+                and (
+                    # Table caption promotion intentionally preserves two common patterns:
+                    # - numbered headings without bottom borders, such as "1.1 ..." or "III. ..."
+                    # - unnumbered display headings that opt into a divider line
+                    # Executive brief is the only theme that treats bordered headings before
+                    # tables as table titles, because that template uses divider-style titles
+                    # for summary tables by design.
+                    (has_bottom_border == is_numbered_heading)
+                    or (has_bottom_border and uses_executive_brief_table_titles)
+                )
             ):
                 normalized.append(
                     next_block.model_copy(
@@ -324,10 +406,82 @@ class DocumentSessionStore:
         block: BlockInput,
         document: DocumentModel,
     ) -> RuntimeBlock:
+        if isinstance(block, SectionPageTemplateInput):
+            if block.template == "technical_resume":
+                return PageTemplateBlock(
+                    template=block.template,
+                    data=TechnicalResumeData(
+                        name=block.data.name,
+                        headline=block.data.headline,
+                        contact_line=block.data.contact_line,
+                        sections=[
+                            ResumeSection(
+                                title=section.title,
+                                entries=[
+                                    ResumeSectionEntry(
+                                        heading=entry.heading,
+                                        date=entry.date,
+                                        subtitle=entry.subtitle,
+                                        details=[
+                                            detail
+                                            if isinstance(detail, str)
+                                            else detail.model_copy(deep=True)
+                                            for detail in entry.details
+                                        ],
+                                    )
+                                    for entry in section.entries
+                                ],
+                                lines=[
+                                    line
+                                    if isinstance(line, str)
+                                    else line.model_copy(deep=True)
+                                    for line in section.lines
+                                ],
+                            )
+                            for section in block.data.sections
+                        ],
+                    ),
+                )
+            return PageTemplateBlock(
+                template=block.template,
+                data=BusinessReviewCoverData(
+                    title=block.data.title,
+                    subtitle=block.data.subtitle,
+                    summary_title=block.data.summary_title,
+                    summary_text=block.data.summary_text,
+                    metrics=[
+                        PageTemplateMetricItem(
+                            label=metric.label,
+                            value=metric.value,
+                            delta=metric.delta,
+                            delta_color=metric.delta_color,
+                            note=metric.note,
+                        )
+                        for metric in block.data.metrics
+                    ],
+                    footer_note=block.data.footer_note,
+                    auto_page_break=block.data.auto_page_break,
+                ),
+            )
+        if isinstance(block, SectionHeroBannerInput):
+            return HeroBannerBlock(
+                title=block.title,
+                subtitle=block.subtitle,
+                theme_color=block.theme_color,
+                text_color=block.text_color,
+                subtitle_color=block.subtitle_color,
+                min_height_pt=block.min_height_pt,
+                full_width=block.full_width,
+                style=block.style,
+                layout=block.layout,
+            )
         if isinstance(block, BlockHeadingInput):
             return HeadingBlock(
                 text=block.text,
                 level=block.level,
+                bottom_border=block.bottom_border,
+                bottom_border_color=block.bottom_border_color,
+                bottom_border_size_pt=block.bottom_border_size_pt,
                 style=block.style,
                 layout=block.layout,
             )
@@ -337,6 +491,27 @@ class DocumentSessionStore:
                 variant=block.variant,
                 title=block.title,
                 runs=block.runs,
+                style=block.style,
+                layout=block.layout,
+            )
+        if isinstance(block, SectionAccentBoxInput):
+            return AccentBoxBlock(
+                title=block.title,
+                text=block.text,
+                runs=[run.model_copy(deep=True) for run in block.runs],
+                items=[
+                    item if isinstance(item, str) else item.model_copy(deep=True)
+                    for item in block.items
+                ],
+                accent_color=block.accent_color,
+                fill_color=block.fill_color,
+                title_color=block.title_color,
+                border_color=block.border_color,
+                border_width_pt=block.border_width_pt,
+                accent_border_width_pt=block.accent_border_width_pt,
+                padding_pt=block.padding_pt,
+                title_font_scale=block.title_font_scale,
+                body_font_scale=block.body_font_scale,
                 style=block.style,
                 layout=block.layout,
             )
@@ -357,13 +532,52 @@ class DocumentSessionStore:
                 column_widths=block.column_widths,
                 numeric_columns=block.numeric_columns,
                 header_fill=block.header_fill,
+                header_fill_enabled=block.header_fill_enabled,
                 header_text_color=block.header_text_color,
+                header_bold=block.header_bold,
                 banded_rows=block.banded_rows,
                 banded_row_fill=block.banded_row_fill,
                 first_column_bold=block.first_column_bold,
                 table_align=block.table_align,
                 border_style=block.border_style,
                 caption_emphasis=block.caption_emphasis,
+                cell_padding_horizontal_pt=block.cell_padding_horizontal_pt,
+                cell_padding_vertical_pt=block.cell_padding_vertical_pt,
+                header_font_scale=block.header_font_scale,
+                body_font_scale=block.body_font_scale,
+                style=block.style,
+                layout=block.layout,
+            )
+        if isinstance(block, SectionMetricCardsInput):
+            return MetricCardsBlock(
+                metrics=[
+                    MetricCard(
+                        label=metric.label,
+                        value=metric.value,
+                        delta=metric.delta,
+                        note=metric.note,
+                        value_color=metric.value_color,
+                        delta_color=metric.delta_color,
+                        fill_color=metric.fill_color,
+                        label_color=metric.label_color,
+                        note_color=metric.note_color,
+                        value_font_scale=metric.value_font_scale,
+                        delta_font_scale=metric.delta_font_scale,
+                    )
+                    for metric in block.metrics
+                ],
+                accent_color=block.accent_color,
+                fill_color=block.fill_color,
+                label_color=block.label_color,
+                border_color=block.border_color,
+                border_width_pt=block.border_width_pt,
+                divider_color=block.divider_color,
+                divider_width_pt=block.divider_width_pt,
+                padding_pt=block.padding_pt,
+                label_font_scale=block.label_font_scale,
+                value_font_scale=block.value_font_scale,
+                delta_font_scale=block.delta_font_scale,
+                note_font_scale=block.note_font_scale,
                 style=block.style,
                 layout=block.layout,
             )
@@ -479,6 +693,9 @@ class DocumentSessionStore:
                     BlockHeadingInput(
                         text=request.text,
                         level=request.level,
+                        bottom_border=request.bottom_border,
+                        bottom_border_color=request.bottom_border_color,
+                        bottom_border_size_pt=request.bottom_border_size_pt,
                         style=request.style.model_copy(deep=True),
                         layout=request.layout.model_copy(deep=True),
                     )
@@ -535,13 +752,19 @@ class DocumentSessionStore:
                         column_widths=[*request.column_widths],
                         numeric_columns=[*request.numeric_columns],
                         header_fill=request.header_fill,
+                        header_fill_enabled=request.header_fill_enabled,
                         header_text_color=request.header_text_color,
+                        header_bold=request.header_bold,
                         banded_rows=request.banded_rows,
                         banded_row_fill=request.banded_row_fill,
                         first_column_bold=request.first_column_bold,
                         table_align=request.table_align,
                         border_style=request.border_style,
                         caption_emphasis=request.caption_emphasis,
+                        cell_padding_horizontal_pt=request.cell_padding_horizontal_pt,
+                        cell_padding_vertical_pt=request.cell_padding_vertical_pt,
+                        header_font_scale=request.header_font_scale,
+                        body_font_scale=request.body_font_scale,
                         style=request.style.model_copy(deep=True),
                         layout=request.layout.model_copy(deep=True),
                     )

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from astrbot.core.agent.tool import ToolSet
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..domain.document.render_backends import DocumentRenderBackendConfig
 from .registry import (
     AfterExportCallback,
     AstrBotDocumentTool,
@@ -37,8 +38,14 @@ def build_document_toolset_from_registry(
     *,
     before_export_hooks: list[BeforeExportHook] | None = None,
     after_export_hooks: list[AfterExportHook] | None = None,
+    render_backend_config: DocumentRenderBackendConfig | None = None,
+    default_document_style: dict[str, object] | None = None,
 ) -> DocumentToolSet:
-    store = build_document_store(workspace_dir=workspace_dir)
+    store = build_document_store(
+        workspace_dir=workspace_dir,
+        render_backend_config=render_backend_config,
+        default_document_style=default_document_style,
+    )
     resolved_before_export_hooks = before_export_hooks or []
     resolved_after_export_hooks = after_export_hooks or []
     tools = [

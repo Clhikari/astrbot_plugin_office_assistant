@@ -31,6 +31,7 @@ class DocumentTableDefaults(BaseModel):
 
     preset: Literal["report_grid", "metrics_compact", "minimal"] | None = None
     header_fill: str | None = None
+    body_fill: str | None = None
     header_text_color: str | None = None
     banded_rows: bool | None = None
     banded_row_fill: str | None = None
@@ -40,7 +41,12 @@ class DocumentTableDefaults(BaseModel):
     caption_emphasis: TableCaptionEmphasis | None = None
     cell_align: Literal["left", "center", "right"] | None = None
 
-    @field_validator("header_fill", "header_text_color", "banded_row_fill")
+    @field_validator(
+        "header_fill",
+        "body_fill",
+        "header_text_color",
+        "banded_row_fill",
+    )
     @classmethod
     def validate_optional_colors(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
@@ -62,9 +68,17 @@ class DocumentStyleConfig(BaseModel):
 
     brief: str = ""
     heading_color: str | None = None
+    heading_level_1_color: str | None = None
+    heading_level_2_color: str | None = None
+    heading_bottom_border_color: str | None = None
+    heading_bottom_border_size_pt: float | None = Field(default=None, gt=0, le=6)
     title_align: Literal["left", "center", "right", "justify"] | None = None
     body_font_size: float | None = Field(default=None, ge=9.0, le=16.0)
     body_line_spacing: float | None = Field(default=None, ge=1.0, le=2.5)
+    font_name: str = "Microsoft YaHei"
+    heading_font_name: str = "Microsoft YaHei"
+    table_font_name: str = "Microsoft YaHei"
+    code_font_name: str = "Consolas"
     paragraph_space_after: float | None = Field(default=None, ge=0, le=72)
     list_space_after: float | None = Field(default=None, ge=0, le=72)
     summary_card_defaults: DocumentSummaryCardDefaults = Field(
@@ -72,7 +86,12 @@ class DocumentStyleConfig(BaseModel):
     )
     table_defaults: DocumentTableDefaults = Field(default_factory=DocumentTableDefaults)
 
-    @field_validator("heading_color")
+    @field_validator(
+        "heading_color",
+        "heading_level_1_color",
+        "heading_level_2_color",
+        "heading_bottom_border_color",
+    )
     @classmethod
     def validate_heading_color(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)

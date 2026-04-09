@@ -28,6 +28,13 @@ class PluginSettings:
     recent_text_max_entries: int
     recent_text_cleanup_interval_seconds: int
     upload_session_cleanup_interval_seconds: int
+    ppt_render_backend: str
+    excel_render_backend: str
+    js_renderer_entry: str
+    default_word_font_name: str
+    default_word_heading_font_name: str
+    default_word_table_font_name: str
+    default_word_code_font_name: str
 
 
 def load_plugin_settings(config) -> PluginSettings:
@@ -35,6 +42,8 @@ def load_plugin_settings(config) -> PluginSettings:
     trigger_settings = config.get("trigger_settings", {})
     preview_settings = config.get("preview_settings", {})
     path_settings = config.get("path_settings", {})
+    render_settings = config.get("render_settings", {})
+    word_style_settings = config.get("word_style_settings", {})
 
     auto_delete = file_settings.get("auto_delete_files", True)
     max_file_size = (
@@ -75,6 +84,30 @@ def load_plugin_settings(config) -> PluginSettings:
         10,
         min(300, upload_session_ttl_seconds),
     )
+    ppt_render_backend = str(render_settings.get("ppt_render_backend", "node"))
+    if ppt_render_backend not in {"node", "python"}:
+        ppt_render_backend = "node"
+    excel_render_backend = str(render_settings.get("excel_render_backend", "python"))
+    if excel_render_backend not in {"python", "node"}:
+        excel_render_backend = "python"
+    js_renderer_entry = str(
+        render_settings.get(
+            "js_renderer_entry",
+            render_settings.get("node_renderer_entry", ""),
+        )
+    ).strip()
+    default_word_font_name = str(
+        word_style_settings.get("default_font_name", "")
+    ).strip()
+    default_word_heading_font_name = str(
+        word_style_settings.get("default_heading_font_name", "")
+    ).strip()
+    default_word_table_font_name = str(
+        word_style_settings.get("default_table_font_name", "")
+    ).strip()
+    default_word_code_font_name = str(
+        word_style_settings.get("default_code_font_name", "")
+    ).strip()
 
     return PluginSettings(
         auto_delete=auto_delete,
@@ -96,6 +129,13 @@ def load_plugin_settings(config) -> PluginSettings:
         recent_text_max_entries=recent_text_max_entries,
         recent_text_cleanup_interval_seconds=recent_text_cleanup_interval_seconds,
         upload_session_cleanup_interval_seconds=upload_session_cleanup_interval_seconds,
+        ppt_render_backend=ppt_render_backend,
+        excel_render_backend=excel_render_backend,
+        js_renderer_entry=js_renderer_entry,
+        default_word_font_name=default_word_font_name,
+        default_word_heading_font_name=default_word_heading_font_name,
+        default_word_table_font_name=default_word_table_font_name,
+        default_word_code_font_name=default_word_code_font_name,
     )
 
 

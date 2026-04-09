@@ -18,12 +18,14 @@ from ...document_core.models.blocks import (
     BlockLayout,
     BlockStyle,
     HeaderFooterConfig,
+    ListItem,
     ParagraphRun,
     SectionMarginsConfig,
     SectionStartType,
     TableAlignment,
     TableBorderStyle,
     TableCaptionEmphasis,
+    TableCell,
     TableHeaderGroup,
     normalize_optional_hex_color,
     validate_section_page_numbering,
@@ -35,6 +37,7 @@ SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
 SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
 SUPPORTED_DENSITIES = {"comfortable", "compact"}
 SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
+SUPPORTED_PAGE_TEMPLATES = {"business_review_cover", "technical_resume"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 DEFAULT_DOCX_FILENAME = "document.docx"
 MAX_BLOCK_NORMALIZE_DEPTH = 32
@@ -47,6 +50,38 @@ _HEADER_FOOTER_SCHEMA_PROPERTIES = {
     "footer_text": {
         "type": "string",
         "description": "Optional repeated footer text for the document.",
+    },
+    "header_left": {
+        "type": "string",
+        "description": "Optional left-aligned header content.",
+    },
+    "header_right": {
+        "type": "string",
+        "description": "Optional right-aligned header content. Use {PAGE} if page number text should appear here.",
+    },
+    "footer_left": {
+        "type": "string",
+        "description": "Optional left-aligned footer content.",
+    },
+    "footer_right": {
+        "type": "string",
+        "description": "Optional right-aligned footer content. Use {PAGE} if page number text should appear here.",
+    },
+    "header_border_bottom": {
+        "type": "boolean",
+        "description": "Whether to draw a bottom divider line under the header.",
+    },
+    "footer_border_top": {
+        "type": "boolean",
+        "description": "Whether to draw a top divider line above the footer.",
+    },
+    "header_border_color": {
+        "type": "string",
+        "description": "Optional 6-digit hex color for the header divider line.",
+    },
+    "footer_border_color": {
+        "type": "string",
+        "description": "Optional 6-digit hex color for the footer divider line.",
     },
     "different_first_page": {
         "type": "boolean",
@@ -135,9 +170,17 @@ def _extract_text_from_column_alias(value: object) -> str:
 def _normalize_table_header_alias(block: dict) -> None:
     if block.get("type") != "table":
         return
-    if block.get("headers"):
-        block.pop("columns", None)
-        return
+    raw_headers = block.get("headers")
+    if isinstance(raw_headers, list) and raw_headers:
+        normalized_headers = [
+            text
+            for text in (_extract_text_from_column_alias(header) for header in raw_headers)
+            if text
+        ]
+        if normalized_headers:
+            block["headers"] = normalized_headers
+            block.pop("columns", None)
+            return
     raw_columns = block.get("columns")
     if not isinstance(raw_columns, list):
         return
@@ -154,6 +197,18 @@ def _normalize_table_header_alias(block: dict) -> None:
 def _normalize_table_row_alias(block: dict) -> None:
     if block.get("type") != "table":
         return
+    raw_rows = block.get("rows")
+    if isinstance(raw_rows, list):
+        normalized_rows: list[object] = []
+        changed = False
+        for row in raw_rows:
+            if isinstance(row, Mapping) and isinstance(row.get("cells"), list):
+                normalized_rows.append(copy.deepcopy(row["cells"]))
+                changed = True
+                continue
+            normalized_rows.append(row)
+        if changed:
+            block["rows"] = normalized_rows
     raw_items = block.pop("items", None)
     if raw_items is None or block.get("rows"):
         return
@@ -202,9 +257,140 @@ def _normalize_block_style_and_layout(block: dict) -> None:
                 )
 
 
+_NESTED_BLOCK_ALIAS_KEYS = (
+    "hero_banner",
+    "accent_box",
+    "metric_cards",
+    "heading",
+    "table",
+    "paragraph",
+)
+
+
+def _merge_missing_mapping_fields(target: dict, key: str, value: object) -> None:
+    if not isinstance(value, Mapping):
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+        return
+    existing = target.get(key)
+    if isinstance(existing, Mapping):
+        merged = dict(value)
+        merged.update(existing)
+        target[key] = merged
+        return
+    if key not in target:
+        target[key] = copy.deepcopy(value)
+
+
+def _normalize_nested_block_payload_alias(block: dict) -> None:
+    block_type = block.get("type")
+    if not isinstance(block_type, str) or not block_type.strip():
+        for alias_key in _NESTED_BLOCK_ALIAS_KEYS:
+            if isinstance(block.get(alias_key), Mapping):
+                block["type"] = alias_key
+                block_type = alias_key
+                break
+    if not isinstance(block_type, str) or not block_type.strip():
+        return
+
+    nested_payload = block.get(block_type)
+    if isinstance(nested_payload, Mapping):
+        for key, value in nested_payload.items():
+            if key == "type":
+                continue
+            _merge_missing_mapping_fields(block, key, value)
+        block.pop(block_type, None)
+
+    if block_type == "accent_box":
+        content = block.pop("content", None)
+        if isinstance(content, str) and content.strip() and not block.get("text"):
+            block["text"] = content.strip()
+    elif block_type == "hero_banner":
+        title_color = block.pop("title_color", None)
+        if isinstance(title_color, str) and title_color.strip() and not block.get("text_color"):
+            block["text_color"] = title_color.strip()
+        text = block.pop("text", None)
+        if isinstance(text, str) and text.strip() and not block.get("title"):
+            block["title"] = text.strip()
+    elif block_type == "metric_cards":
+        cards = block.pop("cards", None)
+        if isinstance(cards, list) and not block.get("metrics"):
+            block["metrics"] = copy.deepcopy(cards)
+    elif block_type == "paragraph":
+        layout = block.get("layout")
+        if isinstance(layout, Mapping):
+            normalized_layout = dict(layout)
+            alignment = normalized_layout.pop("alignment", None)
+            if isinstance(alignment, str) and alignment.strip():
+                style = dict(block.get("style") or {})
+                style.setdefault("align", alignment.strip())
+                block["style"] = style
+            block["layout"] = normalized_layout
+
+
 def _drop_unsupported_block_aliases(block: dict) -> None:
     if block.get("type") == "heading":
         block.pop("heading_color", None)
+
+
+_DOCUMENT_STYLE_COMPAT_KEYS = (
+    "heading_color",
+    "heading_level_1_color",
+    "heading_level_2_color",
+    "heading_bottom_border_color",
+    "heading_bottom_border_size_pt",
+    "title_align",
+    "body_font_size",
+    "body_line_spacing",
+    "font_name",
+    "heading_font_name",
+    "table_font_name",
+    "code_font_name",
+    "paragraph_space_after",
+    "list_space_after",
+    "brief",
+)
+
+
+def _normalize_paragraph_items_alias(block: dict) -> None:
+    if block.get("type") != "paragraph":
+        return
+    if block.get("text") or block.get("runs"):
+        block.pop("items", None)
+        return
+    raw_items = block.get("items")
+    if not isinstance(raw_items, list) or len(raw_items) != 1:
+        return
+    item = raw_items[0]
+    if isinstance(item, str):
+        text = item.strip()
+        if text:
+            block["text"] = text
+            block.pop("items", None)
+        return
+    if not isinstance(item, Mapping):
+        return
+    item_runs = item.get("runs")
+    if isinstance(item_runs, list) and item_runs:
+        block["runs"] = item_runs
+        block.pop("items", None)
+        return
+    item_text = item.get("text")
+    if isinstance(item_text, str) and item_text.strip():
+        block["text"] = item_text.strip()
+        block.pop("items", None)
+
+
+def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
+    normalized = dict(kwargs)
+    raw_document_style = normalized.get("document_style")
+    document_style = dict(raw_document_style) if isinstance(raw_document_style, Mapping) else {}
+    for key in _DOCUMENT_STYLE_COMPAT_KEYS:
+        if key in normalized and key not in document_style:
+            document_style[key] = normalized[key]
+    if document_style:
+        normalized["document_style"] = document_style
+    return normalized
 
 
 def _extract_compat_section_break(block: dict) -> dict | None:
@@ -247,6 +433,7 @@ def normalize_raw_block_payloads(
             continue
 
         block_type = block.get("type")
+        block.pop("block_id", None)
         if block_type == "group" and isinstance(block.get("blocks"), list):
             block["blocks"] = normalize_raw_block_payloads(
                 block["blocks"],
@@ -266,6 +453,9 @@ def normalize_raw_block_payloads(
                 normalized_columns.append(normalized_column)
             block["columns"] = normalized_columns
 
+        _normalize_nested_block_payload_alias(block)
+        block_type = block.get("type")
+
         if block_type == "toc" and not block.get("title"):
             toc_text = block.pop("text", "")
             if isinstance(toc_text, str) and toc_text.strip():
@@ -273,6 +463,7 @@ def normalize_raw_block_payloads(
 
         _normalize_block_style_and_layout(block)
         _drop_unsupported_block_aliases(block)
+        _normalize_paragraph_items_alias(block)
         _normalize_table_header_alias(block)
         _normalize_table_row_alias(block)
         section_break = _extract_compat_section_break(block)
@@ -385,8 +576,16 @@ class AddHeadingRequest(BaseModel):
     document_id: str
     text: str = Field(min_length=1)
     level: int = Field(default=1, ge=1, le=6)
+    bottom_border: bool | None = None
+    bottom_border_color: str | None = None
+    bottom_border_size_pt: float | None = Field(default=None, gt=0, le=6)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator("bottom_border_color")
+    @classmethod
+    def validate_bottom_border_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
 
 class BlockHeadingInput(BaseModel):
@@ -395,12 +594,63 @@ class BlockHeadingInput(BaseModel):
     type: Literal["heading"] = "heading"
     text: str = Field(min_length=1)
     level: int = Field(default=1, ge=1, le=6)
+    bottom_border: bool | None = None
+    bottom_border_color: str | None = None
+    bottom_border_size_pt: float | None = Field(default=None, gt=0, le=6)
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator("bottom_border_color")
+    @classmethod
+    def validate_bottom_border_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
 
 class ParagraphRunInput(ParagraphRun):
     model_config = ConfigDict(extra="forbid")
+
+
+class ListItemInput(ListItem):
+    model_config = ConfigDict(extra="forbid")
+
+
+class TableCellInput(TableCell):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MetricCardInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    delta: str = ""
+    note: str = ""
+    value_color: str | None = None
+    delta_color: str | None = None
+    fill_color: str | None = None
+    label_color: str | None = None
+    note_color: str | None = None
+    value_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    delta_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+
+    @field_validator(
+        "value_color",
+        "delta_color",
+        "fill_color",
+        "label_color",
+        "note_color",
+    )
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
 
 class AddParagraphRequest(BaseModel):
@@ -439,19 +689,120 @@ class SectionParagraphInput(BaseModel):
         raise ValueError("paragraph requires text or runs")
 
 
+class AddAccentBoxRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    title: str = ""
+    text: str = ""
+    runs: list[ParagraphRunInput] = Field(default_factory=list)
+    items: list[str | ListItemInput] = Field(default_factory=list)
+    accent_color: str | None = None
+    fill_color: str | None = None
+    title_color: str | None = None
+    border_color: str | None = None
+    border_width_pt: float | None = Field(default=None, gt=0, le=12)
+    accent_border_width_pt: float | None = Field(default=None, gt=0, le=18)
+    padding_pt: float | None = Field(default=None, ge=0, le=72)
+    title_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    body_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator(
+        "accent_color",
+        "fill_color",
+        "title_color",
+        "border_color",
+    )
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> AddAccentBoxRequest:
+        if self.title.strip() or self.text.strip() or self.runs or self.items:
+            return self
+        raise ValueError("accent_box requires title, text, runs, or items")
+
+
+class SectionAccentBoxInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["accent_box"] = "accent_box"
+    title: str = ""
+    text: str = ""
+    runs: list[ParagraphRunInput] = Field(default_factory=list)
+    items: list[str | ListItemInput] = Field(default_factory=list)
+    accent_color: str | None = None
+    fill_color: str | None = None
+    title_color: str | None = None
+    border_color: str | None = None
+    border_width_pt: float | None = Field(default=None, gt=0, le=12)
+    accent_border_width_pt: float | None = Field(default=None, gt=0, le=18)
+    padding_pt: float | None = Field(default=None, ge=0, le=72)
+    title_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    body_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator(
+        "accent_color",
+        "fill_color",
+        "title_color",
+        "border_color",
+    )
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> SectionAccentBoxInput:
+        if self.title.strip() or self.text.strip() or self.runs or self.items:
+            return self
+        raise ValueError("accent_box requires title, text, runs, or items")
+
+
 class AddListRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     document_id: str
-    items: list[str] = Field(min_length=1)
+    items: list[str | ListItemInput] = Field(min_length=1)
     ordered: bool = False
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("items")
     @classmethod
-    def validate_items(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value if item and item.strip()]
+    def validate_items(
+        cls, value: list[str | ListItemInput]
+    ) -> list[str | ListItemInput]:
+        cleaned: list[str | ListItemInput] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    cleaned.append(text)
+                continue
+            if item.text.strip():
+                item.text = item.text.strip()
+            cleaned.append(item)
         if not cleaned:
             raise ValueError("items must contain at least one non-empty item")
         return cleaned
@@ -461,15 +812,26 @@ class SectionListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["list"] = "list"
-    items: list[str] = Field(min_length=1)
+    items: list[str | ListItemInput] = Field(min_length=1)
     ordered: bool = False
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
     @field_validator("items")
     @classmethod
-    def validate_items(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value if item and item.strip()]
+    def validate_items(
+        cls, value: list[str | ListItemInput]
+    ) -> list[str | ListItemInput]:
+        cleaned: list[str | ListItemInput] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    cleaned.append(text)
+                continue
+            if item.text.strip():
+                item.text = item.text.strip()
+            cleaned.append(item)
         if not cleaned:
             raise ValueError("items must contain at least one non-empty item")
         return cleaned
@@ -480,7 +842,7 @@ class AddTableRequest(BaseModel):
 
     document_id: str
     headers: list[str] = Field(default_factory=list)
-    rows: list[list[str]] = Field(default_factory=list)
+    rows: list[list[str | TableCellInput]] = Field(default_factory=list)
     header_groups: list[TableHeaderGroup] = Field(default_factory=list)
     table_style: str = ""
     caption: str = ""
@@ -488,13 +850,27 @@ class AddTableRequest(BaseModel):
     column_widths: list[float] = Field(default_factory=list)
     numeric_columns: list[int] = Field(default_factory=list)
     header_fill: str | None = None
+    header_fill_enabled: bool | None = None
     header_text_color: str | None = None
+    header_bold: bool | None = None
     banded_rows: bool | None = None
     banded_row_fill: str | None = None
     first_column_bold: bool | None = None
     table_align: TableAlignment | None = None
     border_style: TableBorderStyle | None = None
     caption_emphasis: TableCaptionEmphasis | None = None
+    cell_padding_horizontal_pt: float | None = Field(default=None, ge=0, le=72)
+    cell_padding_vertical_pt: float | None = Field(default=None, ge=0, le=72)
+    header_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    body_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -534,7 +910,7 @@ class SectionTableInput(BaseModel):
 
     type: Literal["table"] = "table"
     headers: list[str] = Field(default_factory=list)
-    rows: list[list[str]] = Field(default_factory=list)
+    rows: list[list[str | TableCellInput]] = Field(default_factory=list)
     header_groups: list[TableHeaderGroup] = Field(default_factory=list)
     table_style: str = ""
     caption: str = ""
@@ -542,13 +918,27 @@ class SectionTableInput(BaseModel):
     column_widths: list[float] = Field(default_factory=list)
     numeric_columns: list[int] = Field(default_factory=list)
     header_fill: str | None = None
+    header_fill_enabled: bool | None = None
     header_text_color: str | None = None
+    header_bold: bool | None = None
     banded_rows: bool | None = None
     banded_row_fill: str | None = None
     first_column_bold: bool | None = None
     table_align: TableAlignment | None = None
     border_style: TableBorderStyle | None = None
     caption_emphasis: TableCaptionEmphasis | None = None
+    cell_padding_horizontal_pt: float | None = Field(default=None, ge=0, le=72)
+    cell_padding_vertical_pt: float | None = Field(default=None, ge=0, le=72)
+    header_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    body_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -581,6 +971,212 @@ class SectionTableInput(BaseModel):
     def validate_table_shape(self) -> SectionTableInput:
         validate_table_structure(self.headers, self.rows, self.header_groups)
         return self
+
+
+class AddMetricCardsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    metrics: list[MetricCardInput] = Field(min_length=1, max_length=4)
+    accent_color: str | None = None
+    fill_color: str | None = None
+    label_color: str | None = None
+    border_color: str | None = None
+    border_width_pt: float | None = Field(default=None, gt=0, le=12)
+    divider_color: str | None = None
+    divider_width_pt: float | None = Field(default=None, gt=0, le=12)
+    padding_pt: float | None = Field(default=None, ge=0, le=72)
+    label_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    value_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    delta_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    note_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator(
+        "accent_color",
+        "fill_color",
+        "label_color",
+        "border_color",
+        "divider_color",
+    )
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class SectionMetricCardsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["metric_cards"] = "metric_cards"
+    metrics: list[MetricCardInput] = Field(min_length=1, max_length=4)
+    accent_color: str | None = None
+    fill_color: str | None = None
+    label_color: str | None = None
+    border_color: str | None = None
+    border_width_pt: float | None = Field(default=None, gt=0, le=12)
+    divider_color: str | None = None
+    divider_width_pt: float | None = Field(default=None, gt=0, le=12)
+    padding_pt: float | None = Field(default=None, ge=0, le=72)
+    label_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    value_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    delta_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    note_font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator(
+        "accent_color",
+        "fill_color",
+        "label_color",
+        "border_color",
+        "divider_color",
+    )
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class SectionHeroBannerInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["hero_banner"] = "hero_banner"
+    title: str = Field(min_length=1)
+    subtitle: str = ""
+    theme_color: str | None = None
+    text_color: str | None = None
+    subtitle_color: str | None = None
+    min_height_pt: float | None = Field(default=None, gt=0, le=240)
+    full_width: bool = True
+    style: BlockStyle = Field(default_factory=BlockStyle)
+    layout: BlockLayout = Field(default_factory=BlockLayout)
+
+    @field_validator("theme_color", "text_color", "subtitle_color")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class PageTemplateMetricInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    delta: str = ""
+    delta_color: str | None = None
+    note: str = ""
+
+    @field_validator("delta_color")
+    @classmethod
+    def validate_optional_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class BusinessReviewCoverDataInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    subtitle: str = ""
+    summary_title: str = "核心摘要"
+    summary_text: str = Field(min_length=1)
+    metrics: list[PageTemplateMetricInput] = Field(min_length=1, max_length=4)
+    footer_note: str = ""
+    auto_page_break: bool = False
+
+
+class ResumeSectionEntryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    heading: str = Field(min_length=1)
+    date: str = ""
+    subtitle: str = ""
+    details: list[str | ListItemInput] = Field(default_factory=list)
+
+
+class ResumeSectionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    entries: list[ResumeSectionEntryInput] = Field(default_factory=list)
+    lines: list[str | ListItemInput] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> ResumeSectionInput:
+        if self.entries or self.lines:
+            return self
+        raise ValueError("resume section requires entries or lines")
+
+
+class TechnicalResumeDataInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    headline: str = ""
+    contact_line: str = Field(min_length=1)
+    sections: list[ResumeSectionInput] = Field(min_length=1)
+
+
+class SectionPageTemplateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["page_template"] = "page_template"
+    template: Literal["business_review_cover", "technical_resume"] = (
+        "business_review_cover"
+    )
+    data: BusinessReviewCoverDataInput | TechnicalResumeDataInput
+
+    @field_validator("template")
+    @classmethod
+    def validate_template(cls, value: str) -> str:
+        candidate = value.strip()
+        if candidate not in SUPPORTED_PAGE_TEMPLATES:
+            raise ValueError(
+                f"unsupported page_template template: {candidate or value!r}"
+            )
+        return candidate
+
+    @model_validator(mode="after")
+    def validate_template_data(self) -> SectionPageTemplateInput:
+        expected_type = (
+            BusinessReviewCoverDataInput
+            if self.template == "business_review_cover"
+            else TechnicalResumeDataInput
+        )
+        if isinstance(self.data, expected_type):
+            return self
+        raise ValueError(f"page_template data does not match template {self.template!r}")
 
 
 class AddSummaryCardRequest(BaseModel):
@@ -702,10 +1298,14 @@ class BlockColumnsInput(BaseModel):
 
 
 BlockInput = Annotated[
-    BlockHeadingInput
+    SectionPageTemplateInput
+    | SectionHeroBannerInput
+    | BlockHeadingInput
     | SectionParagraphInput
+    | SectionAccentBoxInput
     | SectionListInput
     | SectionTableInput
+    | SectionMetricCardsInput
     | SectionCardInput
     | SectionPageBreakInput
     | SectionBreakInput

@@ -17,6 +17,13 @@ from astrbot_plugin_office_assistant.constants import (
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     OfficeType,
 )
+from astrbot_plugin_office_assistant.domain.document.render_backends import (
+    DocumentRenderBackendConfig,
+)
+from astrbot_plugin_office_assistant.domain.document.session_store import (
+    get_document_style_defaults,
+)
+from astrbot_plugin_office_assistant.office_generator import OfficeGenerator
 from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
 from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
@@ -131,6 +138,23 @@ def _write_png(path: Path) -> None:
 
 def _import_docx():
     return pytest.importorskip("docx")
+
+
+def _find_paragraph(doc, text: str):
+    return next(paragraph for paragraph in doc.paragraphs if paragraph.text == text)
+
+
+def _node_render_backend_config_for_tests() -> DocumentRenderBackendConfig:
+    renderer_entry = (
+        Path(__file__).resolve().parents[1] / "word_renderer_js" / "dist" / "cli.js"
+    )
+    if shutil.which("node") is None or not renderer_entry.exists():
+        pytest.skip("node renderer build is not available")
+    return DocumentRenderBackendConfig(
+        preferred_backend="node",
+        fallback_enabled=False,
+        node_renderer_entry=str(renderer_entry),
+    )
 
 
 def _build_file_tool_service(
@@ -495,10 +519,139 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.upload_session_ttl_seconds == 600
         assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.settings.upload_session_cleanup_interval_seconds == 300
+        assert runtime.settings.ppt_render_backend == "node"
+        assert runtime.settings.excel_render_backend == "python"
+        assert runtime.settings.js_renderer_entry == ""
+        export_tool = next(
+            tool
+            for tool in runtime.document_toolset.tools
+            if getattr(tool, "name", "") == "export_document"
+        )
+        assert [backend.name for backend in export_tool.render_backends] == ["node"]
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
         assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
         assert runtime.incoming_message_service is not None
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_ignores_legacy_word_render_settings():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
+    config = {
+        "render_settings": {
+            "word_render_backend": "python",
+            "word_render_fallback_enabled": False,
+            "ppt_render_backend": "node",
+            "excel_render_backend": "python",
+            "js_renderer_entry": "D:/custom/js-renderer.js",
+        }
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        export_tool = next(
+            tool
+            for tool in runtime.document_toolset.tools
+            if getattr(tool, "name", "") == "export_document"
+        )
+        assert runtime.settings.ppt_render_backend == "node"
+        assert runtime.settings.excel_render_backend == "python"
+        assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
+        assert [backend.name for backend in export_tool.render_backends] == ["node"]
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_accepts_legacy_node_renderer_entry_alias():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
+    config = {
+        "render_settings": {
+            "node_renderer_entry": "D:/custom/legacy-renderer.js",
+        }
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        assert runtime.settings.js_renderer_entry == "D:/custom/legacy-renderer.js"
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
+def test_build_plugin_runtime_applies_word_style_defaults():
+    context = MagicMock()
+    context.get_config.return_value = {"admins_id": ["admin-1"]}
+    config = {
+        "word_style_settings": {
+            "default_font_name": "Arial",
+            "default_heading_font_name": "Arial",
+            "default_table_font_name": "Arial",
+            "default_code_font_name": "JetBrains Mono",
+        }
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=config,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        assert runtime.settings.default_word_font_name == "Arial"
+        assert runtime.settings.default_word_heading_font_name == "Arial"
+        assert runtime.settings.default_word_table_font_name == "Arial"
+        assert runtime.settings.default_word_code_font_name == "JetBrains Mono"
+        assert runtime.office_gen._default_document_style == {
+            "font_name": "Arial",
+            "heading_font_name": "Arial",
+            "table_font_name": "Arial",
+            "code_font_name": "JetBrains Mono",
+        }
+        assert get_document_style_defaults(runtime.document_toolset.document_store) == {
+            "font_name": "Arial",
+            "heading_font_name": "Arial",
+            "table_font_name": "Arial",
+            "code_font_name": "JetBrains Mono",
+        }
     finally:
         runtime.executor.shutdown(wait=False)
         runtime.office_gen.cleanup()
@@ -1586,7 +1739,7 @@ def test_upload_prompt_service_builds_generic_notice_for_unreadable_files():
     )
 
     assert "[操作要求]" in prompt_text
-    assert "使用中文与用户沟通" in prompt_text
+    assert "请根据用户要求处理这些文件，使用中文与用户沟通。" in prompt_text
     assert "[用户指令]" not in prompt_text
     assert "工作区文件名" not in prompt_text
 
@@ -3587,6 +3740,101 @@ async def test_file_tool_service_creates_office_file_via_generator_and_delivery(
     office_generator.generate.assert_awaited_once()
     delivery_service.send_file_with_preview.assert_awaited_once()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_create_office_file_exports_word_via_node_backend():
+    docx = _import_docx()
+    workspace_dir = _make_workspace("create-office-word-node")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+    event.send = AsyncMock()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"docx": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={"enable_office_files": True},
+        )
+        office_generator = OfficeGenerator(
+            data_path=workspace_dir,
+            render_backend_config=_node_render_backend_config_for_tests(),
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_generator=office_generator,
+            pdf_converter=MagicMock(),
+            delivery_service=delivery_service,
+            office_libs={"docx": object()},
+        )
+
+        result = await service.create_office_file(
+            event,
+            filename="report.docx",
+            content={
+                "metadata": {
+                    "title": "Node Legacy Entry",
+                    "document_style": {
+                        "summary_card_defaults": {
+                            "title_align": "center",
+                            "title_emphasis": "strong",
+                            "title_font_scale": 1.2,
+                            "title_space_before": 12,
+                            "title_space_after": 4,
+                            "list_space_after": 8,
+                        }
+                    },
+                },
+                "blocks": [
+                    {"type": "heading", "text": "一、经营总览", "level": 1},
+                    {
+                        "type": "table",
+                        "headers": ["日期", "时间", "内容"],
+                        "rows": [
+                            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+                            ["13:00", "课程 B"],
+                        ],
+                    },
+                    {
+                        "type": "summary_card",
+                        "title": "Highlights",
+                        "items": ["Stable revenue", "Lower churn"],
+                        "variant": "conclusion",
+                    },
+                ],
+            },
+            file_type="word",
+        )
+        assert result is None
+        delivery_service.send_file_with_preview.assert_awaited_once()
+        delivered_path = Path(delivery_service.send_file_with_preview.await_args.args[1])
+        loaded_doc = docx.Document(delivered_path)
+        table = loaded_doc.tables[0]
+
+        assert any(
+            paragraph.text == "Node Legacy Entry" for paragraph in loaded_doc.paragraphs
+        )
+        assert any(
+            paragraph.text == "一、经营总览" for paragraph in loaded_doc.paragraphs
+        )
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        summary_title = _find_paragraph(loaded_doc, "Highlights")
+        summary_item = _find_paragraph(loaded_doc, "• Stable revenue")
+        assert summary_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
+        assert summary_title.runs[0].bold is True
+        assert summary_title.paragraph_format.space_before.pt == pytest.approx(12, abs=0.5)
+        assert summary_title.paragraph_format.space_after.pt == pytest.approx(4, abs=0.5)
+        assert summary_item.paragraph_format.space_after.pt == pytest.approx(8, abs=0.5)
+        assert table.rows[0].cells[0].text == "日期"
+        assert len(table.rows) >= 3
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
 
 
 @pytest.mark.asyncio

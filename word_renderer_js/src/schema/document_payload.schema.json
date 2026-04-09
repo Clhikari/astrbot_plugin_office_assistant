@@ -1,0 +1,450 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{6}$"
+    }
+  },
+  "required": [
+    "version",
+    "render_mode",
+    "document_id",
+    "metadata",
+    "blocks"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "render_mode": {
+      "type": "string",
+      "const": "structured"
+    },
+    "document_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "title",
+        "theme_name",
+        "table_template",
+        "density",
+        "document_style",
+        "header_footer"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "preferred_filename": {
+          "type": "string"
+        },
+        "theme_name": {
+          "type": "string"
+        },
+        "table_template": {
+          "type": "string"
+        },
+        "density": {
+          "type": "string"
+        },
+        "accent_color": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/hexColor"
+            },
+            {
+              "type": "string",
+              "const": ""
+            }
+          ]
+        },
+        "document_style": {
+          "type": "object",
+          "properties": {
+            "font_name": {
+              "type": "string"
+            },
+            "heading_font_name": {
+              "type": "string"
+            },
+            "table_font_name": {
+              "type": "string"
+            },
+            "code_font_name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        "header_footer": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "page_template"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "template",
+                "data"
+              ],
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "enum": [
+                    "business_review_cover",
+                    "technical_resume"
+                  ]
+                },
+                "data": {
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "page_template"
+                },
+                "template": {
+                  "const": "business_review_cover"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "summary_text",
+                    "metrics"
+                  ],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "subtitle": {
+                      "type": "string"
+                    },
+                    "summary_title": {
+                      "type": "string"
+                    },
+                    "summary_text": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "metrics": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 4,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "label",
+                          "value"
+                        ],
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "value": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "delta": {
+                            "type": "string"
+                          },
+                          "delta_color": {
+                            "$ref": "#/definitions/hexColor"
+                          },
+                          "note": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    },
+                    "footer_note": {
+                      "type": "string"
+                    },
+                    "auto_page_break": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "page_template"
+                },
+                "template": {
+                  "const": "technical_resume"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "headline",
+                    "contact_line",
+                    "sections"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "headline": {
+                      "type": "string"
+                    },
+                    "contact_line": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sections": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "title"
+                        ],
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "entries": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "heading"
+                              ],
+                              "properties": {
+                                "heading": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "date": {
+                                  "type": "string"
+                                },
+                                "subtitle": {
+                                  "type": "string"
+                                },
+                                "details": {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "runs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "text": {
+                                                  "type": "string"
+                                                },
+                                                "bold": {
+                                                  "type": "boolean"
+                                                },
+                                                "italic": {
+                                                  "type": "boolean"
+                                                },
+                                                "underline": {
+                                                  "type": "boolean"
+                                                },
+                                                "code": {
+                                                  "type": "boolean"
+                                                },
+                                                "color": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "text"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "additionalProperties": true
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "additionalProperties": true
+                            }
+                          },
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "runs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "bold": {
+                                            "type": "boolean"
+                                          },
+                                          "italic": {
+                                            "type": "boolean"
+                                          },
+                                          "underline": {
+                                            "type": "boolean"
+                                          },
+                                          "code": {
+                                            "type": "boolean"
+                                          },
+                                          "color": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "text"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "additionalProperties": true
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "additionalProperties": true,
+                        "anyOf": [
+                          {
+                            "required": [
+                              "entries"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "lines"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "hero_banner"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "title"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "subtitle": {
+                  "type": "string"
+                },
+                "theme_color": {
+                  "$ref": "#/definitions/hexColor"
+                },
+                "text_color": {
+                  "$ref": "#/definitions/hexColor"
+                },
+                "subtitle_color": {
+                  "$ref": "#/definitions/hexColor"
+                },
+                "min_height_pt": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 240
+                },
+                "full_width": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": true
+      }
+    }
+  }
+}

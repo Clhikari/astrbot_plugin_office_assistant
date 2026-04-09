@@ -149,6 +149,37 @@
             }
         }
     },
+    "word_style_settings": {
+        "description": "Word 默认样式",
+        "type": "object",
+        "hint": "控制 Word 文档默认字体。模型没有显式传 document_style 字体字段时，会使用这里的配置。",
+        "items": {
+            "default_font_name": {
+                "description": "正文默认字体",
+                "type": "string",
+                "hint": "例如 Arial、Microsoft YaHei、Source Han Sans SC。留空则继续使用内置默认值。",
+                "default": ""
+            },
+            "default_heading_font_name": {
+                "description": "标题默认字体",
+                "type": "string",
+                "hint": "留空时跟随正文默认字体。",
+                "default": ""
+            },
+            "default_table_font_name": {
+                "description": "表格默认字体",
+                "type": "string",
+                "hint": "留空时跟随正文默认字体。",
+                "default": ""
+            },
+            "default_code_font_name": {
+                "description": "代码默认字体",
+                "type": "string",
+                "hint": "留空时继续使用内置默认值。",
+                "default": ""
+            }
+        }
+    },
     "debug_settings": {
         "description": "调试设置",
         "type": "object",

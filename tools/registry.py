@@ -9,7 +9,14 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
+from ..domain.document.render_backends import (
+    DocumentRenderBackendConfig,
+    attach_render_backend_config,
+    build_document_render_backends,
+    get_render_backend_config,
+)
 from ..domain.document.session_store import DocumentSessionStore
+from ..domain.document.session_store import attach_document_style_defaults
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -85,8 +92,15 @@ def _build_export_document_tool(
 ) -> AstrBotDocumentTool:
     from ..agent_tools.document_tools import ExportDocumentTool
 
+    render_backend_config = get_render_backend_config(store)
+    document_format = "word"
     return ExportDocumentTool(
         store=store,
+        render_backends=build_document_render_backends(
+            document_format,
+            render_backend_config,
+        ),
+        render_backend_config=render_backend_config,
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
         after_export=after_export,
@@ -134,11 +148,18 @@ def _register_export_document_tool(
 ) -> None:
     from ..mcp_server.tools.export_document import register_export_document_tool
 
+    render_backend_config = get_render_backend_config(store)
+    document_format = "word"
     register_export_document_tool(
         server,
         store,
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
+        render_backends=build_document_render_backends(
+            document_format,
+            render_backend_config,
+        ),
+        render_backend_config=render_backend_config,
     )
 
 
@@ -170,5 +191,16 @@ def get_document_tool_specs() -> tuple[DocumentToolSpec, ...]:
     return _DOCUMENT_TOOL_SPECS
 
 
-def build_document_store(workspace_dir: Path | None = None) -> DocumentSessionStore:
-    return DocumentSessionStore(workspace_dir=workspace_dir)
+def build_document_store(
+    workspace_dir: Path | None = None,
+    *,
+    render_backend_config=None,
+    default_document_style: dict[str, object] | None = None,
+) -> DocumentSessionStore:
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    attach_render_backend_config(
+        store,
+        render_backend_config or DocumentRenderBackendConfig(),
+    )
+    attach_document_style_defaults(store, default_document_style)
+    return store
