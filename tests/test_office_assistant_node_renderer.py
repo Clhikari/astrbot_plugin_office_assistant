@@ -1186,6 +1186,49 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
     assert _cell_border_color(accent_table.rows[0].cells[0], "bottom") == "CBD5E1"
     assert _cell_border_size(accent_table.rows[0].cells[0], "top") == "6"
 
+
+def test_node_renderer_uses_font_name_for_heading_and_table_when_specific_fonts_are_unset(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-font-name-fallbacks",
+        {
+            "document_id": "node-font-name-fallbacks",
+            "metadata": _business_report_metadata(
+                title="",
+                document_style={
+                    "font_name": "Source Han Sans SC",
+                },
+            ),
+            "blocks": [
+                {"type": "heading", "text": "一、经营总览", "level": 1},
+                {
+                    "type": "table",
+                    "headers": ["区域", "营收"],
+                    "rows": [["华东", "¥4.82 亿"]],
+                },
+                {"type": "paragraph", "text": "正文段落"},
+            ],
+        },
+    )
+
+    heading = _find_paragraph(loaded_doc, "一、经营总览")
+    body = _find_paragraph(loaded_doc, "正文段落")
+    table = loaded_doc.tables[0]
+
+    assert _run_font_attr(heading.runs[0], "ascii") == "Source Han Sans SC"
+    assert _run_font_attr(heading.runs[0], "eastAsia") == "Source Han Sans SC"
+    assert _run_font_attr(table.rows[1].cells[0].paragraphs[0].runs[0], "ascii") == (
+        "Source Han Sans SC"
+    )
+    assert _run_font_attr(table.rows[1].cells[0].paragraphs[0].runs[0], "eastAsia") == (
+        "Source Han Sans SC"
+    )
+    assert _run_font_attr(body.runs[0], "ascii") == "Source Han Sans SC"
+    assert _run_font_attr(body.runs[0], "eastAsia") == "Source Han Sans SC"
+
+
 def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_box(
     workspace_root: Path,
 ):

@@ -83,7 +83,7 @@ export const THEMES: Record<string, ThemeConfig> = {
     accent: "1F4E79",
     accentSoft: "DCE6F1",
     accentBoxStripColor: "1F4E79",
-    headingBottomBorderColor: "2E75B6",
+    headingBottomBorderColor: "1F4E79",
     heroBannerDividerColor: "2E75B6",
     heroBannerDividerSizePt: 1.5,
     fontName: "Microsoft YaHei",

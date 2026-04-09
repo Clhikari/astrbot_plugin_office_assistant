@@ -32,6 +32,7 @@ from .domain.document.contracts import (
 )
 from .domain.document.render_backends import (
     DocumentRenderBackendConfig,
+    NodeDocumentRenderBackend,
     build_document_render_backends,
     render_document_with_backends,
 )
@@ -110,7 +111,12 @@ class OfficeGenerator(ExecutorOwnerMixin):
 
     def _is_generation_supported(self, office_type: OfficeType) -> bool:
         if office_type == OfficeType.WORD:
-            return True
+            backend = NodeDocumentRenderBackend(
+                entry_path=self._render_backend_config.js_renderer_entry
+                if self._render_backend_config
+                else None
+            )
+            return backend.is_available()
         return self.support.get(office_type, False)
 
     async def generate(

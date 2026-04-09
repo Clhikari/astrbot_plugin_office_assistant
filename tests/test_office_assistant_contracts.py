@@ -51,9 +51,11 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     HeaderFooterConfig,
     HeadingBlock,
     HeroBannerBlock,
+    ListItem,
     PageTemplateBlock,
     ParagraphBlock,
     ParagraphRun,
+    ResumeSectionEntry,
     ResumeSection,
     SectionBreakBlock,
     SectionMarginsConfig,
@@ -655,6 +657,46 @@ def test_build_document_render_payload_keeps_page_template_required_defaults():
 
     assert payload["blocks"][0]["type"] == "page_template"
     assert payload["blocks"][0]["data"]["headline"] == ""
+
+
+def test_build_document_render_payload_omits_none_in_page_template_runs():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        blocks=[
+            PageTemplateBlock(
+                template="technical_resume",
+                data=TechnicalResumeData(
+                    name="张明远",
+                    contact_line="zhang@example.com",
+                    sections=[
+                        ResumeSection(
+                            title="实习经历",
+                            entries=[
+                                ResumeSectionEntry(
+                                    heading="字节跳动",
+                                    details=[
+                                        ListItem(
+                                            runs=[
+                                                ParagraphRun(text="主导优化推荐引擎召回模块，", bold=True),
+                                                ParagraphRun(text="将离线索引构建耗时压缩到 1/4。"),
+                                            ]
+                                        )
+                                    ],
+                                )
+                            ],
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+    payload = build_document_render_payload(document)
+    runs = payload["blocks"][0]["data"]["sections"][0]["entries"][0]["details"][0]["runs"]
+
+    assert all("color" not in run for run in runs)
 
 def test_build_document_render_payload_omits_unset_heading_bottom_border():
     document = DocumentModel(

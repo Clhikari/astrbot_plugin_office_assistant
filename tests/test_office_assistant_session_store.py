@@ -30,6 +30,7 @@ from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
 )
 from astrbot_plugin_office_assistant.domain.document.session_store import (
     DocumentSessionStore,
+    merge_document_style_defaults,
 )
 from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
     export_document_via_pipeline,
@@ -502,6 +503,21 @@ def test_document_session_store_preserves_hero_banner_and_report_style_fields():
     assert table.header_font_scale == pytest.approx(1.1)
     assert table.body_font_scale == pytest.approx(0.95)
     assert table.rows[0][0].font_scale == pytest.approx(1.15)
+
+
+def test_merge_document_style_defaults_keeps_unset_font_fields_following_font_name():
+    merged = merge_document_style_defaults(
+        DocumentStyleConfig(),
+        {
+            "font_name": "Arial",
+        },
+    )
+
+    assert merged.font_name == "Arial"
+    assert "heading_font_name" not in merged.model_fields_set
+    assert "table_font_name" not in merged.model_fields_set
+    assert merged.model_dump(mode="python", exclude_unset=True) == {"font_name": "Arial"}
+
 
 def test_document_session_store_preserves_page_template_block():
     store = DocumentSessionStore()

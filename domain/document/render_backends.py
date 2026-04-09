@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -121,7 +122,10 @@ def _fixup_block_payload(block_payload: dict[str, Any], block: object) -> None:
     if hasattr(block, "type"):
         block_payload["type"] = block.type
     if getattr(block, "type", "") == "page_template" and hasattr(block, "data"):
-        block_payload["data"] = block.data.model_dump(mode="json")  # type: ignore[union-attr]
+        block_payload["data"] = block.data.model_dump(  # type: ignore[union-attr]
+            mode="json",
+            exclude_none=True,
+        )
     if hasattr(block, "blocks") and isinstance(block_payload.get("blocks"), list):
         child_blocks = getattr(block, "blocks", [])
         for idx, child_payload in enumerate(block_payload["blocks"]):
@@ -153,6 +157,9 @@ class NodeDocumentRenderBackend:
     def _default_entry_path() -> Path:
         package_root = Path(__file__).resolve().parents[2]
         return package_root / "word_renderer_js" / "dist" / "cli.js"
+
+    def is_available(self) -> bool:
+        return self._entry_path.exists() and shutil.which("node") is not None
 
     def render(self, document: DocumentModel, output_path: Path) -> RenderResult:
         entry_path = self._entry_path

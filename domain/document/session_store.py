@@ -134,7 +134,7 @@ def merge_document_style_defaults(
         return document_style
 
     explicit_fields = set(getattr(document_style, "model_fields_set", set()))
-    merged_payload = document_style.model_dump(mode="python")
+    merged_payload = document_style.model_dump(mode="python", exclude_unset=True)
     for field_name, value in resolved_defaults.items():
         if field_name in explicit_fields:
             continue
@@ -366,12 +366,8 @@ class DocumentSessionStore:
                 and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
                 and (
                     (
-                        not current.bottom_border
-                        and not _looks_like_numbered_heading(current_text)
-                    )
-                    or (
                         current.bottom_border
-                        and _looks_like_numbered_heading(current_text)
+                        == _looks_like_numbered_heading(current_text)
                     )
                     or (
                         current.bottom_border and uses_executive_brief_table_titles
