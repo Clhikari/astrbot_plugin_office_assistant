@@ -57,7 +57,9 @@ def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: 
 
     def _fake_run(command, cwd, check, capture_output, text, encoding):
         payload_path = Path(command[2])
-        payloads.append(json.loads(payload_path.read_text(encoding="utf-8")))
+        moved_payload_path = payload_path.with_suffix(".moved.json")
+        payload_path.rename(moved_payload_path)
+        payloads.append(json.loads(moved_payload_path.read_text(encoding="utf-8")))
         assert cwd == str(entry_path.parent)
         output_path.write_bytes(b"node-docx")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -76,6 +78,37 @@ def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: 
     assert payloads[0]["render_mode"] == "structured"
     assert payloads[0]["document_id"] == document.document_id
     assert payloads[0]["blocks"][0]["type"] == "paragraph"
+
+
+def test_node_render_backend_extracts_message_from_json_error(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-node-render-backend-error")
+    entry_path = workspace_dir / "dist" / "cli.js"
+    entry_path.parent.mkdir(parents=True, exist_ok=True)
+    entry_path.write_text("// fake cli", encoding="utf-8")
+
+    document = DocumentSessionStore(workspace_dir=workspace_dir).create_document(
+        CreateDocumentRequest(
+            title="Node Backend Error",
+            output_name="node-backend-error.docx",
+        )
+    )
+    document.add_block(ParagraphBlock(text="Node payload paragraph"))
+    output_path = workspace_dir / "node-output.docx"
+
+    with patch(
+        "astrbot_plugin_office_assistant.domain.document.render_backends.subprocess.run",
+        return_value=SimpleNamespace(
+            returncode=1,
+            stdout='{"success":false,"message":"stdout should be ignored"}',
+            stderr='{"success":false,"code":"SCHEMA_VALIDATION_FAILED","message":"headline is required"}',
+        ),
+    ):
+        backend = NodeDocumentRenderBackend(entry_path=entry_path)
+        with pytest.raises(
+            DocumentRenderBackendError,
+            match=r"JS renderer failed: headline is required",
+        ):
+            backend.render(document, output_path)
 
 
 def test_build_document_render_payload_keeps_only_explicit_header_footer_overrides():
@@ -1499,6 +1532,45 @@ def test_node_renderer_supports_section_override_inheritance_and_nested_even_hea
     assert _section_page_number_start(loaded_doc.sections[2]) is None
     assert _document_uses_odd_even_headers(loaded_doc) is True
     assert "嵌套偶数页页眉" in _story_texts(loaded_doc.sections[3].even_page_header)
+
+
+def test_node_renderer_clears_inherited_header_footer_when_disabled_without_override(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-clear-inherited-header-footer",
+        {
+            "document_id": "node-clear-inherited-header-footer",
+            "metadata": _business_report_metadata(
+                title="分节清空测试",
+                header_footer={
+                    "header_text": "默认页眉",
+                    "footer_text": "默认页脚",
+                    "show_page_number": True,
+                    "different_odd_even": True,
+                    "even_page_header_text": "默认偶数页眉",
+                },
+            ),
+            "blocks": [
+                {"type": "paragraph", "text": "第一节"},
+                {
+                    "type": "section_break",
+                    "start_type": "new_page",
+                    "inherit_header_footer": False,
+                },
+                {"type": "paragraph", "text": "第二节"},
+            ],
+        },
+    )
+
+    assert len(loaded_doc.sections) == 2
+    assert loaded_doc.sections[1].header.is_linked_to_previous is False
+    assert loaded_doc.sections[1].footer.is_linked_to_previous is False
+    assert loaded_doc.sections[1].header.paragraphs[0].text == ""
+    assert loaded_doc.sections[1].footer.paragraphs[0].text == ""
+    assert "PAGE" not in loaded_doc.sections[1].footer._element.xml
+    assert loaded_doc.sections[1].even_page_header.paragraphs[0].text == ""
 
 
 @pytest.mark.asyncio

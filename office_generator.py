@@ -56,6 +56,14 @@ class OfficeGenerator(ExecutorOwnerMixin):
         self.support = self._check_support()
         self._render_backend_config = render_backend_config
         self._default_document_style = dict(default_document_style or {})
+        self._structured_document_store = DocumentSessionStore(
+            workspace_dir=self.data_path,
+            max_documents=32,
+        )
+        attach_document_style_defaults(
+            self._structured_document_store,
+            self._default_document_style,
+        )
         self._init_executor(executor, label="文件生成器")
 
     # 定义映射表
@@ -360,11 +368,9 @@ class OfficeGenerator(ExecutorOwnerMixin):
             self._default_document_style,
         )
 
-        # 这里借一个临时 session store，是为了复用 create_document/add_blocks
-        # 现有的校验、规范化和运行时 block 构建逻辑，避免在生成链再维护一套平行实现。
-        temp_store = DocumentSessionStore(workspace_dir=self.data_path)
-        attach_document_style_defaults(temp_store, self._default_document_style)
-        created_document = temp_store.create_document(
+        # 这里复用共享的 session store，只借它现成的 create_document/add_blocks
+        # 校验、规范化和运行时 block 构建逻辑，避免在生成链再维护一套平行实现。
+        created_document = self._structured_document_store.create_document(
             CreateDocumentRequest(
                 session_id=str(content.get("session_id") or ""),
                 title=metadata.title,
@@ -407,7 +413,7 @@ class OfficeGenerator(ExecutorOwnerMixin):
                 )
 
         if validated_blocks:
-            temp_store.add_blocks(
+            self._structured_document_store.add_blocks(
                 AddBlocksRequest(
                     document_id=created_document.document_id,
                     blocks=validated_blocks,

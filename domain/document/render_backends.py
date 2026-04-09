@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -150,6 +151,8 @@ class NodeDocumentRenderBackend:
         ) as payload_file:
             payload_path = Path(payload_file.name)
             json.dump(payload, payload_file, ensure_ascii=False)
+            payload_file.flush()
+            os.fsync(payload_file.fileno())
 
         command = ["node", str(entry_path), str(payload_path), str(output_path)]
         cwd = entry_path.parent
@@ -177,9 +180,11 @@ class NodeDocumentRenderBackend:
             payload_path.unlink(missing_ok=True)
 
         if completed.returncode != 0:
-            stderr = (completed.stderr or "").strip()
-            stdout = (completed.stdout or "").strip()
-            detail = stderr or stdout or f"exit code {completed.returncode}"
+            detail = _extract_renderer_error_detail(
+                completed.stderr,
+                completed.stdout,
+                completed.returncode,
+            )
             raise DocumentRenderBackendError(
                 self.name,
                 f"JS renderer failed: {detail}",
@@ -212,6 +217,27 @@ class PythonPptRenderBackend:
             self.name,
             "PPT render backend is planned for JS and is not implemented in Python",
         )
+
+
+def _extract_renderer_error_detail(
+    stderr: str | None,
+    stdout: str | None,
+    returncode: int,
+) -> str:
+    for raw_output in (stderr, stdout):
+        text = (raw_output or "").strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if isinstance(payload, dict):
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        return text
+    return f"exit code {returncode}"
 
 
 def render_document_with_backends(

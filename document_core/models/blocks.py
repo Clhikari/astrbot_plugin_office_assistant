@@ -368,6 +368,13 @@ def _resolve_table_body_column_count(
                     row_span - 1,
                 )
             column_index += 1
+        while column_index < len(active_spans) and active_spans[column_index] > 0:
+            column_index += 1
+        if explicit_column_count is not None and column_index < explicit_column_count:
+            raise ValueError(
+                f"table row {row_index} is missing cells "
+                f"(expected {explicit_column_count}, got {column_index})"
+            )
         max_columns = max(max_columns, len(active_spans), len(next_active_spans))
         active_spans = next_active_spans
 

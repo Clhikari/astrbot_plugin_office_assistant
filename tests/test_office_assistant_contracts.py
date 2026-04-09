@@ -1117,6 +1117,14 @@ def test_add_table_request_accepts_empty_placeholder_cells_for_vertical_merge_ro
     assert request.rows[1][0] == ""
     assert request.rows[1][1] == "13:00"
 
+def test_add_table_request_rejects_underfilled_rows():
+    with pytest.raises(ValidationError, match="table row 1 is missing cells"):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["日期", "时间", "课程"],
+            rows=[["第一天", "09:00"]],
+        )
+
 def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_styles():
     request = AddBlocksRequest(
         document_id="doc-1",

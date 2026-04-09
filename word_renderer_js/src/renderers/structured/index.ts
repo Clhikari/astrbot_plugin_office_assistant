@@ -300,7 +300,9 @@ function appendSectionBreak(
     ? inheritedHeaderFooter
     : inheritHeaderFooter
       ? mergeHeaderFooter(inheritedHeaderFooter, overrideHeaderFooter)
-      : overrideHeaderFooter;
+      : hasHeaderFooterOverride(overrideHeaderFooter)
+        ? overrideHeaderFooter
+        : buildClearedHeaderFooterOverride(inheritedHeaderFooter);
 
   sections.push({
     children: [],
@@ -314,6 +316,29 @@ function appendSectionBreak(
   });
 
   return effectiveHeaderFooter;
+}
+
+function buildClearedHeaderFooterOverride(
+  inheritedHeaderFooter: HeaderFooterConfig,
+): HeaderFooterConfig {
+  const cleared: HeaderFooterConfig = {
+    header_text: "",
+    footer_text: "",
+    show_page_number: false,
+  };
+  if (usesFirstPageVariants(inheritedHeaderFooter)) {
+    cleared.different_first_page = true;
+    cleared.first_page_header_text = "";
+    cleared.first_page_footer_text = "";
+    cleared.first_page_show_page_number = false;
+  }
+  if (usesEvenPageVariants(inheritedHeaderFooter)) {
+    cleared.different_odd_even = true;
+    cleared.even_page_header_text = "";
+    cleared.even_page_footer_text = "";
+    cleared.even_page_show_page_number = false;
+  }
+  return cleared;
 }
 
 function buildSection(
