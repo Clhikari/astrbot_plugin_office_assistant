@@ -26,6 +26,7 @@ import {
   resolveBoxPadding,
   stringValue,
 } from "../utils";
+import { createSpacingParagraph } from "../layout-spacing";
 
 const COVER_TABLE_WIDTH_DXA = 9360;
 const SUMMARY_STRIP_WIDTH_DXA = 160;
@@ -66,12 +67,15 @@ export function renderBusinessReviewCover(
       } as Block,
       theme,
     ),
+    createSpacingParagraph({ afterPt: 0 }),
     renderSummaryStripBox(data, theme),
+    createSpacingParagraph({ afterPt: 0 }),
     renderCompactMetricBand(data, theme),
   ];
 
   const footerNote = stringValue(data.footer_note).trim();
   if (footerNote) {
+    children.push(createSpacingParagraph({ afterPt: 0 }));
     children.push(...buildBusinessReviewFooterNote(footerNote, theme));
   }
 

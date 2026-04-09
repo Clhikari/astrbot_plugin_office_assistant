@@ -204,10 +204,71 @@ export function resolveTableColumnCount(headers: string[], rows: unknown[]): num
   if (headers.length > 0) {
     return headers.length;
   }
-  return rows.reduce<number>(
-    (max, row) => Math.max(max, countLogicalColumns(arrayValue(row))),
-    0,
-  );
+  return resolveBodyColumnCount(rows);
+}
+
+function resolveBodyColumnCount(rows: unknown[]): number {
+  let activeSpans: number[] = [];
+  let maxColumns = 0;
+
+  for (const row of rows) {
+    const rowItems = arrayValue(row);
+    const nextSpans = activeSpans.map((s) => Math.max(s - 1, 0));
+    let colIdx = 0;
+    let itemIdx = 0;
+
+    while (itemIdx < rowItems.length) {
+      const rawCell = rowItems[itemIdx];
+
+      // Skip columns occupied by active spans
+      while (colIdx < activeSpans.length && activeSpans[colIdx] > 0) {
+        if (isPlaceholderCell(rawCell)) {
+          // Placeholder consumed by active span
+          itemIdx += 1;
+          break;
+        }
+        colIdx += 1;
+      }
+      if (itemIdx >= rowItems.length) {
+        break;
+      }
+      // Re-check after consuming placeholder
+      if (colIdx < activeSpans.length && activeSpans[colIdx] > 0) {
+        continue;
+      }
+
+      const cell = rowItems[itemIdx];
+      if (isPlaceholderCell(cell)) {
+        // Trailing placeholder not consumed by a span - skip it
+        itemIdx += 1;
+        continue;
+      }
+
+      // Expand spans arrays if needed
+      while (activeSpans.length <= colIdx) {
+        activeSpans.push(0);
+        nextSpans.push(0);
+      }
+
+      const normalized = normalizeTableCell(cell);
+      if (normalized.rowSpan > 1) {
+        nextSpans[colIdx] = Math.max(nextSpans[colIdx], normalized.rowSpan - 1);
+      }
+
+      colIdx += 1;
+      itemIdx += 1;
+    }
+
+    // Account for any remaining active spans after processing row items
+    while (colIdx < activeSpans.length && activeSpans[colIdx] > 0) {
+      colIdx += 1;
+    }
+
+    maxColumns = Math.max(maxColumns, activeSpans.length, nextSpans.length, colIdx);
+    activeSpans = nextSpans;
+  }
+
+  return maxColumns;
 }
 
 export function normalizeColumnWidths(block: Block, columnCount: number): number[] {
@@ -238,16 +299,6 @@ export function resolveTableCellWidth(
     .slice(startIndex, startIndex + columnSpan)
     .reduce((sum, value) => sum + value, 0);
   return width > 0 ? { size: width, type: WidthType.DXA } : undefined;
-}
-
-function countLogicalColumns(rowItems: unknown[]): number {
-  let count = 0;
-  for (const rawCell of rowItems) {
-    if (!isPlaceholderCell(rawCell)) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function isPlaceholderCell(cell: unknown): boolean {

@@ -433,6 +433,7 @@ def normalize_raw_block_payloads(
             continue
 
         block_type = block.get("type")
+        block.pop("block_id", None)
         if block_type == "group" and isinstance(block.get("blocks"), list):
             block["blocks"] = normalize_raw_block_payloads(
                 block["blocks"],

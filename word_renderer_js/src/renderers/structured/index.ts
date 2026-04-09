@@ -152,13 +152,17 @@ function appendBlocksToSections(
   theme: ThemeConfig,
   sections: SectionState[],
   currentHeaderFooter: HeaderFooterConfig,
+  hasTrailingContent = false,
+  topLevelDeferredChildren?: FileChild[],
 ): HeaderFooterConfig {
   let activeHeaderFooter = currentHeaderFooter;
-  const deferredTrailingChildren: FileChild[] = [];
+  const isTopLevel = topLevelDeferredChildren === undefined;
+  const deferredTrailingChildren: FileChild[] = topLevelDeferredChildren ?? [];
 
   for (const [index, rawBlock] of blocks.entries()) {
+    const hasFollowingBlocks = hasTrailingContent || index < blocks.length - 1;
     const pageTemplateOverride =
-      rawBlock.type === "page_template" && index < blocks.length - 1
+      rawBlock.type === "page_template" && hasFollowingBlocks
         ? prepareTrailingPageTemplate(rawBlock, theme, deferredTrailingChildren)
         : null;
     const block = pageTemplateOverride ?? rawBlock;
@@ -179,14 +183,16 @@ function appendBlocksToSections(
         theme,
         sections,
         activeHeaderFooter,
+        hasFollowingBlocks,
+        deferredTrailingChildren,
       );
       continue;
     }
 
     if (block.type === "columns") {
       const columns = arrayValue(block.columns).map((column) => asObject(column));
-      columns.forEach((column, index) => {
-        if (index > 0) {
+      columns.forEach((column, columnIndex) => {
+        if (columnIndex > 0) {
           const section = sections.at(-1);
           if (!section) {
             throw new RenderCliError(
@@ -203,6 +209,8 @@ function appendBlocksToSections(
           theme,
           sections,
           activeHeaderFooter,
+          hasFollowingBlocks || columnIndex < columns.length - 1,
+          deferredTrailingChildren,
         );
       });
       continue;
@@ -222,7 +230,7 @@ function appendBlocksToSections(
     }
   }
 
-  if (deferredTrailingChildren.length > 0) {
+  if (isTopLevel && deferredTrailingChildren.length > 0) {
     const lastSection = sections.at(-1);
     if (!lastSection) {
       throw new RenderCliError(

@@ -100,9 +100,7 @@ def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
     for block in document.blocks:
         block_payload = block.model_dump(mode="json", exclude_unset=True)
-        if getattr(block, "type", "") == "page_template" and hasattr(block, "data"):
-            block_payload["data"] = block.data.model_dump(mode="json")
-        block_payload["type"] = block.type
+        _fixup_block_payload(block_payload, block)
         blocks.append(block_payload)
 
     return {
@@ -115,6 +113,30 @@ def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
         "metadata": metadata,
         "blocks": blocks,
     }
+
+
+def _fixup_block_payload(block_payload: dict[str, Any], block: object) -> None:
+    """Recursively ensure ``type`` is present and ``block_id`` is stripped."""
+    block_payload.pop("block_id", None)
+    if hasattr(block, "type"):
+        block_payload["type"] = block.type
+    if getattr(block, "type", "") == "page_template" and hasattr(block, "data"):
+        block_payload["data"] = block.data.model_dump(mode="json")  # type: ignore[union-attr]
+    if hasattr(block, "blocks") and isinstance(block_payload.get("blocks"), list):
+        child_blocks = getattr(block, "blocks", [])
+        for idx, child_payload in enumerate(block_payload["blocks"]):
+            if isinstance(child_payload, dict) and idx < len(child_blocks):
+                _fixup_block_payload(child_payload, child_blocks[idx])
+    if hasattr(block, "columns") and isinstance(block_payload.get("columns"), list):
+        model_columns = getattr(block, "columns", [])
+        for col_idx, col_payload in enumerate(block_payload["columns"]):
+            if isinstance(col_payload, dict) and col_idx < len(model_columns):
+                col_blocks = getattr(model_columns[col_idx], "blocks", [])
+                child_payloads = col_payload.get("blocks", [])
+                if isinstance(child_payloads, list):
+                    for child_idx, child_payload in enumerate(child_payloads):
+                        if isinstance(child_payload, dict) and child_idx < len(col_blocks):
+                            _fixup_block_payload(child_payload, col_blocks[child_idx])
 
 
 class NodeDocumentRenderBackend:

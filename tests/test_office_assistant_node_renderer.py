@@ -554,6 +554,49 @@ def test_node_renderer_suppresses_page_template_auto_page_break_when_body_follow
     assert _find_paragraph(loaded_doc, "一、经营总览").text == "一、经营总览"
 
 
+def test_node_renderer_defers_nested_page_template_footer_note_until_document_end(
+    workspace_root: Path,
+):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-nested-page-template-footer-note",
+        {
+            "document_id": "nested-page-template-footer-note",
+            "metadata": _business_report_metadata(),
+            "blocks": [
+                {
+                    "type": "group",
+                    "blocks": [
+                        _business_review_cover_block(
+                            summary_text="封面页脚备注应该被放到全文最后。",
+                            metrics=[
+                                {
+                                    "label": "营业收入",
+                                    "value": "¥4.82 亿",
+                                    "delta": "↑ 18.4% YoY",
+                                }
+                            ],
+                            footer_note="编制：战略发展部 · 审核：CFO 办公室",
+                        )
+                    ],
+                },
+                {"type": "heading", "text": "一、经营总览", "level": 1},
+                {"type": "paragraph", "text": "正文应该先于页脚备注出现。"},
+            ],
+        },
+    )
+
+    assert _find_paragraph(loaded_doc, "一、经营总览").text == "一、经营总览"
+
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert document_xml.index("一、经营总览") < document_xml.index(
+        "编制：战略发展部 · 审核：CFO 办公室"
+    )
+    assert document_xml.count("编制：战略发展部 · 审核：CFO 办公室") == 1
+
+
 def test_node_renderer_infers_compact_table_widths_for_short_business_tables(
     workspace_root: Path,
 ):
