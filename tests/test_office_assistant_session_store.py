@@ -698,6 +698,23 @@ def test_document_session_store_builds_prompt_summary_for_later_states():
     assert exported_summary["status"] == "exported"
     assert exported_summary["next_allowed_actions"] == []
 
+
+def test_document_session_store_rejects_add_blocks_after_finalize():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="经营复盘"))
+    store.finalize_document(FinalizeDocumentRequest(document_id=document.document_id))
+
+    with pytest.raises(
+        ValueError,
+        match="add_blocks is only allowed while the document status is draft",
+    ):
+        store.add_blocks(
+            AddBlocksRequest(
+                document_id=document.document_id,
+                blocks=[BlockHeadingInput(text="一、经营总览", level=1)],
+            )
+        )
+
 def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
     store = DocumentSessionStore()
     document = store.create_document(CreateDocumentRequest(title="兼容块测试"))

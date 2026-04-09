@@ -2166,6 +2166,40 @@ async def test_document_toolset_export_callback_runs(workspace_root: Path):
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_rejects_updates_after_finalize():
+    toolset = build_document_toolset()
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Finalized Guard",
+            output_name="finalized-guard.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    finalized = json.loads(
+        await tool_by_name["finalize_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+    assert finalized["success"] is True
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=document_id,
+            blocks=[{"type": "paragraph", "text": "不应再追加"}],
+        )
+    )
+
+    assert add_blocks_result["success"] is False
+    assert "add_blocks is only allowed while the document status is draft" in add_blocks_result["message"]
+
+
+@pytest.mark.asyncio
 async def test_document_toolset_preserves_positional_after_export_callback(
     workspace_root: Path,
 ):

@@ -91,7 +91,7 @@ function buildResumeSection(section: JsonObject): FileChild[] {
 }
 
 function buildResumeEntry(entry: JsonObject): FileChild[] {
-  const paragraphChildren: TextRun[] = [
+  const headingLineChildren: TextRun[] = [
     new TextRun({
       text: stringValue(entry.heading),
       bold: true,
@@ -112,19 +112,6 @@ function buildResumeEntry(entry: JsonObject): FileChild[] {
       : []),
   ];
   const subtitle = stringValue(entry.subtitle);
-  if (subtitle) {
-    paragraphChildren.push(
-      new TextRun({
-        text: subtitle,
-        break: 1,
-        italics: true,
-        color: RESUME_MUTED_COLOR,
-        size: halfPoint(10.5),
-        font: buildFontAttributes(RESUME_FONT_NAME),
-      }),
-    );
-  }
-
   const children: FileChild[] = [
     new Paragraph({
       tabStops: [
@@ -135,13 +122,34 @@ function buildResumeEntry(entry: JsonObject): FileChild[] {
       ],
       spacing: {
         before: point(6),
-        after: point(subtitle ? 2 : 1.5),
+        after: point(subtitle ? 0.5 : 1.5),
         line: point(11.5),
         lineRule: LineRuleType.EXACT,
       },
-      children: paragraphChildren,
+      children: headingLineChildren,
     }),
   ];
+  if (subtitle) {
+    children.push(
+      new Paragraph({
+        spacing: {
+          before: 0,
+          after: point(2),
+          line: point(10.8),
+          lineRule: LineRuleType.EXACT,
+        },
+        children: [
+          new TextRun({
+            text: subtitle,
+            italics: true,
+            color: RESUME_MUTED_COLOR,
+            size: halfPoint(10.5),
+            font: buildFontAttributes(RESUME_FONT_NAME),
+          }),
+        ],
+      }),
+    );
+  }
 
   for (const rawDetail of arrayValue(entry.details)) {
     children.push(buildDetailParagraph(rawDetail));

@@ -240,6 +240,10 @@ class DocumentSessionStore:
     def add_blocks(self, request: AddBlocksRequest) -> DocumentModel:
         with self._lock:
             document = self.require_document(request.document_id)
+            if document.status != DocumentStatus.DRAFT:
+                raise ValueError(
+                    "add_blocks is only allowed while the document status is draft"
+                )
             self._append_blocks_locked(document, request.blocks)
             return document
 

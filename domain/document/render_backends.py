@@ -100,7 +100,11 @@ def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
 
     blocks: list[dict[str, Any]] = []
     for block in document.blocks:
-        block_payload = block.model_dump(mode="json", exclude_unset=True)
+        block_payload = block.model_dump(
+            mode="json",
+            exclude_unset=True,
+            exclude_none=True,
+        )
         _fixup_block_payload(block_payload, block)
         blocks.append(block_payload)
 

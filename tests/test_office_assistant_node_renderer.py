@@ -875,7 +875,10 @@ def test_node_renderer_supports_technical_resume_page_template(
     contact_divider = _paragraph_after(loaded_doc, contact_paragraph)
     education_heading = _find_paragraph(loaded_doc, "教育背景")
     education_entry = _find_paragraph(
-        loaded_doc, "北京大学\t2019.09 – 2023.06\n计算机科学与技术  |  工学学士"
+        loaded_doc, "北京大学\t2019.09 – 2023.06"
+    )
+    education_subtitle = _find_paragraph(
+        loaded_doc, "计算机科学与技术  |  工学学士"
     )
     detail = _find_paragraph(
         loaded_doc,
@@ -907,7 +910,8 @@ def test_node_renderer_supports_technical_resume_page_template(
     assert _paragraph_tab_positions(education_entry) == ["9026"]
     assert education_entry.runs[0].bold is True
     assert _paragraph_run_rgb(education_entry) == "1A1A1A"
-    assert education_entry.runs[2].italic is True
+    assert _paragraph_run_rgb(education_subtitle) == "444444"
+    assert education_subtitle.runs[0].italic is True
     assert detail.runs[0].bold is False
     assert _paragraph_run_size(detail) == pytest.approx(10.0, abs=0.2)
 
@@ -954,8 +958,9 @@ async def test_node_document_toolset_exports_technical_resume_page_template(
         "zhangmingyuan@email.com  ·  138-0000-0000  ·  北京 | 可远程  ·  github.com/zhangmy",
     )
     experience_entry = _find_paragraph(
-        loaded_doc, "字节跳动 · 基础架构部\t2022.07 – 2022.12\n后端开发实习生 · 推荐系统组"
+        loaded_doc, "字节跳动 · 基础架构部\t2022.07 – 2022.12"
     )
+    experience_subtitle = _find_paragraph(loaded_doc, "后端开发实习生 · 推荐系统组")
     skills_heading = _find_paragraph(loaded_doc, "技术栈")
 
     assert _find_paragraph(loaded_doc, "张明远").text == "张明远"
@@ -964,6 +969,7 @@ async def test_node_document_toolset_exports_technical_resume_page_template(
     assert _paragraph_bottom_border_color(_paragraph_after(loaded_doc, contact_paragraph)) == "000000"
     assert _paragraph_bottom_border_color(skills_heading) == "000000"
     assert _paragraph_tab_positions(experience_entry) == ["9026"]
+    assert _paragraph_run_rgb(experience_subtitle) == "444444"
 
 
 def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(

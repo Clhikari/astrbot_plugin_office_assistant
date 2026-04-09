@@ -715,6 +715,34 @@ def test_build_document_render_payload_omits_unset_heading_bottom_border():
     assert "bottom_border" not in payload["blocks"][0]
     assert payload["blocks"][1]["bottom_border"] is False
 
+
+def test_build_document_render_payload_omits_none_hero_banner_fields():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Hero Banner Defaults"),
+        blocks=[
+            HeroBannerBlock(
+                title="Q3 经营复盘报告",
+                subtitle="围绕收入质量、区域表现与下季度动作的管理层复盘",
+                theme_color="1F4E79",
+                full_width=True,
+            )
+        ],
+    )
+
+    payload = build_document_render_payload(document)
+    hero_banner = payload["blocks"][0]
+
+    assert hero_banner["type"] == "hero_banner"
+    assert hero_banner["title"] == "Q3 经营复盘报告"
+    assert hero_banner["subtitle"] == "围绕收入质量、区域表现与下季度动作的管理层复盘"
+    assert hero_banner["theme_color"] == "1F4E79"
+    assert "text_color" not in hero_banner
+    assert "subtitle_color" not in hero_banner
+    assert "min_height_pt" not in hero_banner
+
 def test_normalize_raw_block_payloads_moves_legacy_layout_alignment_into_style():
     normalized = normalize_raw_block_payloads(
         [
