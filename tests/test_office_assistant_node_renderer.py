@@ -1784,11 +1784,13 @@ async def test_node_document_toolset_exports_training_summary_golden_sample(
 
     title_paragraph = _find_paragraph(loaded_doc, "Sample Training Summary Report")
     overview_heading = _find_paragraph(loaded_doc, "I. Overview")
+    overview_divider = _paragraph_after(loaded_doc, overview_heading)
     schedule_table = loaded_doc.tables[0]
     feedback_table = loaded_doc.tables[1]
 
     assert _paragraph_run_rgb(title_paragraph) == "000000"
-    assert _paragraph_bottom_border_color(overview_heading) == "D0D7DE"
+    assert _paragraph_bottom_border_color(overview_heading) is None
+    assert _paragraph_bottom_border_color(overview_divider) == "D0D7DE"
     assert any(
         "Enhance technical proficiency:" in paragraph.text
         for paragraph in loaded_doc.paragraphs

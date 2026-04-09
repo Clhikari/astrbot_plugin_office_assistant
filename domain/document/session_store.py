@@ -357,6 +357,12 @@ class DocumentSessionStore:
                 isinstance(previous_block, SectionBreakInput)
                 and previous_block.page_orientation == "landscape"
             )
+            has_bottom_border = (
+                bool(current.bottom_border)
+                if isinstance(current, BlockHeadingInput)
+                else False
+            )
+            is_numbered_heading = _looks_like_numbered_heading(current_text)
 
             if (
                 isinstance(current, BlockHeadingInput)
@@ -365,13 +371,8 @@ class DocumentSessionStore:
                 and not follows_landscape_section
                 and len(current_text) <= MAX_HEADING_LENGTH_FOR_TABLE_TITLE
                 and (
-                    (
-                        current.bottom_border
-                        == _looks_like_numbered_heading(current_text)
-                    )
-                    or (
-                        current.bottom_border and uses_executive_brief_table_titles
-                    )
+                    (has_bottom_border == is_numbered_heading)
+                    or (has_bottom_border and uses_executive_brief_table_titles)
                 )
             ):
                 normalized.append(

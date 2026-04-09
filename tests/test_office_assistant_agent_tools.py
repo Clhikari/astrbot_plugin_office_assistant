@@ -2121,9 +2121,11 @@ async def test_add_blocks_tool_does_not_absorb_bottom_border_heading_before_tabl
 
     loaded_doc = docx.Document(exported["file_path"])
     heading = _find_paragraph(loaded_doc, "Training Schedule")
+    heading_divider = _paragraph_after(loaded_doc, heading)
     table = loaded_doc.tables[0]
 
-    assert _paragraph_bottom_border_color(heading) == "D0D7DE"
+    assert _paragraph_bottom_border_color(heading) is None
+    assert _paragraph_bottom_border_color(heading_divider) == "D0D7DE"
     assert table.rows[0].cells[0].text == "Date"
 
 
