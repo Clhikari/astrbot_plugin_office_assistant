@@ -21,7 +21,7 @@ from ..internal_hooks import (
     run_notice_hooks,
     run_tool_exposure_hooks,
 )
-from .prompt_context_service import PromptContextService
+from .prompt_context_service import PromptContextService, PromptSection
 from .upload_types import UploadInfo
 
 
@@ -30,24 +30,24 @@ class RequestHookService:
         r"\[用户指令\]\s*(?P<instruction>.*?)(?:\n\s*\[|\Z)",
         flags=re.DOTALL,
     )
-    _DOCUMENT_ID_RE = re.compile(
-        r'document_id["`\']?\s*[:=]\s*["`\']?(?P<document_id>[A-Za-z0-9_-]+)',
-        flags=re.IGNORECASE,
-    )
     _DOCUMENT_WORKFLOW_HINT_RE = re.compile(
         r"(create_document|add_blocks|finalize_document|export_document|"
-        r"document_id\b|正式汇报|正式报告|导出成\s*word|导出为\s*word|"
+        r"正式汇报|正式报告|导出成\s*word|导出为\s*word|"
         r"\bword\b|\bdocx\b|汇报|报告|"
         r"生成\s*(?:word|docx|报告|汇报)|整理成\s*(?:word|docx|报告|汇报))",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_DETAIL_HINT_RE = re.compile(
-        r"(create_document|正式汇报|正式报告|导出成\s*word|导出为\s*word|"
-        r"\bword\b|\bdocx\b|汇报|报告|"
-        r"生成\s*(?:word|docx|报告|汇报)|整理成\s*(?:word|docx|报告|汇报)|"
-        r"business_report|project_review|executive_brief|accent_color|document_style)",
+        r"(business_report|project_review|executive_brief|accent_color|document_style)",
         flags=re.IGNORECASE,
     )
+    _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(r"\bdocument_id\b", flags=re.IGNORECASE)
+    _DOCUMENT_ID_CAPTURE_RE = re.compile(
+        r"\bdocument_id\b\s*(?:[:=]\s*|为\s*)[\"']?(?P<document_id>[A-Za-z0-9_-]+)[\"']?",
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
+    _DOCUMENT_DETAIL_NOTICE_KEY = "document_detail_guide"
 
     def __init__(
         self,
@@ -58,17 +58,17 @@ class RequestHookService:
             [Comp.File], Awaitable[tuple[Path | None, str]]
         ],
         store_uploaded_file: Callable[[Path, str], Path],
+        consume_session_notice_once: Callable[[AstrMessageEvent, str], bool],
         allow_external_input_files: bool,
-        get_document_prompt_summary: (
-            Callable[[str], dict[str, object] | None] | None
-        ) = None,
         prompt_context_service: PromptContextService | None = None,
+        lookup_document_summary: Callable[[str], dict[str, object] | None] | None = None,
     ) -> None:
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
         self._extract_upload_source = extract_upload_source
         self._store_uploaded_file = store_uploaded_file
-        self._get_document_prompt_summary = get_document_prompt_summary
+        self._consume_session_notice_once = consume_session_notice_once
+        self._lookup_document_summary = lookup_document_summary
         self.prompt_context_service = prompt_context_service or PromptContextService(
             allow_external_input_files=allow_external_input_files
         )
@@ -107,36 +107,32 @@ class RequestHookService:
             return context
 
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
-        document_id = self._extract_document_id(request_text)
-        should_inject = self._should_inject_document_tool_guide(
-            request_text=request_text,
-            document_id=document_id,
+        if self._is_document_follow_up(request_text=request_text):
+            section = self._build_document_follow_up_section(request_text=request_text)
+            self._append_notice_section(context, section)
+            return context
+        should_inject_core = self._should_inject_document_tool_guide(
+            request_text=request_text
         )
-        if not should_inject:
+        should_inject_detail = self._should_inject_document_tool_detail(
+            request_text=request_text
+        )
+        if not should_inject_core and not should_inject_detail:
             return context
 
-        self._append_prompt_section(
-            context,
-            self.prompt_context_service.build_document_tool_guide_section(),
-        )
-        if self._should_inject_document_tool_detail(
-            request_text=request_text,
-            document_id=document_id,
+        if should_inject_core and self._consume_session_notice_once(
+            context.event, self._DOCUMENT_CORE_NOTICE_KEY
         ):
-            self._append_prompt_section(
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_document_tool_guide_section(),
+            )
+        if should_inject_detail and self._consume_session_notice_once(
+            context.event, self._DOCUMENT_DETAIL_NOTICE_KEY
+        ):
+            self._append_notice_section(
                 context,
                 self.prompt_context_service.build_document_tool_detail_section(),
-            )
-        if not (document_id and self._get_document_prompt_summary):
-            return context
-
-        summary = self._get_document_prompt_summary(document_id)
-        if summary:
-            self._append_prompt_section(
-                context,
-                self.prompt_context_service.build_document_summary_section(
-                    summary=summary
-                ),
             )
         return context
 
@@ -151,21 +147,7 @@ class RequestHookService:
         return stripped_prompt
 
     @classmethod
-    def _extract_document_id(cls, prompt: str) -> str | None:
-        match = cls._DOCUMENT_ID_RE.search(prompt)
-        if not match:
-            return None
-        return match.group("document_id")
-
-    @classmethod
-    def _should_inject_document_tool_guide(
-        cls,
-        *,
-        request_text: str,
-        document_id: str | None,
-    ) -> bool:
-        if document_id:
-            return True
+    def _should_inject_document_tool_guide(cls, *, request_text: str) -> bool:
         if not request_text:
             return False
         return bool(cls._DOCUMENT_WORKFLOW_HINT_RE.search(request_text))
@@ -175,23 +157,67 @@ class RequestHookService:
         cls,
         *,
         request_text: str,
-        document_id: str | None,
     ) -> bool:
         if not request_text:
             return False
-        if document_id and not cls._DOCUMENT_DETAIL_HINT_RE.search(request_text):
-            return False
         return bool(cls._DOCUMENT_DETAIL_HINT_RE.search(request_text))
 
+    @classmethod
+    def _is_document_follow_up(cls, *, request_text: str) -> bool:
+        if not request_text:
+            return False
+        return bool(cls._DOCUMENT_ID_FOLLOW_UP_RE.search(request_text))
+
+    @classmethod
+    def _extract_document_id(cls, *, request_text: str) -> str:
+        if not request_text:
+            return ""
+        match = cls._DOCUMENT_ID_CAPTURE_RE.search(request_text)
+        if not match:
+            return ""
+        return str(match.group("document_id") or "").strip()
+
+    def _build_document_follow_up_section(
+        self,
+        *,
+        request_text: str,
+    ) -> PromptSection | None:
+        document_id = self._extract_document_id(request_text=request_text)
+        if not document_id:
+            return None
+        if self._lookup_document_summary is None:
+            return self.prompt_context_service.build_document_follow_up_missing_section(
+                document_id=document_id
+            )
+        try:
+            summary = self._lookup_document_summary(document_id)
+        except Exception:
+            summary = None
+        if not isinstance(summary, dict):
+            return self.prompt_context_service.build_document_follow_up_missing_section(
+                document_id=document_id
+            )
+        return self.prompt_context_service.build_document_follow_up_section(
+            document_id=document_id,
+            status=str(summary.get("status") or ""),
+            block_count=int(summary.get("block_count") or 0),
+        )
+
     @staticmethod
-    def _append_prompt_section(
+    def _append_notice_section(
         context: NoticeBuildContext,
-        section,
+        section: PromptSection | None,
     ) -> None:
         if not section or not section.content:
             return
-        context.notices.append(section.content)
-        section_names = getattr(context, "section_names", None)
+        if section.target == "system":
+            notices = getattr(context, "system_notices", None)
+            section_names = getattr(context, "system_section_names", None)
+        else:
+            notices = getattr(context, "notices", None)
+            section_names = getattr(context, "section_names", None)
+        if isinstance(notices, list):
+            notices.append(section.content)
         if isinstance(section_names, list):
             section_names.append(section.name)
 
@@ -200,6 +226,8 @@ class RequestHookService:
         context: NoticeBuildContext,
     ) -> NoticeBuildContext:
         if not context.can_process_upload:
+            return context
+        if getattr(context.event, "_buffered", False) is True:
             return context
 
         event = context.event
@@ -286,49 +314,13 @@ class RequestHookService:
         if not readable_upload_infos:
             return context
 
-        if self._should_append_uploaded_file_scene_notice(
-            event=event,
-            prompt=str(req.prompt or ""),
-        ):
-            self._append_prompt_section(
-                context,
-                self.prompt_context_service.build_uploaded_file_scene_section(
-                    file_count=len(readable_upload_infos)
-                ),
-            )
-
-        if len(readable_upload_infos) == 1:
-            info = readable_upload_infos[0]
-            self._append_prompt_section(
-                context,
-                self.prompt_context_service.build_uploaded_file_notice_section(
-                    type_desc=info["type_desc"],
-                    original_name=info["original_name"],
-                    file_suffix=info["file_suffix"],
-                    stored_name=info["stored_name"],
-                    source_path=info["source_path"],
-                ),
-            )
-            return context
-
-        self._append_prompt_section(
+        self._append_notice_section(
             context,
-            self.prompt_context_service.build_uploaded_file_summary_section(
+            self.prompt_context_service.build_uploaded_file_context_section(
                 upload_infos=readable_upload_infos
             ),
         )
         return context
-
-    @classmethod
-    def _should_append_uploaded_file_scene_notice(
-        cls,
-        *,
-        event: AstrMessageEvent,
-        prompt: str,
-    ) -> bool:
-        if not getattr(event, "_buffered", False):
-            return True
-        return cls._BUFFERED_USER_INSTRUCTION_RE.search(prompt.strip()) is not None
 
     async def apply_execution_tool_block(
         self,

@@ -51,6 +51,9 @@ class UploadSessionService:
         self._session_uploads_by_session: dict[
             tuple[str, str, str], list[tuple[UploadInfo, float]]
         ] = {}
+        self._session_notice_state_by_session: dict[
+            tuple[str, str, str], tuple[set[str], float]
+        ] = {}
         self._session_uploads_last_cleanup_ts = 0.0
 
     def get_attachment_session_key(
@@ -111,7 +114,51 @@ class UploadSessionService:
         for session_key in expired_keys:
             self._session_uploads_by_session.pop(session_key, None)
 
+        expired_notice_keys = [
+            session_key
+            for session_key, (_, ts) in self._session_notice_state_by_session.items()
+            if ts <= expire_before
+        ]
+        for session_key in expired_notice_keys:
+            self._session_notice_state_by_session.pop(session_key, None)
+
         self._session_uploads_last_cleanup_ts = now
+
+    def consume_session_notice_once(
+        self,
+        event: AstrMessageEvent,
+        notice_key: str,
+    ) -> bool:
+        normalized_notice_key = notice_key.strip()
+        if not normalized_notice_key:
+            return False
+
+        now = time.time()
+        self._cleanup_session_upload_cache(now)
+        session_key = self.get_attachment_session_key(event)
+        existing_state = self._session_notice_state_by_session.get(session_key)
+        if existing_state is None:
+            self._session_notice_state_by_session[session_key] = (
+                {normalized_notice_key},
+                now,
+            )
+            return True
+
+        used_notice_keys, _ = existing_state
+        if normalized_notice_key in used_notice_keys:
+            self._session_notice_state_by_session[session_key] = (
+                used_notice_keys,
+                now,
+            )
+            return False
+
+        updated_notice_keys = set(used_notice_keys)
+        updated_notice_keys.add(normalized_notice_key)
+        self._session_notice_state_by_session[session_key] = (
+            updated_notice_keys,
+            now,
+        )
+        return True
 
     def _cleanup_recent_text_cache(self, now: float, *, force: bool = False) -> None:
         if (

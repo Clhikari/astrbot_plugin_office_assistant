@@ -21,6 +21,11 @@ def build_document_tools_core_notice() -> str:
         "`document_id` 调用 `add_blocks`\n"
         "- `create_document` 参数：theme_name / table_template / density / accent_color\n"
         "- 按章节或逻辑块分批调用 `add_blocks`\n"
+        "- 只要还有任何章节、表格或补充信息没写完，继续调用 `add_blocks`，不要提前调用 "
+        "`finalize_document`\n"
+        "- 只有确认整份文档内容已经写完，才调用 `finalize_document`\n"
+        "- 一旦 `finalize_document` 成功，下一步只能调用 `export_document`，不要再回到 "
+        "`add_blocks` 或 `create_document`\n"
         "- `export_document` 会直接发送文件给用户\n"
         "\n"
         "[约束规则]\n"
@@ -29,6 +34,47 @@ def build_document_tools_core_notice() -> str:
         "3. 如果用户显式指定了某个工具名和参数，MUST 先按该工具调用；即使预期会报错，也不要擅自改调其他工具，也不要自行修改参数后重试。\n"
         "4. 一旦开始使用文档工具链，MUST 持续调用直到 `export_document` 成功，中途不要停下来发自然语言回复。\n"
         "5. 所有面向用户的回复和过渡说明 MUST 使用中文。"
+    )
+
+
+def build_document_follow_up_notice(
+    *,
+    document_id: str,
+    status: str,
+    block_count: int,
+) -> str:
+    if status == "draft":
+        return (
+            "\n[System Notice] 当前文档阶段\n"
+            f"- 当前 `document_id={document_id}` 仍是 draft，已写入 {block_count} 个内容块\n"
+            "- 如果还有任何内容没写完，继续调用 `add_blocks`\n"
+            "- 只有确认内容全部写完，才调用 `finalize_document`\n"
+        )
+    if status == "finalized":
+        return (
+            "\n[System Notice] 当前文档阶段\n"
+            f"- 当前 `document_id={document_id}` 已定稿\n"
+            "- 下一步只能调用 `export_document`\n"
+            "- 不要再调用 `add_blocks`、`finalize_document` 或 `create_document`\n"
+        )
+    if status == "exported":
+        return (
+            "\n[System Notice] 当前文档阶段\n"
+            f"- 当前 `document_id={document_id}` 已导出\n"
+            "- 不要继续对这份文档调用 `add_blocks`、`finalize_document` 或 `export_document`\n"
+        )
+    return (
+        "\n[System Notice] 当前文档阶段\n"
+        f"- 当前 `document_id={document_id}` 状态未知\n"
+        "- 先核对文档状态，不要切换到别的文档工具\n"
+    )
+
+
+def build_document_follow_up_missing_notice(*, document_id: str) -> str:
+    return (
+        "\n[System Notice] 当前文档阶段\n"
+        f"- 没有找到 `document_id={document_id}` 对应的文档会话\n"
+        "- 先核对 `document_id`，不要改调其他文档工具\n"
     )
 
 

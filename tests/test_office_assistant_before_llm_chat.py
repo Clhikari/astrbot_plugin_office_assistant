@@ -89,6 +89,24 @@ def _tool(name: str) -> FunctionTool:
     )
 
 
+def _build_notice_once_callback():
+    seen: dict[tuple[str, str, str], set[str]] = {}
+
+    def consume(event, notice_key: str) -> bool:
+        session_key = (
+            str(event.get_platform_id() or ""),
+            str(event.get_sender_id() or ""),
+            str(event.unified_msg_origin or ""),
+        )
+        used = seen.setdefault(session_key, set())
+        if notice_key in used:
+            return False
+        used.add(notice_key)
+        return True
+
+    return consume
+
+
 @pytest.mark.asyncio
 async def test_before_llm_chat_injects_document_tools_per_request():
     context = MagicMock()
@@ -120,42 +138,12 @@ async def test_before_llm_chat_injects_document_tools_per_request():
             "export_document",
         }.issubset(tool_names)
         assert "generate_complex_word_document" not in tool_names
-        assert "文件工具使用指南" in req.system_prompt
-        assert "文件工具细节指南" in req.system_prompt
-        assert "executive_brief" in req.system_prompt
-        assert "accent_color=RRGGBB" in req.system_prompt
-        assert "document_style={brief, heading_color, title_align" in req.system_prompt
-        assert "paragraph_space_after, list_space_after" in req.system_prompt
-        assert "summary_card_defaults, table_defaults" in req.system_prompt
-        assert "header_fill" in req.system_prompt
-        assert "banded_rows" in req.system_prompt
-        assert "first_column_bold" in req.system_prompt
-        assert (
-            "style={align, emphasis, font_scale, table_grid, cell_align}"
-            in req.system_prompt
-        )
-        assert (
-            "横向页面、节级页眉页脚、页码重置 MUST 使用独立的 `section_break` block"
-            in req.system_prompt
-        )
-        assert (
-            "不要把 `page_orientation`、`start_type`、`restart_page_numbering`"
-            in req.system_prompt
-        )
-        assert (
-            "`toc` 只使用 `title`、`levels`、`start_on_new_page`" in req.system_prompt
-        )
-        assert (
-            "表格列标题使用 `headers`；不要给 `table` 传 `columns`" in req.system_prompt
-        )
-        assert "按章节或逻辑块分批调用 `add_blocks`" in req.system_prompt
-        assert "MUST 持续调用直到 `export_document` 成功" in req.system_prompt
-        assert "NEVER 调用网络搜索" in req.system_prompt
-        assert (
-            "如果用户显式指定了某个工具名和参数，MUST 先按该工具调用"
-            in req.system_prompt
-        )
-        assert "所有面向用户的回复和过渡说明 MUST 使用中文" in req.system_prompt
+        assert "文件工具使用指南" in req.prompt
+        assert "文件工具细节指南" not in req.prompt
+        assert "MUST 持续调用直到 `export_document` 成功" in req.prompt
+        assert "NEVER 调用网络搜索" in req.prompt
+        assert "文件工具使用指南" not in req.system_prompt
+        assert req.prompt.startswith("请生成一份 Word 报告，并导出给我。")
     finally:
         await plugin.terminate()
 
@@ -187,11 +175,11 @@ async def test_before_llm_chat_keeps_document_id_follow_up_prompt_lightweight():
 
         await plugin.before_llm_chat(event, req)
 
-        assert "文件工具使用指南" in req.system_prompt
-        assert "当前文档状态摘要" in req.system_prompt
-        assert "executive_brief" not in req.system_prompt
-        assert "accent_color=RRGGBB" not in req.system_prompt
-        assert "文件工具细节指南" not in req.system_prompt
+        assert "文件工具使用指南" not in req.system_prompt
+        assert "当前文档状态摘要" not in req.system_prompt
+        assert "文件工具使用指南" not in req.prompt
+        assert "当前文档状态摘要" not in req.prompt
+        assert "文件工具细节指南" not in req.prompt
     finally:
         await plugin.terminate()
 
@@ -227,6 +215,7 @@ async def test_before_llm_chat_skips_document_guide_for_generic_prompt():
             "export_document",
         }.issubset(tool_names)
         assert "文件工具使用指南" not in req.system_prompt
+        assert "文件工具使用指南" not in req.prompt
     finally:
         await plugin.terminate()
 
@@ -245,12 +234,12 @@ async def test_before_llm_chat_injects_document_guide_for_buffered_word_instruct
             prompt=(
                 "[System Notice] 用户上传了 1 个文件\n\n"
                 "[文件信息]\n"
-                "- 原始文件名: source.docx (类型: .docx)\n"
+                "- 原始文件名: source.docx\n"
                 "  工作区文件名: source_1.docx\n\n"
                 "[用户指令]\n"
                 "请根据我刚上传的文档整理成正式汇报，并导出成 Word 发给我。\n\n"
-                "[处理建议]\n"
-                "1. 先调用 `read_file` 读取文件。\n"
+                "[处理要求]\n"
+                "1. 优先围绕这些上传文件完成用户请求。\n"
             ),
             system_prompt="base",
             func_tool=ToolSet(
@@ -272,8 +261,9 @@ async def test_before_llm_chat_injects_document_guide_for_buffered_word_instruct
             "finalize_document",
             "export_document",
         }.issubset(tool_names)
-        assert "文件工具使用指南" in req.system_prompt
-        assert "文件工具细节指南" in req.system_prompt
+        assert "文件工具使用指南" in req.prompt
+        assert "文件工具细节指南" not in req.prompt
+        assert "文件工具使用指南" not in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -376,14 +366,11 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
 
         await plugin.before_llm_chat(event, req)
 
-        assert "MUST 先调用 `read_file` 读取内容，再创建文档" in req.system_prompt
-        assert "MUST 先调用 `read_file` 读取此文件" in req.system_prompt
-        assert "原始文件名：source.docx" in req.system_prompt
-        assert "工作区文件名：source_1.docx" in req.system_prompt
-        assert "必须使用工作区文件名 `source_1.docx`" in req.system_prompt
-        assert "NEVER 创建新文档" in req.system_prompt
-        assert "NEVER 调用网络搜索" in req.system_prompt
-        assert "MUST 使用中文" in req.system_prompt
+        assert "read_file" in req.prompt
+        assert "source.docx" in req.prompt
+        assert "source_1.docx" in req.prompt
+        assert "读取前不要创建新文档" in req.prompt
+        assert "source_1.docx" not in req.system_prompt
     finally:
         await plugin.terminate()
 
@@ -640,12 +627,12 @@ async def test_before_llm_chat_uses_buffered_user_instruction_for_explicit_tool_
             prompt=(
                 "[System Notice] 用户上传了 1 个文件\n\n"
                 "[文件信息]\n"
-                "- 原始文件名: source.docx (类型: .docx)\n"
+                "- 原始文件名: source.docx\n"
                 "  工作区文件名: source_1.docx\n\n"
                 "[用户指令]\n"
                 "请根据我刚上传的文档整理成正式汇报，标题叫《项目进展汇总》，最后导出成 Word 并发给我。\n\n"
-                "[处理建议]\n"
-                "1. 先调用 `read_file` 读取文件。\n"
+                "[处理要求]\n"
+                "1. 优先围绕这些上传文件完成用户请求。\n"
             ),
             system_prompt="base",
             func_tool=ToolSet(
@@ -687,12 +674,12 @@ async def test_before_llm_chat_can_still_restrict_tool_from_buffered_user_instru
             prompt=(
                 "[System Notice] 用户上传了 1 个文件\n\n"
                 "[文件信息]\n"
-                "- 原始文件名: table.csv (类型: .csv)\n"
+                "- 原始文件名: table.csv\n"
                 "  工作区文件名: table_1.csv\n\n"
                 "[用户指令]\n"
                 "调用 read_file，filename=table_1.csv\n\n"
-                "[处理建议]\n"
-                "1. 先调用 `read_file` 读取文件。\n"
+                "[处理要求]\n"
+                "1. 优先围绕这些上传文件完成用户请求。\n"
             ),
             system_prompt="base",
             func_tool=ToolSet(
@@ -745,7 +732,7 @@ async def test_llm_request_policy_runs_internal_notice_and_tool_hooks():
 
     await policy.apply(event, req)
 
-    assert "[custom notice]" in req.system_prompt
+    assert "[custom notice]" in req.prompt
     assert "create_document" not in set(req.func_tool.names())
     assert "existing_tool" in set(req.func_tool.names())
 
@@ -776,6 +763,7 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
         get_cached_upload_infos=lambda _event: [],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     policy = LLMRequestPolicy(
@@ -808,13 +796,72 @@ async def test_llm_request_policy_uses_injected_request_hook_service_for_default
     assert "create_document" in tool_names
     assert "existing_tool" in tool_names
     assert "astrbot_execute_shell" not in tool_names
-    assert "文件工具使用指南" in req.system_prompt
+    assert "文件工具使用指南" in req.prompt
+    assert req.prompt.startswith("请生成一份 Word 报告，并导出给我。")
+    assert "\n\n[System Notice] 文件工具使用指南" in req.prompt
     assert any(
         call.args
-        and call.args[0] == "[文件管理] Prompt sections: %s"
-        and SECTION_STATIC_DOCUMENT_TOOLS in str(call.args[1])
+        and call.args[0] == "[文件管理] Prompt sections(%s): %s"
+        and call.args[1] == "prompt_suffix"
+        and SECTION_STATIC_DOCUMENT_TOOLS in str(call.args[2])
         for call in logger_debug.call_args_list
     )
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_appends_notice_to_prompt_suffix_without_extra_prefix():
+    def _notice_hook(context):
+        context.section_names.append("scene_test")
+        context.notices.append("[notice]")
+        return context
+
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: True,
+        notice_hooks=[_notice_hook],
+        tool_exposure_hooks=[],
+    )
+    event = _build_event()
+    req = ProviderRequest(
+        prompt="hello",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("existing_tool")]),
+    )
+
+    await policy.apply(event, req)
+
+    assert req.prompt == "hello\n\n[notice]"
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_uses_notice_directly_when_prompt_is_empty():
+    def _notice_hook(context):
+        context.section_names.append("scene_test")
+        context.notices.append("[notice]")
+        return context
+
+    policy = LLMRequestPolicy(
+        document_toolset=SimpleNamespace(tools=[]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: True,
+        notice_hooks=[_notice_hook],
+        tool_exposure_hooks=[],
+    )
+    event = _build_event()
+    req = ProviderRequest(
+        prompt="",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("existing_tool")]),
+    )
+
+    await policy.apply(event, req)
+
+    assert req.prompt == "[notice]"
 
 
 @pytest.mark.asyncio
@@ -877,6 +924,7 @@ async def test_llm_request_policy_returns_after_tools_denied_notice():
         ],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     policy = LLMRequestPolicy(
@@ -919,6 +967,7 @@ async def test_llm_request_policy_group_switch_off_hides_execution_tools():
         get_cached_upload_infos=lambda _event: [],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     policy = LLMRequestPolicy(
@@ -1206,16 +1255,14 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_and_follow_thr
     assert "[文件信息]" in prompt_text
     assert "[用户指令]" in prompt_text
     assert "请根据上传文档整理成正式汇报" in prompt_text
-    assert "[处理建议]" in prompt_text
+    assert prompt_text.index("[用户指令]") < prompt_text.index("[文件信息]")
+    assert "[处理要求]" in prompt_text
     assert "优先围绕这些上传文件完成用户请求" in prompt_text
     assert "工作区文件名: report_1.docx" in prompt_text
-    assert "外部绝对路径:" in prompt_text
+    assert "外部绝对路径:" not in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
-    assert "不要自行猜测文件名，也不要列目录或调用 shell" in prompt_text
-    assert (
-        "如果用户已经明确要求整理成正式汇报、报告、文档或 Word 文件，读取后继续调用相应工具完成结果"
-        in prompt_text
-    )
+    assert "不要猜文件名，不要列目录，不要调用 shell" in prompt_text
+    assert "读取后按用户指令继续调用工具，不要只回复过渡说明" in prompt_text
     assert not queued_event.message_str.startswith("/")
     assert queued_event.message_str.endswith(prompt_text.strip())
     event_queue.put.assert_awaited_once()
@@ -1274,7 +1321,7 @@ async def test_before_llm_chat_exposes_file_tools_for_buffered_group_upload_when
         assert "add_blocks" in tool_names
         assert "export_document" in tool_names
         assert "当前聊天不可使用文件/Office/PDF 相关功能" not in req.system_prompt
-        assert "工作区文件名：source_1.docx" in req.system_prompt
+        assert "source_1.docx" in req.prompt
     finally:
         await plugin.terminate()
 
@@ -1353,11 +1400,11 @@ async def test_before_llm_chat_exposes_file_tools_for_group_doc_command_without_
         event.message_str = (
             "[System Notice] 用户上传了 1 个文件\n\n"
             "[文件信息]\n"
-            "- 原始文件名: B.xlsx (类型: .xlsx)\n"
+            "- 原始文件名: B.xlsx\n"
             "  工作区文件名: B_1.xlsx\n\n"
             "[用户指令]\n"
             "根据这份文件整理成正式汇报\n\n"
-            "[处理建议]\n"
+            "[处理要求]\n"
             "1. 优先围绕这些上传文件完成用户请求。\n"
         )
         req = ProviderRequest(

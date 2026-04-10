@@ -45,6 +45,8 @@ class NoticeBuildContext:
     explicit_tool_name: str | None
     notices: list[str] = field(default_factory=list)
     section_names: list[str] = field(default_factory=list)
+    system_notices: list[str] = field(default_factory=list)
+    system_section_names: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
