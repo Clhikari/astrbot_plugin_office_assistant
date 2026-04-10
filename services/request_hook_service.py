@@ -26,6 +26,7 @@ from .upload_types import UploadInfo
 
 
 class RequestHookService:
+    _DOCUMENT_ID_TOKEN_RE = r"(?<![A-Za-z0-9_])document_id(?![A-Za-z0-9_])"
     _DOCUMENT_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _DOCUMENT_ID_DOC_PREFIX_RE = re.compile(
         r"doc-[A-Za-z0-9_-]+",
@@ -46,13 +47,18 @@ class RequestHookService:
         r"(business_report|project_review|executive_brief|accent_color|document_style)",
         flags=re.IGNORECASE,
     )
-    _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(r"\bdocument_id\b", flags=re.IGNORECASE)
+    _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(
+        _DOCUMENT_ID_TOKEN_RE,
+        flags=re.IGNORECASE,
+    )
     _DOCUMENT_ID_EXPLICIT_CAPTURE_RE = re.compile(
-        r"\bdocument_id\b(?:\s*[:=]\s*|\s+(?:为|是|is)\s+)[`\"']?(?P<document_id>[A-Za-z0-9_-]+)[`\"']?",
+        _DOCUMENT_ID_TOKEN_RE
+        + r"(?:\s*[:=：]\s*|\s*(?:为|是)\s*|\s+is\s+)[`\"']?(?P<document_id>[A-Za-z0-9_-]+)[`\"']?",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_ID_BARE_CAPTURE_RE = re.compile(
-        r"\bdocument_id\b\s+[`\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
+        _DOCUMENT_ID_TOKEN_RE
+        + r"\s+[`\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"

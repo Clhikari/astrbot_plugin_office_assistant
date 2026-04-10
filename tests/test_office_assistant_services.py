@@ -1610,6 +1610,76 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_backti
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_injects_document_follow_up_notice_for_fullwidth_colon_document_id():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 6,
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="继续处理 document_id：doc-9",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("add_blocks")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "当前 `document_id=doc-9` 仍是 draft" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_document_follow_up_notice_for_compact_chinese_separator():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 7,
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="继续处理 document_id为doc-10",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("add_blocks")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "当前 `document_id=doc-10` 仍是 draft" in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_injects_document_follow_up_notice_for_finalized():
     service = RequestHookService(
         auto_block_execution_tools=True,
