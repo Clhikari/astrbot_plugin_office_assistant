@@ -1519,6 +1519,41 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_draft(
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_injects_document_follow_up_notice_for_space_separated_document_id():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 6,
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="继续完善 document_id doc-3 的内容",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("add_blocks")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "当前 `document_id=doc-3` 仍是 draft" in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_injects_document_follow_up_notice_for_finalized():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1581,6 +1616,73 @@ async def test_request_hook_service_injects_missing_notice_when_document_id_is_u
 
     assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
     assert "没有找到 `document_id=missing-doc` 对应的文档会话" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_falls_back_to_document_guide_when_document_id_is_not_parseable():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda _document_id: None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请返回 document_id 并导出成 Word 报告",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert "create_document" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_reraises_unexpected_summary_lookup_errors():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda _document_id: (_ for _ in ()).throw(
+            RuntimeError("boom")
+        ),
+    )
+
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt='继续处理 document_id="doc-9"',
+            system_prompt="base",
+            func_tool=ToolSet([_tool("add_blocks")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+    )
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.request_hook_service.logger.exception"
+    ) as mock_exception:
+        with pytest.raises(RuntimeError, match="boom"):
+            await service.append_document_tool_guide_notice(context)
+
+    mock_exception.assert_called_once()
 
 
 def test_prompt_context_service_orders_dynamic_document_notice_after_scene_notice():

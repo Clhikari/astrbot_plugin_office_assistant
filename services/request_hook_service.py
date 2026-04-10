@@ -43,7 +43,7 @@ class RequestHookService:
     )
     _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(r"\bdocument_id\b", flags=re.IGNORECASE)
     _DOCUMENT_ID_CAPTURE_RE = re.compile(
-        r"\bdocument_id\b\s*(?:[:=]\s*|为\s*)[\"']?(?P<document_id>[A-Za-z0-9_-]+)[\"']?",
+        r"\bdocument_id\b(?:\s*(?:[:=]|为|是)\s*|\s+)[\"']?(?P<document_id>[A-Za-z0-9_-]+)[\"']?",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
@@ -109,8 +109,9 @@ class RequestHookService:
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
         if self._is_document_follow_up(request_text=request_text):
             section = self._build_document_follow_up_section(request_text=request_text)
-            self._append_notice_section(context, section)
-            return context
+            if section is not None:
+                self._append_notice_section(context, section)
+                return context
         should_inject_core = self._should_inject_document_tool_guide(
             request_text=request_text
         )
@@ -191,8 +192,13 @@ class RequestHookService:
             )
         try:
             summary = self._lookup_document_summary(document_id)
-        except Exception:
+        except KeyError:
             summary = None
+        except Exception as exc:
+            logger.exception(
+                f"[文件管理] 查询文档会话摘要失败 document_id={document_id}: {exc}"
+            )
+            raise
         if not isinstance(summary, dict):
             return self.prompt_context_service.build_document_follow_up_missing_section(
                 document_id=document_id
