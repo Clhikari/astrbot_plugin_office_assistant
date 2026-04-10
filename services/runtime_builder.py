@@ -153,6 +153,7 @@ def build_plugin_runtime(
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+        node_renderer_entry=settings.js_renderer_entry,
     )
     error_hook_service = ErrorHookService(
         context=context,

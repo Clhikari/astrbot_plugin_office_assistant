@@ -162,6 +162,10 @@ class NodeDocumentRenderBackend:
         package_root = Path(__file__).resolve().parents[2]
         return package_root / "word_renderer_js" / "dist" / "cli.js"
 
+    @property
+    def entry_path(self) -> Path:
+        return self._entry_path
+
     def is_available(self) -> bool:
         return self._entry_path.exists() and shutil.which("node") is not None
 

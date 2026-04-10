@@ -2,6 +2,7 @@ from pathlib import Path
 
 from ..constants import DOC_COMMAND_TRIGGER_EVENT_KEY
 from ..constants import ALL_OFFICE_SUFFIXES
+from ..domain.document.render_backends import NodeDocumentRenderBackend
 from ..utils import format_file_size
 
 
@@ -21,6 +22,7 @@ class CommandService:
         is_group_feature_enabled,
         check_permission,
         group_feature_disabled_error,
+        node_renderer_entry: str = "",
     ) -> None:
         self._workspace_service = workspace_service
         self._pdf_converter = pdf_converter
@@ -34,6 +36,7 @@ class CommandService:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._group_feature_disabled_error = group_feature_disabled_error
+        self._node_renderer_entry = node_renderer_entry
 
     def delete_file(self, event, message_text: str) -> str:
         access_error = self._require_access(event)
@@ -82,6 +85,7 @@ class CommandService:
             pdf_status.append("PDF→Excel ✓")
         else:
             pdf_status.append("PDF→Excel ✗ (需要tabula-py)")
+        word_toolchain_status = self._build_word_toolchain_status()
 
         return (
             "📂 AstrBot 文件操作工具\n"
@@ -91,8 +95,15 @@ class CommandService:
             f"群聊启用插件功能: {'开启' if self._enable_features_in_group else '关闭'}\n"
             f"自动屏蔽 shell/python 工具: {'开启' if self._auto_block_execution_tools else '关闭'}\n"
             f"回复模式: {'开启' if self._reply_to_user else '关闭'}\n"
+            f"Word工具链: {word_toolchain_status}\n"
             f"PDF转换: {', '.join(pdf_status)}"
         )
+
+    def _build_word_toolchain_status(self) -> str:
+        backend = NodeDocumentRenderBackend(self._node_renderer_entry)
+        if backend.is_available():
+            return f"✅ Node 渲染可用 ({backend.entry_path})"
+        return f"❌ Node 渲染不可用 ({backend.entry_path}，需要 node 和渲染器入口)"
 
     def list_files(self, event) -> str:
         access_error = self._require_access(event)

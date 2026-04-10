@@ -4861,3 +4861,91 @@ def test_command_service_builds_pdf_status_summary():
     assert "PDF→Excel:  ✅ 可用 (tabula)" in result
     assert "缺失依赖" in result
     assert "pdf2docx" in result
+
+
+def test_command_service_fileinfo_reports_word_toolchain_available():
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=Path(__file__).resolve().parent,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        pdf_converter = MagicMock()
+        pdf_converter.capabilities = {
+            "office_to_pdf": False,
+            "pdf_to_word": False,
+            "pdf_to_excel": False,
+        }
+        service = CommandService(
+            workspace_service=workspace_service,
+            pdf_converter=pdf_converter,
+            plugin_data_path=Path(__file__).resolve().parent,
+            auto_delete=False,
+            allow_external_input_files=False,
+            enable_features_in_group=True,
+            auto_block_execution_tools=True,
+            reply_to_user=True,
+            upload_session_service=MagicMock(),
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+            node_renderer_entry="D:/custom/renderer.js",
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.command_service.NodeDocumentRenderBackend.is_available",
+            return_value=True,
+        ):
+            result = service.fileinfo(_build_event())
+    finally:
+        executor.shutdown(wait=False)
+
+    assert "Word工具链: ✅ Node 渲染可用" in result
+    assert "renderer.js" in result
+
+
+def test_command_service_fileinfo_reports_word_toolchain_unavailable():
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=Path(__file__).resolve().parent,
+            executor=executor,
+            office_libs={},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        pdf_converter = MagicMock()
+        pdf_converter.capabilities = {
+            "office_to_pdf": False,
+            "pdf_to_word": False,
+            "pdf_to_excel": False,
+        }
+        service = CommandService(
+            workspace_service=workspace_service,
+            pdf_converter=pdf_converter,
+            plugin_data_path=Path(__file__).resolve().parent,
+            auto_delete=False,
+            allow_external_input_files=False,
+            enable_features_in_group=True,
+            auto_block_execution_tools=True,
+            reply_to_user=True,
+            upload_session_service=MagicMock(),
+            is_group_feature_enabled=lambda _event: True,
+            check_permission=lambda _event: True,
+            group_feature_disabled_error=lambda: "group disabled",
+            node_renderer_entry="D:/custom/missing-renderer.js",
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.command_service.NodeDocumentRenderBackend.is_available",
+            return_value=False,
+        ):
+            result = service.fileinfo(_build_event())
+    finally:
+        executor.shutdown(wait=False)
+
+    assert "Word工具链: ❌ Node 渲染不可用" in result
+    assert "missing-renderer.js" in result
