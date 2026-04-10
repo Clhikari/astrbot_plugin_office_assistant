@@ -217,9 +217,7 @@ class RequestHookService:
         if not document_id:
             return None
         if self._lookup_document_summary is None:
-            return self.prompt_context_service.build_document_follow_up_missing_section(
-                document_id=document_id
-            )
+            return None
         try:
             summary = self._lookup_document_summary(document_id)
         except KeyError:

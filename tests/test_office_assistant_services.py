@@ -1837,6 +1837,38 @@ async def test_request_hook_service_falls_back_to_document_guide_for_non_id_bare
     assert "export_document" in context.notices[0]
 
 
+@pytest.mark.asyncio
+async def test_request_hook_service_falls_back_to_document_guide_when_summary_lookup_is_disabled():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='继续导出 document_id="doc-11" 的 Word 报告',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert "export_document" in context.notices[0]
+    assert "没有找到 `document_id=" not in context.notices[0]
+
+
 def test_runtime_builder_returns_none_when_document_summary_lookup_is_unavailable():
     document_toolset = SimpleNamespace(document_store=SimpleNamespace())
 
