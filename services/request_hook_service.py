@@ -26,6 +26,11 @@ from .upload_types import UploadInfo
 
 
 class RequestHookService:
+    _DOCUMENT_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
+    _DOCUMENT_ID_DOC_PREFIX_RE = re.compile(
+        r"doc-[A-Za-z0-9_-]+",
+        flags=re.IGNORECASE,
+    )
     _BUFFERED_USER_INSTRUCTION_RE = re.compile(
         r"\[用户指令\]\s*(?P<instruction>.*?)(?:\n\s*\[|\Z)",
         flags=re.DOTALL,
@@ -43,11 +48,11 @@ class RequestHookService:
     )
     _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(r"\bdocument_id\b", flags=re.IGNORECASE)
     _DOCUMENT_ID_EXPLICIT_CAPTURE_RE = re.compile(
-        r"\bdocument_id\b(?:\s*[:=]\s*|\s+(?:为|是|is)\s+)[\"']?(?P<document_id>[A-Za-z0-9_-]+)[\"']?",
+        r"\bdocument_id\b(?:\s*[:=]\s*|\s+(?:为|是|is)\s+)[`\"']?(?P<document_id>[A-Za-z0-9_-]+)[`\"']?",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_ID_BARE_CAPTURE_RE = re.compile(
-        r"\bdocument_id\b\s+[\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[\"']?",
+        r"\bdocument_id\b\s+[`\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
@@ -177,14 +182,25 @@ class RequestHookService:
     def _extract_document_id(cls, *, request_text: str) -> str:
         if not request_text:
             return ""
-        for pattern in (
-            cls._DOCUMENT_ID_EXPLICIT_CAPTURE_RE,
-            cls._DOCUMENT_ID_BARE_CAPTURE_RE,
-        ):
-            match = pattern.search(request_text)
-            if match:
-                return str(match.group("document_id") or "").strip()
+        explicit_match = cls._DOCUMENT_ID_EXPLICIT_CAPTURE_RE.search(request_text)
+        if explicit_match:
+            return str(explicit_match.group("document_id") or "").strip()
+
+        bare_match = cls._DOCUMENT_ID_BARE_CAPTURE_RE.search(request_text)
+        if bare_match:
+            candidate = str(bare_match.group("document_id") or "").strip()
+            if cls._looks_like_bare_document_id(candidate):
+                return candidate
         return ""
+
+    @classmethod
+    def _looks_like_bare_document_id(cls, candidate: str) -> bool:
+        if not candidate:
+            return False
+        return bool(
+            cls._DOCUMENT_ID_HEX_RE.fullmatch(candidate)
+            or cls._DOCUMENT_ID_DOC_PREFIX_RE.fullmatch(candidate)
+        )
 
     def _build_document_follow_up_section(
         self,

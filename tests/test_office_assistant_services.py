@@ -45,6 +45,9 @@ from astrbot_plugin_office_assistant.services import (
     WorkspaceService,
     build_plugin_runtime,
 )
+from astrbot_plugin_office_assistant.services.runtime_builder import (
+    _build_document_summary_lookup,
+)
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
     SECTION_SCENE_UPLOADED_CONTEXT,
@@ -1572,6 +1575,41 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_englis
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_injects_document_follow_up_notice_for_backtick_quoted_document_id():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 5,
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="继续处理 document_id=`doc-8`",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("add_blocks")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "当前 `document_id=doc-8` 仍是 draft" in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_injects_document_follow_up_notice_for_finalized():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1696,6 +1734,61 @@ async def test_request_hook_service_falls_back_to_document_guide_for_english_non
 
     assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
     assert "export_document" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_falls_back_to_document_guide_for_non_id_bare_token():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda _document_id: None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请根据 document_id token-1 导出成 Word",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert "export_document" in context.notices[0]
+
+
+def test_runtime_builder_returns_none_when_document_summary_lookup_is_unavailable():
+    document_toolset = SimpleNamespace(document_store=SimpleNamespace())
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.runtime_builder.logger.warning"
+    ) as mock_warning:
+        lookup = _build_document_summary_lookup(document_toolset)
+
+    assert lookup is None
+    mock_warning.assert_called_once()
+
+
+def test_runtime_builder_uses_document_summary_lookup_when_available():
+    build_prompt_summary = MagicMock(return_value={"status": "draft"})
+    document_toolset = SimpleNamespace(
+        document_store=SimpleNamespace(build_prompt_summary=build_prompt_summary)
+    )
+
+    lookup = _build_document_summary_lookup(document_toolset)
+
+    assert lookup is build_prompt_summary
+    assert lookup("doc-1") == {"status": "draft"}
 
 
 @pytest.mark.asyncio
