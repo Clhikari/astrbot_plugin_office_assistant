@@ -63,6 +63,7 @@ import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
+from conftest import build_notice_once_callback as _build_notice_once_callback
 
 
 def _build_event(
@@ -127,24 +128,6 @@ def _make_workspace(name: str) -> Path:
     workspace_dir = workspace_base / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     return workspace_dir
-
-
-def _build_notice_once_callback():
-    seen: dict[tuple[str, str, str], set[str]] = {}
-
-    def consume(event, notice_key: str) -> bool:
-        session_key = (
-            str(event.get_platform_id() or ""),
-            str(event.get_sender_id() or ""),
-            str(event.unified_msg_origin or ""),
-        )
-        used = seen.setdefault(session_key, set())
-        if notice_key in used:
-            return False
-        used.add(notice_key)
-        return True
-
-    return consume
 
 
 def _write_png(path: Path) -> None:
@@ -1554,6 +1537,41 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_space_
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_injects_document_follow_up_notice_for_english_is_document_id():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 4,
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="document_id is doc-7, please continue",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("add_blocks")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "当前 `document_id=doc-7` 仍是 draft" in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_injects_document_follow_up_notice_for_finalized():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1647,6 +1665,37 @@ async def test_request_hook_service_falls_back_to_document_guide_when_document_i
 
     assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
     assert "create_document" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_falls_back_to_document_guide_for_english_non_id_token():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda _document_id: None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="please return document_id and export this as Word",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert "export_document" in context.notices[0]
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,24 @@ def _ensure_local_package_alias() -> None:
 _ensure_local_package_alias()
 
 
+def build_notice_once_callback():
+    seen: dict[tuple[str, str, str], set[str]] = {}
+
+    def consume(event, notice_key: str) -> bool:
+        session_key = (
+            str(event.get_platform_id() or ""),
+            str(event.get_sender_id() or ""),
+            str(event.unified_msg_origin or ""),
+        )
+        used = seen.setdefault(session_key, set())
+        if notice_key in used:
+            return False
+        used.add(notice_key)
+        return True
+
+    return consume
+
+
 @pytest.fixture
 def workspace_root() -> Iterator[Path]:
     workspace_base = Path(__file__).resolve().parent / ".tmp_test_workspaces"
