@@ -243,7 +243,7 @@ def _build_request_pipeline_services(
         consume_session_notice_once=upload_session_service.consume_session_notice_once,
         allow_external_input_files=settings.allow_external_input_files,
         prompt_context_service=prompt_context_service,
-        lookup_document_summary=document_toolset.document_store.build_prompt_summary,
+        lookup_document_summary=_build_document_summary_lookup(document_toolset),
     )
     llm_request_policy = LLMRequestPolicy(
         document_toolset=document_toolset,
@@ -259,6 +259,17 @@ def _build_request_pipeline_services(
         request_hook_service=request_hook_service,
         llm_request_policy=llm_request_policy,
     )
+
+
+def _build_document_summary_lookup(document_toolset):
+    document_store = getattr(document_toolset, "document_store", None)
+    build_prompt_summary = getattr(document_store, "build_prompt_summary", None)
+    if not callable(build_prompt_summary):
+        logger.warning(
+            "[文件管理] document_store.build_prompt_summary 不可用，文档跟进提示将退化为普通工具指南"
+        )
+        return None
+    return build_prompt_summary
 
 
 def _build_file_processing_services(
