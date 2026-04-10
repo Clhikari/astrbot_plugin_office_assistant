@@ -5,11 +5,11 @@ from astrbot.api import logger
 
 from ..prompts.scenes.uploaded_file import (
     build_buffered_upload_prompt,
-    build_uploaded_file_notice,
-    build_uploaded_file_scene_notice,
-    build_uploaded_file_summary_notice,
+    build_uploaded_file_context_notice,
 )
 from ..prompts.static import (
+    build_document_follow_up_missing_notice,
+    build_document_follow_up_notice,
     build_document_tools_core_notice,
     build_document_tools_detail_notice,
     build_tools_denied_notice,
@@ -19,15 +19,15 @@ from .upload_types import UploadInfo
 SECTION_STATIC_ACCESS = "static_access"
 SECTION_STATIC_DOCUMENT_TOOLS = "static_document_tools"
 SECTION_STATIC_DOCUMENT_TOOLS_DETAIL = "static_document_tools_detail"
-SECTION_SCENE_UPLOADED_FILE = "scene_uploaded_file"
-SECTION_DYNAMIC_UPLOAD_SUMMARY = "dynamic_upload_summary"
-SECTION_DYNAMIC_DOCUMENT_SUMMARY = "dynamic_document_summary"
+SECTION_SCENE_UPLOADED_CONTEXT = "scene_uploaded_context"
+SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP = "dynamic_document_follow_up"
 
 
 @dataclass(frozen=True, slots=True)
 class PromptSection:
     name: str
     content: str
+    target: str = "prompt_suffix"
 
 
 class PromptContextService:
@@ -125,6 +125,7 @@ class PromptContextService:
         return PromptSection(
             name=SECTION_STATIC_ACCESS,
             content=build_tools_denied_notice(),
+            target="system",
         )
 
     def build_tools_denied_notice(self) -> str:
@@ -134,129 +135,53 @@ class PromptContextService:
         return PromptSection(
             name=SECTION_STATIC_DOCUMENT_TOOLS,
             content=build_document_tools_core_notice(),
+            target="prompt_suffix",
         )
 
     def build_document_tool_detail_section(self) -> PromptSection:
         return PromptSection(
             name=SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
             content=build_document_tools_detail_notice(),
+            target="prompt_suffix",
         )
 
-    def build_document_tool_guide_notice(self) -> str:
-        return self.render_sections(
-            self.build_document_tool_guide_section(),
-            self.build_document_tool_detail_section(),
-        )
-
-    def build_document_summary_section(
-        self,
-        *,
-        summary: dict[str, object],
-    ) -> PromptSection:
-        next_allowed_actions = (
-            ", ".join(
-                str(action)
-                for action in (summary.get("next_allowed_actions") or [])
-                if action
-            )
-            or "暂无"
-        )
-        status = str(summary.get("status") or "unknown")
-        block_count = int(summary.get("block_count") or 0)
-        document_id = str(summary.get("document_id") or "").strip()
-        return PromptSection(
-            name=SECTION_DYNAMIC_DOCUMENT_SUMMARY,
-            content=(
-                "\n[System Notice] 当前文档状态摘要\n"
-                f"- document_id: {document_id}\n"
-                f"- 状态: {status}\n"
-                f"- 块数: {block_count}\n"
-                f"- 下一步: {next_allowed_actions}\n"
-            ),
-        )
-
-    def build_document_summary_notice(
-        self,
-        *,
-        summary: dict[str, object],
-    ) -> str:
-        return self.render_sections(
-            self.build_document_summary_section(summary=summary)
-        )
-
-    def build_uploaded_file_notice_section(
-        self,
-        *,
-        type_desc: str,
-        original_name: str,
-        file_suffix: str,
-        stored_name: str,
-        source_path: str,
-    ) -> PromptSection:
-        return PromptSection(
-            name=SECTION_DYNAMIC_UPLOAD_SUMMARY,
-            content=build_uploaded_file_notice(
-                type_desc=type_desc,
-                original_name=original_name,
-                file_suffix=file_suffix,
-                stored_name=stored_name,
-                source_path=source_path,
-                allow_external_input_files=self._allow_external_input_files,
-            ),
-        )
-
-    def build_uploaded_file_scene_section(
-        self,
-        *,
-        file_count: int,
-    ) -> PromptSection:
-        return PromptSection(
-            name=SECTION_SCENE_UPLOADED_FILE,
-            content=build_uploaded_file_scene_notice(
-                file_count=file_count,
-                allow_external_input_files=self._allow_external_input_files,
-            ),
-        )
-
-    def build_uploaded_file_notice(
-        self,
-        *,
-        type_desc: str,
-        original_name: str,
-        file_suffix: str,
-        stored_name: str,
-        source_path: str,
-    ) -> str:
-        return self.render_sections(
-            self.build_uploaded_file_notice_section(
-                type_desc=type_desc,
-                original_name=original_name,
-                file_suffix=file_suffix,
-                stored_name=stored_name,
-                source_path=source_path,
-            )
-        )
-
-    def build_uploaded_file_summary_section(
+    def build_uploaded_file_context_section(
         self,
         *,
         upload_infos: list[UploadInfo],
     ) -> PromptSection:
         return PromptSection(
-            name=SECTION_DYNAMIC_UPLOAD_SUMMARY,
-            content=build_uploaded_file_summary_notice(
-                upload_infos=upload_infos,
-                allow_external_input_files=self._allow_external_input_files,
-            ),
+            name=SECTION_SCENE_UPLOADED_CONTEXT,
+            content=build_uploaded_file_context_notice(upload_infos=upload_infos),
+            target="prompt_suffix",
         )
 
-    def build_uploaded_file_summary_notice(
+    def build_document_follow_up_section(
         self,
         *,
-        upload_infos: list[UploadInfo],
-    ) -> str:
-        return self.render_sections(
-            self.build_uploaded_file_summary_section(upload_infos=upload_infos)
+        document_id: str,
+        status: str,
+        block_count: int,
+    ) -> PromptSection:
+        return PromptSection(
+            name=SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+            content=build_document_follow_up_notice(
+                document_id=document_id,
+                status=status,
+                block_count=block_count,
+            ),
+            target="prompt_suffix",
+        )
+
+    def build_document_follow_up_missing_section(
+        self,
+        *,
+        document_id: str,
+    ) -> PromptSection:
+        return PromptSection(
+            name=SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+            content=build_document_follow_up_missing_notice(document_id=document_id),
+            target="prompt_suffix",
         )
 
     def build_buffered_upload_prompt(
@@ -268,5 +193,4 @@ class PromptContextService:
         return build_buffered_upload_prompt(
             upload_infos=upload_infos,
             user_instruction=user_instruction,
-            allow_external_input_files=self._allow_external_input_files,
         )

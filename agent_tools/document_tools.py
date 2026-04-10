@@ -38,7 +38,7 @@ _CONTINUE_UNTIL_EXPORT = (
     "请继续调用文档工具，直到 export_document 成功。中途不要发自然语言回复。"
 )
 _FINALIZE_PROMPT = (
-    "文档已定稿。请立即调用 export_document 导出文件，不要发自然语言回复。"
+    "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document，也不要发自然语言回复。"
 )
 
 
@@ -325,7 +325,11 @@ class CreateDocumentTool(DocumentToolBase):
         return _dump_result(
             ToolResult(
                 success=True,
-                message=f"文档会话已创建。下一步请调用 add_blocks 添加内容。{_CONTINUE_UNTIL_EXPORT}",
+                message=(
+                    "文档会话已创建。下一步只能调用 add_blocks 添加内容，"
+                    "不要提前调用 finalize_document 或 export_document。"
+                    f"{_CONTINUE_UNTIL_EXPORT}"
+                ),
                 document=build_document_summary(document),
             )
         )
@@ -877,11 +881,25 @@ class AddBlocksTool(DocumentToolBase):
             )
             document = self.store.add_blocks(request)
         except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=(
+                        "add_blocks 失败。继续使用同一个 document_id 再次调用 "
+                        "add_blocks，只修正报错字段，不要改调 finalize_document "
+                        f"或 export_document。原始错误：{exc}"
+                    ),
+                )
+            )
         return _dump_result(
             ToolResult(
                 success=True,
-                message=f"内容块已添加。如果还有更多内容，继续调用 add_blocks；否则调用 finalize_document。{_CONTINUE_UNTIL_EXPORT}",
+                message=(
+                    "内容块已添加。如果还有任何章节、表格或补充信息没写完，继续调用 "
+                    "add_blocks；只有确认全部内容写完，才调用 finalize_document。"
+                    "定稿前不要调用 export_document。"
+                    f"{_CONTINUE_UNTIL_EXPORT}"
+                ),
                 document=build_document_summary(document),
             )
         )

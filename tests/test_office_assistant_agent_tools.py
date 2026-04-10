@@ -127,6 +127,73 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
     assert stores[0].workspace_dir == expected_workspace
 
 
+@pytest.mark.asyncio
+async def test_document_tool_messages_enforce_workflow_after_create_and_finalize(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-messages")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            session_id="pytest-session",
+            title="Workflow Message",
+            output_name="workflow-message.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    assert "下一步只能调用 add_blocks 添加内容" in created["message"]
+    assert "不要提前调用 finalize_document 或 export_document" in created["message"]
+
+    await tool_by_name["add_blocks"].call(
+        None,
+        document_id=document_id,
+        blocks=[{"type": "paragraph", "text": "正文"}],
+    )
+    finalized = json.loads(
+        await tool_by_name["finalize_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    assert "下一步只能调用 export_document 导出文件" in finalized["message"]
+    assert "不要再调用 add_blocks、create_document 或 finalize_document" in finalized["message"]
+
+
+@pytest.mark.asyncio
+async def test_add_blocks_failure_message_keeps_model_on_same_tool(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-add-blocks-failure"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            session_id="pytest-session",
+            title="Add Blocks Failure",
+            output_name="add-blocks-failure.docx",
+        )
+    )
+
+    failed = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[{"type": "table", "style": {"table_grid": "none"}, "rows": []}],
+        )
+    )
+
+    assert failed["success"] is False
+    assert "继续使用同一个 document_id 再次调用 add_blocks" in failed["message"]
+    assert "不要改调 finalize_document 或 export_document" in failed["message"]
+
+
 def test_document_tool_registry_keeps_document_tool_order():
     assert [spec.name for spec in get_document_tool_specs()] == [
         "create_document",

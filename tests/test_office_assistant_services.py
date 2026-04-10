@@ -46,10 +46,10 @@ from astrbot_plugin_office_assistant.services import (
     build_plugin_runtime,
 )
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
-    SECTION_DYNAMIC_DOCUMENT_SUMMARY,
-    SECTION_DYNAMIC_UPLOAD_SUMMARY,
-    SECTION_SCENE_UPLOADED_FILE,
+    SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+    SECTION_SCENE_UPLOADED_CONTEXT,
     SECTION_STATIC_DOCUMENT_TOOLS,
+    SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
     PromptContextService,
 )
 from astrbot_plugin_office_assistant.utils import (
@@ -127,6 +127,24 @@ def _make_workspace(name: str) -> Path:
     workspace_dir = workspace_base / f"{name}-{uuid4().hex}"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     return workspace_dir
+
+
+def _build_notice_once_callback():
+    seen: dict[tuple[str, str, str], set[str]] = {}
+
+    def consume(event, notice_key: str) -> bool:
+        session_key = (
+            str(event.get_platform_id() or ""),
+            str(event.get_sender_id() or ""),
+            str(event.unified_msg_origin or ""),
+        )
+        used = seen.setdefault(session_key, set())
+        if notice_key in used:
+            return False
+        used.add(notice_key)
+        return True
+
+    return consume
 
 
 def _write_png(path: Path) -> None:
@@ -1158,6 +1176,7 @@ async def test_request_hook_service_builds_default_tool_hooks():
         get_cached_upload_infos=lambda _event: [],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     context = SimpleNamespace(
@@ -1212,9 +1231,10 @@ async def test_request_hook_service_merges_multiple_uploaded_files_into_one_noti
         ],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=True,
     )
-    context = SimpleNamespace(
+    context = NoticeBuildContext(
         event=event,
         request=request,
         should_expose=True,
@@ -1222,23 +1242,27 @@ async def test_request_hook_service_merges_multiple_uploaded_files_into_one_noti
         explicit_tool_name=None,
         notices=[],
         section_names=[],
+        system_notices=[],
+        system_section_names=[],
     )
 
     context = await service.append_uploaded_file_notices(context)
 
-    assert len(context.notices) == 2
-    assert "MUST 先调用 `read_file` 依次读取这些文件" in context.notices[0]
-    notice = context.notices[1]
+    assert len(context.notices) == 1
+    notice = context.notices[0]
     assert notice.count("[System Notice] [ACTION REQUIRED] 已收到上传文件") == 1
     assert "文件数量：2" in notice
     assert "report.docx" in notice
     assert "notes.txt" in notice
     assert "report_1.docx" in notice
     assert "notes_1.txt" in notice
-    assert context.section_names == [
-        SECTION_SCENE_UPLOADED_FILE,
-        SECTION_DYNAMIC_UPLOAD_SUMMARY,
-    ]
+    assert "先调用 `read_file` 依次读取这些文件" in notice
+    assert "不要猜文件名，不要列目录，不要调用 shell" in notice
+    assert "读取前不要创建新文档" in notice
+    assert "source_path" not in notice
+    assert context.section_names == [SECTION_SCENE_UPLOADED_CONTEXT]
+    assert context.system_notices == []
+    assert context.system_section_names == []
 
 
 @pytest.mark.asyncio
@@ -1257,6 +1281,7 @@ async def test_request_hook_service_limits_multi_file_notice_details():
         get_cached_upload_infos=lambda _event: _build_upload_infos(5),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     context = SimpleNamespace(
@@ -1271,7 +1296,7 @@ async def test_request_hook_service_limits_multi_file_notice_details():
 
     context = await service.append_uploaded_file_notices(context)
 
-    notice = context.notices[1]
+    notice = context.notices[0]
     assert "文件数量：5" in notice
     assert "file-0.txt" in notice
     assert "file-2.txt" in notice
@@ -1287,7 +1312,7 @@ async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_pr
         prompt=(
             "\n[System Notice] 用户上传了 2 个文件\n\n"
             "[文件信息]\n"
-            "- 原始文件名: file-0.txt (类型: .txt)\n"
+            "- 原始文件名: file-0.txt\n"
             "  工作区文件名: file_0.txt\n"
         ),
         system_prompt="base",
@@ -1303,6 +1328,7 @@ async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_pr
         get_cached_upload_infos=lambda _event: _build_upload_infos(2),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     context = SimpleNamespace(
@@ -1317,18 +1343,17 @@ async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_pr
 
     context = await service.append_uploaded_file_notices(context)
 
-    assert len(context.notices) == 1
-    assert context.section_names == [SECTION_DYNAMIC_UPLOAD_SUMMARY]
-    assert "文件数量：2" in context.notices[0]
+    assert context.notices == []
+    assert context.section_names == []
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_keeps_scene_notice_for_buffered_prompt_with_instruction():
+async def test_request_hook_service_skips_additional_notice_for_buffered_prompt_with_instruction():
     request = ProviderRequest(
         prompt=(
             "\n[System Notice] 用户上传了 1 个文件\n\n"
             "[文件信息]\n"
-            "- 原始文件名: report.docx (类型: .docx)\n"
+            "- 原始文件名: report.docx\n"
             "  工作区文件名: report_1.docx\n\n"
             "[用户指令]\n"
             "根据文件整理成正式汇报\n"
@@ -1353,6 +1378,7 @@ async def test_request_hook_service_keeps_scene_notice_for_buffered_prompt_with_
         ],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
     context = SimpleNamespace(
@@ -1367,15 +1393,12 @@ async def test_request_hook_service_keeps_scene_notice_for_buffered_prompt_with_
 
     context = await service.append_uploaded_file_notices(context)
 
-    assert len(context.notices) == 2
-    assert context.section_names == [
-        SECTION_SCENE_UPLOADED_FILE,
-        SECTION_DYNAMIC_UPLOAD_SUMMARY,
-    ]
+    assert context.notices == []
+    assert context.section_names == []
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_shows_compact_paths_for_omitted_files():
+async def test_request_hook_service_omitted_files_use_names_without_external_paths():
     request = ProviderRequest(
         prompt="根据上传文件整理内容",
         system_prompt="base",
@@ -1393,6 +1416,7 @@ async def test_request_hook_service_shows_compact_paths_for_omitted_files():
         ),
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=True,
     )
     context = SimpleNamespace(
@@ -1407,9 +1431,11 @@ async def test_request_hook_service_shows_compact_paths_for_omitted_files():
 
     context = await service.append_uploaded_file_notices(context)
 
-    notice = context.notices[1]
-    assert "file_3.txt -> /tmp/file_3.txt" in notice
-    assert "file_4.txt -> /tmp/file_4.txt" in notice
+    notice = context.notices[0]
+    assert "file_3.txt" in notice
+    assert "file_4.txt" in notice
+    assert "/tmp/file_3.txt" not in notice
+    assert "/tmp/file_4.txt" not in notice
     assert "其余 2 个文件：" in notice
     assert "未展开详细信息" in notice
 
@@ -1433,6 +1459,7 @@ async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_
         get_cached_upload_infos=lambda _event: upload_infos,
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=True,
     )
     context = SimpleNamespace(
@@ -1447,29 +1474,26 @@ async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_
 
     context = await service.append_uploaded_file_notices(context)
 
-    notice = context.notices[1]
+    notice = context.notices[0]
     assert "其余 2 个文件：" in notice
-    assert "file_3.txt -> /tmp/file_3.txt" in notice
     assert "file_4.txt" in notice
-    assert "file_4.txt ->" not in notice
+    assert "/tmp/file_3.txt" not in notice
     assert "其余 1 个文件：" not in notice
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_appends_document_summary_for_existing_document():
+async def test_request_hook_service_injects_document_follow_up_notice_for_draft():
     service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [],
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
-        get_document_prompt_summary=lambda document_id: {
+        lookup_document_summary=lambda document_id: {
             "document_id": document_id,
-            "title": "季度经营复盘",
             "status": "draft",
-            "block_count": 4,
-            "latest_block_types": ["heading", "table"],
-            "next_allowed_actions": ["add_blocks", "finalize_document"],
+            "block_count": 3,
         },
     )
     context = NoticeBuildContext(
@@ -1487,28 +1511,85 @@ async def test_request_hook_service_appends_document_summary_for_existing_docume
 
     context = await service.append_document_tool_guide_notice(context)
 
-    assert len(context.notices) == 2
-    assert "文件工具使用指南" in context.notices[0]
-    assert "executive_brief" not in context.notices[0]
-    assert "当前文档状态摘要" in context.notices[1]
-    assert "document_id: doc-1" in context.notices[1]
-    assert "状态: draft" in context.notices[1]
-    assert "块数: 4" in context.notices[1]
-    assert "下一步: add_blocks, finalize_document" in context.notices[1]
-    assert "最近块类型" not in context.notices[1]
-    assert context.section_names == [
-        SECTION_STATIC_DOCUMENT_TOOLS,
-        SECTION_DYNAMIC_DOCUMENT_SUMMARY,
-    ]
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "当前 `document_id=doc-1` 仍是 draft" in context.notices[0]
+    assert "继续调用 `add_blocks`" in context.notices[0]
+    assert context.system_notices == []
+    assert context.system_section_names == []
 
 
-def test_prompt_context_service_orders_notice_sections_by_stability():
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_document_follow_up_notice_for_finalized():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "finalized",
+            "block_count": 15,
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='请导出 document_id="doc-2"',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "下一步只能调用 `export_document`" in context.notices[0]
+    assert "不要再调用 `add_blocks`、`finalize_document` 或 `create_document`" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_missing_notice_when_document_id_is_unknown():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda _document_id: None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='继续处理 document_id="missing-doc"',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("add_blocks")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
+    assert "没有找到 `document_id=missing-doc` 对应的文档会话" in context.notices[0]
+
+
+def test_prompt_context_service_orders_dynamic_document_notice_after_scene_notice():
     service = PromptContextService(allow_external_input_files=False)
 
     ordered_names, ordered_notices = service.order_notice_sections(
         section_names=[
-            SECTION_DYNAMIC_DOCUMENT_SUMMARY,
-            SECTION_SCENE_UPLOADED_FILE,
+            SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+            SECTION_SCENE_UPLOADED_CONTEXT,
             SECTION_STATIC_DOCUMENT_TOOLS,
         ],
         notices=[
@@ -1520,23 +1601,160 @@ def test_prompt_context_service_orders_notice_sections_by_stability():
 
     assert ordered_names == [
         SECTION_STATIC_DOCUMENT_TOOLS,
-        SECTION_SCENE_UPLOADED_FILE,
-        SECTION_DYNAMIC_DOCUMENT_SUMMARY,
+        SECTION_SCENE_UPLOADED_CONTEXT,
+        SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
     ]
     assert ordered_notices == ["static", "scene", "dynamic"]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_document_core_notice_only_once_per_session():
+    consume_once = _build_notice_once_callback()
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=consume_once,
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+
+    first = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=event,
+            request=ProviderRequest(
+                prompt="请生成一份 Word 报告，并导出给我",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+    second = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=event,
+            request=ProviderRequest(
+                prompt="再生成一份 Word 报告",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+
+    assert first.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert second.section_names == []
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_detail_notice_later_without_repeating_core():
+    consume_once = _build_notice_once_callback()
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=consume_once,
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+
+    first = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=event,
+            request=ProviderRequest(
+                prompt="请生成一份 Word 报告",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+    second = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=event,
+            request=ProviderRequest(
+                prompt="请用 executive_brief 主题和 document_style 生成 Word 报告",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+
+    assert first.section_names == [SECTION_STATIC_DOCUMENT_TOOLS]
+    assert second.section_names == [SECTION_STATIC_DOCUMENT_TOOLS_DETAIL]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_allows_detail_notice_without_core_when_only_style_signal_exists():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请使用 executive_brief 和 accent_color=112233",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_document")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+
+    assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS_DETAIL]
+
+
+def test_prompt_context_service_orders_notice_sections_by_stability():
+    service = PromptContextService(allow_external_input_files=False)
+
+    ordered_names, ordered_notices = service.order_notice_sections(
+        section_names=[
+            SECTION_SCENE_UPLOADED_CONTEXT,
+            SECTION_STATIC_DOCUMENT_TOOLS,
+        ],
+        notices=[
+            "scene",
+            "static",
+        ],
+    )
+
+    assert ordered_names == [
+        SECTION_STATIC_DOCUMENT_TOOLS,
+        SECTION_SCENE_UPLOADED_CONTEXT,
+    ]
+    assert ordered_notices == ["static", "scene"]
     trace = service.build_section_trace(
         section_names=ordered_names,
         notices=ordered_notices,
     )
     assert trace.startswith(
-        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_FILE}, {SECTION_DYNAMIC_DOCUMENT_SUMMARY}"
+        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_CONTEXT}"
     )
     assert (
-        f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:6, {SECTION_SCENE_UPLOADED_FILE}:5, "
-        f"{SECTION_DYNAMIC_DOCUMENT_SUMMARY}:7]" in trace
+        f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:6, "
+        f"{SECTION_SCENE_UPLOADED_CONTEXT}:5]" in trace
     )
-    assert "[groups=static:6, scene:5, dynamic:7]" in trace
-    assert "[total=18]" in trace
+    assert "[groups=static:6, scene:5]" in trace
+    assert "[total=11]" in trace
 
 
 def test_prompt_context_service_logs_section_length_mismatch():
@@ -1565,13 +1783,13 @@ def test_prompt_context_service_build_section_trace_tolerates_length_mismatch():
     trace = service.build_section_trace(
         section_names=[
             SECTION_STATIC_DOCUMENT_TOOLS,
-            SECTION_SCENE_UPLOADED_FILE,
+            SECTION_SCENE_UPLOADED_CONTEXT,
         ],
         notices=["static only"],
     )
 
     assert trace.startswith(
-        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_FILE}"
+        f"{SECTION_STATIC_DOCUMENT_TOOLS}, {SECTION_SCENE_UPLOADED_CONTEXT}"
     )
     assert f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:11]" in trace
     assert "[groups=static:11]" in trace
@@ -1597,8 +1815,9 @@ def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
     assert "[用户指令]" in prompt_text
     assert "看看里面的内容" in prompt_text
     assert "工作区文件名: report_1.docx" in prompt_text
-    assert "外部绝对路径: /AstrBot/data/temp/report.docx" in prompt_text
+    assert "外部绝对路径" not in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
+    assert "读取后按用户指令继续调用工具，不要只回复过渡说明" in prompt_text
 
 
 def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
@@ -1665,8 +1884,7 @@ def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
     assert "[文件信息]" in prompt_text
     assert "工作区文件名: readable_1.txt" in prompt_text
     assert "工作区文件名: unreadable_1.bin" in prompt_text
-    assert "外部绝对路径: /AstrBot/data/temp/readable.txt" in prompt_text
-    assert "外部绝对路径: /AstrBot/data/temp/unreadable.bin" in prompt_text
+    assert "外部绝对路径" not in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
 
 
@@ -1687,7 +1905,7 @@ def test_upload_prompt_service_limits_file_details_for_many_uploads():
     assert "未展开详细信息" in prompt_text
 
 
-def test_upload_prompt_service_shows_compact_paths_for_omitted_files():
+def test_upload_prompt_service_omitted_files_only_show_names():
     service = UploadPromptService(allow_external_input_files=True)
 
     prompt_text = service.build_prompt(
@@ -1698,8 +1916,10 @@ def test_upload_prompt_service_shows_compact_paths_for_omitted_files():
         user_instruction="整理成报告",
     )
 
-    assert "file_3.txt -> /tmp/file_3.txt" in prompt_text
-    assert "file_4.txt -> /tmp/file_4.txt" in prompt_text
+    assert "file_3.txt" in prompt_text
+    assert "file_4.txt" in prompt_text
+    assert "/tmp/file_3.txt" not in prompt_text
+    assert "/tmp/file_4.txt" not in prompt_text
     assert "其余 2 个文件：" in prompt_text
     assert "未展开详细信息" in prompt_text
 
@@ -1716,9 +1936,8 @@ def test_upload_prompt_service_keeps_omitted_count_aligned_with_mixed_path_items
     )
 
     assert "其余 2 个文件：" in prompt_text
-    assert "file_3.txt -> /tmp/file_3.txt" in prompt_text
     assert "file_4.txt" in prompt_text
-    assert "file_4.txt ->" not in prompt_text
+    assert "/tmp/file_3.txt" not in prompt_text
     assert "其余 1 个文件：" not in prompt_text
 
 
@@ -1848,6 +2067,32 @@ def test_upload_session_service_preserves_input_upload_infos_when_caching():
     assert "file_id" not in upload_infos[0]
     assert assigned_infos[0]["file_id"] == "f1"
     assert service.list_session_upload_infos(event)[0]["file_id"] == "f1"
+
+
+def test_upload_session_service_consumes_notice_once_per_session():
+    service = UploadSessionService(
+        context=MagicMock(),
+        recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        allow_external_input_files=False,
+    )
+    event = _build_event()
+
+    assert service.consume_session_notice_once(event, "document_core_guide") is True
+    assert service.consume_session_notice_once(event, "document_core_guide") is False
+    assert service.consume_session_notice_once(event, "document_detail_guide") is True
+    assert (
+        service.consume_session_notice_once(
+            _build_event(sender_id="user-2"),
+            "document_core_guide",
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio

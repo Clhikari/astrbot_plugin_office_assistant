@@ -170,21 +170,48 @@ class LLMRequestPolicy:
             for tool_name in EXECUTION_TOOLS:
                 req.func_tool.remove_tool(tool_name)
 
-    def _append_tools_denied_notice(self, req: ProviderRequest) -> None:
-        denied_section = self._prompt_context_service.build_tools_denied_section()
+    def _merge_notice_sections(
+        self,
+        req: ProviderRequest,
+        *,
+        section_names: list[str],
+        notices: list[str],
+        target: str,
+    ) -> None:
+        if not notices:
+            return
         ordered_names, ordered_notices = (
             self._prompt_context_service.order_notice_sections(
-                section_names=[denied_section.name],
-                notices=[denied_section.content],
+                section_names=section_names,
+                notices=notices,
             )
         )
-        req.system_prompt = (req.system_prompt or "") + "".join(ordered_notices)
+        merged_notice = "".join(ordered_notices)
+        if target == "system":
+            req.system_prompt = (req.system_prompt or "") + merged_notice
+        else:
+            current_prompt = str(req.prompt or "")
+            req.prompt = (
+                f"{current_prompt}\n\n{merged_notice}"
+                if current_prompt
+                else merged_notice
+            )
         logger.debug(
-            "[文件管理] Prompt sections: %s",
+            "[文件管理] Prompt sections(%s): %s",
+            target,
             self._prompt_context_service.build_section_trace(
                 section_names=ordered_names,
                 notices=ordered_notices,
             ),
+        )
+
+    def _append_tools_denied_notice(self, req: ProviderRequest) -> None:
+        denied_section = self._prompt_context_service.build_tools_denied_section()
+        self._merge_notice_sections(
+            req,
+            section_names=[denied_section.name],
+            notices=[denied_section.content],
+            target="system",
         )
 
     def _resolve_exposure_decision(
@@ -281,18 +308,15 @@ class LLMRequestPolicy:
                 explicit_tool_name=decision.explicit_tool_name,
             )
         )
-        if notice_context.notices:
-            ordered_names, ordered_notices = (
-                self._prompt_context_service.order_notice_sections(
-                    section_names=notice_context.section_names,
-                    notices=notice_context.notices,
-                )
-            )
-            req.system_prompt = (req.system_prompt or "") + "".join(ordered_notices)
-            logger.debug(
-                "[文件管理] Prompt sections: %s",
-                self._prompt_context_service.build_section_trace(
-                    section_names=ordered_names,
-                    notices=ordered_notices,
-                ),
-            )
+        self._merge_notice_sections(
+            req,
+            section_names=notice_context.section_names,
+            notices=notice_context.notices,
+            target="prompt_suffix",
+        )
+        self._merge_notice_sections(
+            req,
+            section_names=notice_context.system_section_names,
+            notices=notice_context.system_notices,
+            target="system",
+        )
