@@ -30,6 +30,7 @@ import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
+from conftest import build_notice_once_callback as _build_notice_once_callback
 
 
 def _build_config() -> dict:
@@ -87,24 +88,6 @@ def _tool(name: str) -> FunctionTool:
         parameters={"type": "object", "properties": {}},
         handler=None,
     )
-
-
-def _build_notice_once_callback():
-    seen: dict[tuple[str, str, str], set[str]] = {}
-
-    def consume(event, notice_key: str) -> bool:
-        session_key = (
-            str(event.get_platform_id() or ""),
-            str(event.get_sender_id() or ""),
-            str(event.unified_msg_origin or ""),
-        )
-        used = seen.setdefault(session_key, set())
-        if notice_key in used:
-            return False
-        used.add(notice_key)
-        return True
-
-    return consume
 
 
 @pytest.mark.asyncio

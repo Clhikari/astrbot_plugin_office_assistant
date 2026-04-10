@@ -42,8 +42,12 @@ class RequestHookService:
         flags=re.IGNORECASE,
     )
     _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(r"\bdocument_id\b", flags=re.IGNORECASE)
-    _DOCUMENT_ID_CAPTURE_RE = re.compile(
-        r"\bdocument_id\b(?:\s*(?:[:=]|为|是)\s*|\s+)[\"']?(?P<document_id>[A-Za-z0-9_-]+)[\"']?",
+    _DOCUMENT_ID_EXPLICIT_CAPTURE_RE = re.compile(
+        r"\bdocument_id\b(?:\s*[:=]\s*|\s+(?:为|是|is)\s+)[\"']?(?P<document_id>[A-Za-z0-9_-]+)[\"']?",
+        flags=re.IGNORECASE,
+    )
+    _DOCUMENT_ID_BARE_CAPTURE_RE = re.compile(
+        r"\bdocument_id\b\s+[\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[\"']?",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
@@ -173,10 +177,14 @@ class RequestHookService:
     def _extract_document_id(cls, *, request_text: str) -> str:
         if not request_text:
             return ""
-        match = cls._DOCUMENT_ID_CAPTURE_RE.search(request_text)
-        if not match:
-            return ""
-        return str(match.group("document_id") or "").strip()
+        for pattern in (
+            cls._DOCUMENT_ID_EXPLICIT_CAPTURE_RE,
+            cls._DOCUMENT_ID_BARE_CAPTURE_RE,
+        ):
+            match = pattern.search(request_text)
+            if match:
+                return str(match.group("document_id") or "").strip()
+        return ""
 
     def _build_document_follow_up_section(
         self,
