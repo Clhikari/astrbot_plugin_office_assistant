@@ -8,7 +8,7 @@
 
 **让你的聊天bot能够生成office文件**
 
-[![Version](https://img.shields.io/badge/version-v1.5.1-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
+[![Version](https://img.shields.io/badge/version-v1.6.0-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-18%2B-5FA04E.svg)](https://nodejs.org/)
 
