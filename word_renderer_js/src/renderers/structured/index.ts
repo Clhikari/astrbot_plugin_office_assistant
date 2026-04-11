@@ -333,6 +333,7 @@ function buildClearedHeaderFooterOverride(
     header_text: "",
     footer_text: "",
     show_page_number: false,
+    page_number_format: "",
   };
   if (usesFirstPageVariants(inheritedHeaderFooter)) {
     cleared.different_first_page = true;
@@ -371,12 +372,16 @@ function buildSection(
     margin: buildPageMargins(section.margins, theme),
   };
   const orientation = mapPageOrientation(section.pageOrientation);
+  const pageNumberFormat = stringValue(section.headerFooter.page_number_format);
   if (orientation) {
     page.size = { orientation };
   }
-  if (section.restartPageNumbering) {
+  if (section.restartPageNumbering || pageNumberFormat) {
     page.pageNumbers = {
-      start: section.pageNumberStart ?? 1,
+      ...(section.restartPageNumbering
+        ? { start: section.pageNumberStart ?? 1 }
+        : {}),
+      ...(pageNumberFormat ? { formatType: pageNumberFormat } : {}),
     };
   }
   properties.page = page;

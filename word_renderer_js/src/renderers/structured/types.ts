@@ -45,6 +45,7 @@ export type ThemeConfig = {
 export type TableCellValue = {
   text: string;
   rowSpan: number;
+  colSpan: number;
   fill?: string;
   textColor?: string;
   bold?: boolean;

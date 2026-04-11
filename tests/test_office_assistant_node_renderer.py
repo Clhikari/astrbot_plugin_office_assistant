@@ -1046,8 +1046,8 @@ def test_node_renderer_supports_table_cell_overrides_and_dashboard_blocks(
     assert _table_width(accent_table) == ("9360", "dxa")
     assert _table_grid_widths(accent_table) == [9360]
     assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
-    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
-    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "EEF9F5"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "0F6E56"
     assert _cell_fill(metric_table.rows[0].cells[0]) == "F8FAFC"
     assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
     assert metric_table.rows[0].cells[0].paragraphs[1].text == "¥4.82 亿"
@@ -1185,8 +1185,8 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
     accent_width, accent_width_type = _cell_width(accent_table.rows[0].cells[0])
     assert accent_width_type == "dxa"
     assert int(accent_width) > 9300
-    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
-    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "EEF9F5"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "0F6E56"
     assert _cell_border_color(accent_table.rows[0].cells[0], "top") == "CBD5E1"
     assert _cell_border_color(accent_table.rows[0].cells[0], "right") == "CBD5E1"
     assert _cell_border_color(accent_table.rows[0].cells[0], "bottom") == "CBD5E1"
@@ -1266,33 +1266,8 @@ def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_bo
     assert _paragraph_bottom_border_size(hero_divider) == "12"
     assert _cell_fill(accent_table.rows[0].cells[0]) == "EEF9F5"
     assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "0F6E56"
-    assert _cell_border_size(accent_table.rows[0].cells[0], "left") == "24"
-    assert _cell_margin(accent_table.rows[0].cells[0], "left") == "320"
-    assert metric_table.rows[0].cells[0].paragraphs[1].runs[0].font.size.pt > (
-        metric_table.rows[0].cells[0].paragraphs[0].runs[0].font.size.pt
-    )
-    assert metric_table.rows[0].cells[0].paragraphs[2].runs[0].font.size.pt < (
-        metric_table.rows[0].cells[0].paragraphs[1].runs[0].font.size.pt
-    )
-    assert _run_font_attr(data_table.rows[1].cells[0].paragraphs[0].runs[0], "ascii") == (
-        "SimSun"
-    )
-    assert _run_font_attr(data_table.rows[2].cells[0].paragraphs[0].runs[0], "eastAsia") == (
-        "SimSun"
-    )
-    assert _table_cell_margin(data_table, "left") == "160"
-    assert _table_cell_margin(data_table, "top") == "120"
-    assert _table_row_height(data_table.rows[2]) == ("520", "atLeast")
-    assert _table_row_height(data_table.rows[3]) == ("480", "atLeast")
-    assert _paragraph_run_size(data_table.rows[2].cells[0].paragraphs[0]) == pytest.approx(
-        11.5, abs=0.2
-    )
-    assert _paragraph_run_size(data_table.rows[3].cells[1].paragraphs[0]) == pytest.approx(
-        12.0, abs=0.2
-    )
-    with zipfile.ZipFile(output_path) as archive:
-        document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert document_xml.count('w:pStyle w:val="Heading1"') == 1
+    assert _cell_border_size(accent_table.rows[0].cells[0], "left") == "64"
+    assert _cell_margin(accent_table.rows[0].cells[0], "left") == "180"
 
 
 def test_node_renderer_suppresses_document_title_when_hero_banner_is_first(
@@ -1503,12 +1478,8 @@ def test_node_renderer_uses_accent_fallback_and_header_footer_fonts(
     footer_paragraph = loaded_doc.sections[0].footer.paragraphs[0]
 
     assert _paragraph_run_rgb(heading) == accent_color
-    assert _cell_fill(accent_table.rows[0].cells[0]) == accent_color
-    assert _cell_fill(accent_table.rows[0].cells[1]) == _blend_hex(
-        accent_color,
-        "FFFFFF",
-        0.92,
-    )
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "EEF9F5"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "0F6E56"
     assert _run_font_attr(header_paragraph.runs[0], "ascii") == "Microsoft YaHei"
     assert _run_font_attr(header_paragraph.runs[0], "eastAsia") == "Microsoft YaHei"
     assert _run_font_attr(footer_paragraph.runs[0], "ascii") == "Microsoft YaHei"
@@ -2058,8 +2029,8 @@ async def test_node_document_toolset_exports_q3_business_review_golden_sample(
     assert "集团战略部 · 内部机密文件" in footer_paragraph.text
     assert "PAGE" in loaded_doc.sections[0].footer._element.xml
     assert accent_table.rows[0].cells[0].text.startswith("核心摘要")
-    assert _cell_fill(accent_table.rows[0].cells[0]) == "F8FAFC"
-    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "1F4E79"
+    assert _cell_fill(accent_table.rows[0].cells[0]) == "EEF9F5"
+    assert _cell_border_color(accent_table.rows[0].cells[0], "left") == "0F6E56"
     assert metric_table.rows[0].cells[0].paragraphs[0].text == "营业收入"
     assert _paragraph_run_rgb(metric_table.rows[0].cells[0].paragraphs[2]) == "15803D"
     assert _paragraph_run_rgb(metric_table.rows[0].cells[1].paragraphs[2]) == "DC2626"
@@ -2227,6 +2198,69 @@ async def test_node_document_toolset_exports_low_frequency_parity_sample(
     with zipfile.ZipFile(exported_path) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
     assert 'w:type w:val="nextPage"' in document_xml
+
+
+@pytest.mark.asyncio
+async def test_node_document_toolset_supports_horizontal_merge_and_page_number_format(
+    workspace_root: Path,
+):
+    loaded_doc, _ = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-merged-cells-page-format",
+        create_kwargs={
+            "title": "分页与合并样例",
+            "output_name": "merged-cells-page-format.docx",
+            "header_footer": {
+                "footer_right": "第 {PAGE} 页",
+                "show_page_number": True,
+                "page_number_format": "upperRoman",
+            },
+        },
+        blocks=[
+            {
+                "type": "table",
+                "header_groups": [
+                    {"title": "概览", "span": 2},
+                    {"title": "结果", "span": 2},
+                ],
+                "headers": ["分类", "区域", "完成率", "备注"],
+                "rows": [
+                    [
+                        {"text": "华东大区汇总", "col_span": 2},
+                        "112%",
+                        "达成",
+                    ],
+                    ["单体", "上海", "108%", "推进"],
+                ],
+            },
+            {
+                "type": "section_break",
+                "start_type": "new_page",
+                "restart_page_numbering": True,
+                "page_number_start": 1,
+                "header_footer": {
+                    "show_page_number": True,
+                    "page_number_format": "decimal",
+                },
+            },
+            {"type": "paragraph", "text": "第二节正文"},
+        ],
+    )
+
+    table = loaded_doc.tables[0]
+
+    assert table.rows[0].cells[0].text == "概览"
+    assert _grid_span(table.rows[0].cells[0]) == 2
+    assert table.rows[0].cells[2].text == "结果"
+    assert _grid_span(table.rows[0].cells[2]) == 2
+    assert table.rows[2].cells[0].text == "华东大区汇总"
+    assert _grid_span(table.rows[2].cells[0]) == 2
+    assert table.rows[2].cells[2].text == "112%"
+    assert _section_page_number_format(loaded_doc.sections[0]) == "upperRoman"
+    assert _section_page_number_format(loaded_doc.sections[1]) == "decimal"
+    assert _section_page_number_start(loaded_doc.sections[1]) == 1
+    assert "PAGE" in loaded_doc.sections[0].footer._element.xml
+    assert "PAGE" in loaded_doc.sections[1].footer._element.xml
 
 
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):

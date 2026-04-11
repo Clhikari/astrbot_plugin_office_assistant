@@ -139,6 +139,15 @@ def _section_page_number_start(section) -> int | None:
     return int(start) if start is not None else None
 
 
+def _section_page_number_format(section) -> str | None:
+    from docx.oxml.ns import qn
+
+    page_number = section._sectPr.find(qn("w:pgNumType"))
+    if page_number is None:
+        return None
+    return page_number.get(qn("w:fmt"))
+
+
 def _paragraph_has_page_break(paragraph) -> bool:
     from docx.oxml.ns import qn
 
