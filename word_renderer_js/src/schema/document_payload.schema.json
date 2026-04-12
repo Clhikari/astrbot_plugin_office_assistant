@@ -315,6 +315,9 @@
                                                 },
                                                 "color": {
                                                   "type": "string"
+                                                },
+                                                "url": {
+                                                  "type": "string"
                                                 }
                                               },
                                               "required": [
@@ -366,6 +369,9 @@
                                             "type": "boolean"
                                           },
                                           "color": {
+                                            "type": "string"
+                                          },
+                                          "url": {
                                             "type": "string"
                                           }
                                         },

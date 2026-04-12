@@ -171,7 +171,7 @@ function buildDetailParagraph(
       fontSize: 10,
       fontName: RESUME_FONT_NAME,
       codeFontName: "Consolas",
-    }).runs,
+    }).children,
   });
 }
 

@@ -626,6 +626,25 @@ def test_build_document_render_payload_preserves_runs_when_text_and_runs_exist()
     assert payload["blocks"][0]["runs"][0]["text"] == "rich"
     assert payload["blocks"][0]["runs"][1]["text"] == " content"
 
+
+def test_build_document_render_payload_preserves_hyperlink_run_urls():
+    block = ParagraphBlock(
+        runs=[
+            ParagraphRun(text="文档地址", url="https://example.com/docs"),
+        ],
+    )
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Hyperlink Paragraph"),
+        blocks=[block],
+    )
+
+    payload = build_document_render_payload(document)
+
+    assert payload["blocks"][0]["runs"][0]["url"] == "https://example.com/docs"
+
 def test_build_document_render_payload_keeps_default_metadata_fields():
     document = DocumentModel(
         document_id="doc-1",
@@ -707,6 +726,12 @@ def test_build_document_render_payload_omits_none_in_page_template_runs():
     runs = payload["blocks"][0]["data"]["sections"][0]["entries"][0]["details"][0]["runs"]
 
     assert all("color" not in run for run in runs)
+    assert all("url" not in run for run in runs)
+
+
+def test_paragraph_run_rejects_invalid_hyperlink_url():
+    with pytest.raises(ValidationError, match="http, https, or mailto"):
+        ParagraphRun(text="错误链接", url="javascript:alert(1)")
 
 def test_build_document_render_payload_omits_unset_heading_bottom_border():
     document = DocumentModel(

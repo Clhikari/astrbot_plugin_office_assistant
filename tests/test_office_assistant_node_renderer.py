@@ -1235,6 +1235,35 @@ def test_node_renderer_uses_font_name_for_heading_and_table_when_specific_fonts_
     assert _run_font_attr(body.runs[0], "eastAsia") == "Source Han Sans SC"
 
 
+def test_node_renderer_supports_hyperlink_runs(workspace_root: Path):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-hyperlink-runs",
+        {
+            "document_id": "node-hyperlink-runs",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [
+                {
+                    "type": "paragraph",
+                    "runs": [
+                        {"text": "文档说明："},
+                        {"text": "查看在线版本", "url": "https://example.com/docs"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    paragraph = _find_paragraph(loaded_doc, "文档说明：查看在线版本")
+
+    assert paragraph.text == "文档说明：查看在线版本"
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+        rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert "w:hyperlink" in document_xml
+    assert "https://example.com/docs" in rels_xml
+
+
 def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_box(
     workspace_root: Path,
 ):
@@ -2263,6 +2292,36 @@ async def test_node_document_toolset_supports_horizontal_merge_and_page_number_f
     assert "PAGE" in loaded_doc.sections[1].footer._element.xml
 
 
+@pytest.mark.asyncio
+async def test_node_document_toolset_supports_hyperlink_runs(workspace_root: Path):
+    loaded_doc, exported_path = await _export_docx_via_node_toolset(
+        workspace_root,
+        "pytest-node-toolset-hyperlink-runs",
+        create_kwargs={
+            "title": "超链接样例",
+            "output_name": "hyperlink-runs.docx",
+        },
+        blocks=[
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "参考资料："},
+                    {"text": "产品文档", "url": "https://example.com/product"},
+                ],
+            }
+        ],
+    )
+
+    paragraph = _find_paragraph(loaded_doc, "参考资料：产品文档")
+
+    assert paragraph.text == "参考资料：产品文档"
+    with zipfile.ZipFile(exported_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+        rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert "w:hyperlink" in document_xml
+    assert "https://example.com/product" in rels_xml
+
+
 def test_node_renderer_rejects_horizontal_merge_overlapping_vertical_merge(
     workspace_root: Path,
 ):
@@ -2558,6 +2617,54 @@ def test_node_renderer_rejects_invalid_page_number_format(workspace_root: Path):
     error_payload = json.loads(completed.stderr)
     assert error_payload["code"] == "PAGE_NUMBER_FORMAT_INVALID"
     assert "page_number_format" in error_payload["message"]
+
+
+def test_node_renderer_rejects_invalid_hyperlink_url(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-invalid-hyperlink-url",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "invalid-hyperlink-url.docx"
+    payload_path = workspace_dir / "invalid-hyperlink-url.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "invalid-hyperlink-url",
+                "metadata": _business_report_metadata(title="非法链接"),
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "runs": [
+                            {
+                                "text": "点击这里",
+                                "url": "javascript:alert(1)",
+                            }
+                        ],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "HYPERLINK_URL_INVALID"
+    assert "http, https, or mailto" in error_payload["message"]
 
 
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):

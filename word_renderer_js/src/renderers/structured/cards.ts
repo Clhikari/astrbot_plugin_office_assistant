@@ -101,7 +101,7 @@ export function renderAccentBox(
       content.push(
         new Paragraph({
           spacing: { after: useStripLayout ? 20 : 60 },
-          children: normalized.runs,
+          children: normalized.children,
         }),
       );
     }

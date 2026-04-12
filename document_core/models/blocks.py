@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -232,11 +233,17 @@ class ParagraphRun(BaseModel):
     underline: bool = False
     code: bool = False
     color: str | None = None
+    url: str | None = None
 
     @field_validator("color")
     @classmethod
     def validate_color(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        return normalize_optional_hyperlink_url(value)
 
 
 class ParagraphBlock(BlockBase):
@@ -307,6 +314,22 @@ def normalize_optional_hex_color(value: str | None) -> str | None:
         return None
     if len(candidate) != 6 or any(char not in "0123456789ABCDEF" for char in candidate):
         raise ValueError("must be a 6-digit hex color")
+    return candidate
+
+
+def normalize_optional_hyperlink_url(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+
+    parsed = urlparse(candidate)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https", "mailto"}:
+        raise ValueError("url must use http, https, or mailto")
+    if scheme in {"http", "https"} and not parsed.netloc:
+        raise ValueError("url must use http, https, or mailto")
+    if scheme == "mailto" and not parsed.path:
+        raise ValueError("url must use http, https, or mailto")
     return candidate
 
 
