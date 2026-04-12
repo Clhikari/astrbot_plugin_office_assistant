@@ -585,6 +585,11 @@ class AddBlocksTool(DocumentToolBase):
                                                         "minimum": 1,
                                                         "description": "Optional row span for vertically merged body cells.",
                                                     },
+                                                    "col_span": {
+                                                        "type": "integer",
+                                                        "minimum": 1,
+                                                        "description": "Optional column span for horizontally merged body cells.",
+                                                    },
                                                     "fill": {
                                                         "type": "string",
                                                         "description": "Optional 6-digit hex fill color for this body cell.",

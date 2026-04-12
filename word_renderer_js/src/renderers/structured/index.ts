@@ -59,6 +59,14 @@ import {
 } from "./utils";
 import { buildBusinessReviewFooterNote } from "./page-templates/business-review-cover";
 
+const SUPPORTED_PAGE_NUMBER_FORMATS = new Set([
+  "decimal",
+  "upperRoman",
+  "lowerRoman",
+  "upperLetter",
+  "lowerLetter",
+]);
+
 export async function renderStructuredDocument(
   payload: DocumentRenderPayload,
   outputPath: string,
@@ -333,6 +341,7 @@ function buildClearedHeaderFooterOverride(
     header_text: "",
     footer_text: "",
     show_page_number: false,
+    page_number_format: "",
   };
   if (usesFirstPageVariants(inheritedHeaderFooter)) {
     cleared.different_first_page = true;
@@ -371,12 +380,25 @@ function buildSection(
     margin: buildPageMargins(section.margins, theme),
   };
   const orientation = mapPageOrientation(section.pageOrientation);
+  const pageNumberFormat = stringValue(section.headerFooter.page_number_format);
+  if (
+    pageNumberFormat &&
+    !SUPPORTED_PAGE_NUMBER_FORMATS.has(pageNumberFormat)
+  ) {
+    throw new RenderCliError(
+      "PAGE_NUMBER_FORMAT_INVALID",
+      `Unsupported page_number_format: ${pageNumberFormat}`,
+    );
+  }
   if (orientation) {
     page.size = { orientation };
   }
-  if (section.restartPageNumbering) {
+  if (section.restartPageNumbering || pageNumberFormat) {
     page.pageNumbers = {
-      start: section.pageNumberStart ?? 1,
+      ...(section.restartPageNumbering
+        ? { start: section.pageNumberStart ?? 1 }
+        : {}),
+      ...(pageNumberFormat ? { formatType: pageNumberFormat } : {}),
     };
   }
   properties.page = page;

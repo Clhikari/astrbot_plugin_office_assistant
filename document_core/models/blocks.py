@@ -28,6 +28,13 @@ class BlockStyle(BaseModel):
 
 
 PageNumberAlignment = Literal["left", "center", "right"]
+PageNumberFormat = Literal[
+    "decimal",
+    "upperRoman",
+    "lowerRoman",
+    "upperLetter",
+    "lowerLetter",
+]
 PageOrientation = Literal["portrait", "landscape"]
 
 
@@ -74,6 +81,7 @@ class HeaderFooterConfig(BaseModel):
     even_page_show_page_number: bool | None = None
     show_page_number: bool | None = None
     page_number_align: PageNumberAlignment = "right"
+    page_number_format: PageNumberFormat | None = None
 
     @field_validator("header_border_color", "footer_border_color")
     @classmethod
@@ -307,6 +315,7 @@ class TableCell(BaseModel):
 
     text: str = ""
     row_span: int = Field(default=1, ge=1)
+    col_span: int = Field(default=1, ge=1)
     fill: str | None = None
     text_color: str | None = None
     bold: bool | None = None
@@ -318,6 +327,12 @@ class TableCell(BaseModel):
     def validate_optional_colors(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
 
+    @model_validator(mode="after")
+    def validate_merge_spans(self) -> TableCell:
+        if self.row_span > 1 and self.col_span > 1:
+            raise ValueError("table cell cannot combine row_span and col_span")
+        return self
+
 
 def resolve_table_cell_text(value: str | TableCell) -> str:
     return value if isinstance(value, str) else value.text
@@ -327,10 +342,14 @@ def resolve_table_cell_row_span(value: str | TableCell) -> int:
     return 1 if isinstance(value, str) else value.row_span
 
 
+def resolve_table_cell_col_span(value: str | TableCell) -> int:
+    return 1 if isinstance(value, str) else value.col_span
+
+
 def is_empty_table_cell_placeholder(value: str | TableCell) -> bool:
     if isinstance(value, str):
         return value.strip() == ""
-    return value.row_span == 1 and value.text.strip() == ""
+    return value.row_span == 1 and value.col_span == 1 and value.text.strip() == ""
 
 
 def _resolve_table_body_column_count(
@@ -362,12 +381,28 @@ def _resolve_table_body_column_count(
                 active_spans.append(0)
                 next_active_spans.append(0)
             row_span = resolve_table_cell_row_span(cell)
-            if row_span > 1:
-                next_active_spans[column_index] = max(
-                    next_active_spans[column_index],
-                    row_span - 1,
+            col_span = resolve_table_cell_col_span(cell)
+            if explicit_column_count is not None and (
+                column_index + col_span > explicit_column_count
+            ):
+                raise ValueError(
+                    f"table row {row_index} exceeds column count ({explicit_column_count})"
                 )
-            column_index += 1
+            while len(active_spans) < column_index + col_span:
+                active_spans.append(0)
+                next_active_spans.append(0)
+            if any(
+                active_spans[span_index] > 0
+                for span_index in range(column_index, column_index + col_span)
+            ):
+                raise ValueError(f"table row {row_index} overlaps active row spans")
+            if row_span > 1:
+                for span_index in range(column_index, column_index + col_span):
+                    next_active_spans[span_index] = max(
+                        next_active_spans[span_index],
+                        row_span - 1,
+                    )
+            column_index += col_span
         while column_index < len(active_spans) and active_spans[column_index] > 0:
             column_index += 1
         if explicit_column_count is not None and column_index < explicit_column_count:

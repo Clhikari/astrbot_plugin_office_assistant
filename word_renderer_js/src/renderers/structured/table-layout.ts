@@ -54,8 +54,9 @@ export function buildTableBodyRows(
     const rowItems = arrayValue(row);
     const children: TableCell[] = [];
     let rowCursor = 0;
+    let columnIndex = 0;
 
-    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+    while (columnIndex < columnCount) {
       if (pendingRowSpans[columnIndex] > 0) {
         if (isPlaceholderCell(rowItems[rowCursor])) {
           rowCursor += 1;
@@ -68,6 +69,7 @@ export function buildTableBodyRows(
           }),
         );
         pendingRowSpans[columnIndex] -= 1;
+        columnIndex += 1;
         continue;
       }
 
@@ -81,8 +83,24 @@ export function buildTableBodyRows(
       rowCursor += 1;
 
       const cell = normalizeTableCell(rawCell);
+      if (columnIndex + cell.colSpan > columnCount) {
+        throw new RenderCliError(
+          "TABLE_ROW_SHAPE_INVALID",
+          `Table row exceeds logical column count (${columnCount})`,
+        );
+      }
+      for (let spanIndex = 0; spanIndex < cell.colSpan; spanIndex += 1) {
+        if (pendingRowSpans[columnIndex + spanIndex] > 0) {
+          throw new RenderCliError(
+            "TABLE_ROW_SHAPE_INVALID",
+            `Table row ${rowIndex + 1} overlaps active row spans`,
+          );
+        }
+      }
       if (cell.rowSpan > 1) {
-        pendingRowSpans[columnIndex] = cell.rowSpan - 1;
+        for (let spanIndex = 0; spanIndex < cell.colSpan; spanIndex += 1) {
+          pendingRowSpans[columnIndex + spanIndex] = cell.rowSpan - 1;
+        }
       }
 
       const fill =
@@ -92,7 +110,8 @@ export function buildTableBodyRows(
 
       children.push(
         new TableCell({
-          width: resolveTableCellWidth(columnWidths, columnIndex),
+          width: resolveTableCellWidth(columnWidths, columnIndex, cell.colSpan),
+          columnSpan: cell.colSpan > 1 ? cell.colSpan : undefined,
           children: [
             new Paragraph({
               alignment:
@@ -130,6 +149,7 @@ export function buildTableBodyRows(
             : undefined,
         }),
       );
+      columnIndex += cell.colSpan;
     }
 
     while (rowCursor < rowItems.length && isPlaceholderCell(rowItems[rowCursor])) {
@@ -154,12 +174,32 @@ export function buildTableBodyRows(
 
 export function normalizeTableCell(cell: unknown): TableCellValue {
   if (typeof cell === "string") {
-    return { text: cell, rowSpan: 1 };
+    return { text: cell, rowSpan: 1, colSpan: 1 };
   }
   const obj = asObject(cell);
+  const rowSpan = numberValue(obj.row_span) ?? 1;
+  const colSpan = numberValue(obj.col_span) ?? 1;
+  if (
+    !Number.isInteger(rowSpan) ||
+    !Number.isInteger(colSpan) ||
+    rowSpan < 1 ||
+    colSpan < 1
+  ) {
+    throw new RenderCliError(
+      "TABLE_CELL_SPAN_INVALID",
+      "Table cell spans must be integers greater than or equal to 1",
+    );
+  }
+  if (rowSpan > 1 && colSpan > 1) {
+    throw new RenderCliError(
+      "TABLE_CELL_SPAN_INVALID",
+      "Table cell cannot combine row_span and col_span",
+    );
+  }
   return {
     text: stringValue(obj.text),
-    rowSpan: numberValue(obj.row_span) ?? 1,
+    rowSpan,
+    colSpan,
     fill: stringValue(obj.fill) || undefined,
     textColor: stringValue(obj.text_color) || undefined,
     bold: booleanValue(obj.bold),
@@ -251,11 +291,21 @@ function resolveBodyColumnCount(rows: unknown[]): number {
       }
 
       const normalized = normalizeTableCell(cell);
+      const colSpan = normalized.colSpan;
       if (normalized.rowSpan > 1) {
-        nextSpans[colIdx] = Math.max(nextSpans[colIdx], normalized.rowSpan - 1);
+        while (activeSpans.length < colIdx + colSpan) {
+          activeSpans.push(0);
+          nextSpans.push(0);
+        }
+        for (let spanIndex = 0; spanIndex < colSpan; spanIndex += 1) {
+          nextSpans[colIdx + spanIndex] = Math.max(
+            nextSpans[colIdx + spanIndex],
+            normalized.rowSpan - 1,
+          );
+        }
       }
 
-      colIdx += 1;
+      colIdx += colSpan;
       itemIdx += 1;
     }
 
@@ -309,7 +359,11 @@ function isPlaceholderCell(cell: unknown): boolean {
     return false;
   }
   const obj = asObject(cell);
-  return stringValue(obj.text) === "" && (numberValue(obj.row_span) ?? 1) === 1;
+  return (
+    stringValue(obj.text) === "" &&
+    (numberValue(obj.row_span) ?? 1) === 1 &&
+    (numberValue(obj.col_span) ?? 1) === 1
+  );
 }
 
 type ColumnMetric = {
@@ -410,13 +464,15 @@ function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[]
   for (const row of rows.slice(0, MAX_COLUMN_INFERENCE_SAMPLE_ROWS)) {
     const rowItems = arrayValue(row);
     let rowCursor = 0;
+    let columnIndex = 0;
 
-    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+    while (columnIndex < columnCount) {
       if (pendingRowSpans[columnIndex] > 0) {
         if (isPlaceholderCell(rowItems[rowCursor])) {
           rowCursor += 1;
         }
         pendingRowSpans[columnIndex] -= 1;
+        columnIndex += 1;
         continue;
       }
 
@@ -427,23 +483,45 @@ function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[]
       rowCursor += 1;
 
       const cell = normalizeTableCell(rawCell);
+      if (columnIndex + cell.colSpan > columnCount) {
+        throw new RenderCliError(
+          "TABLE_ROW_SHAPE_INVALID",
+          `Table row exceeds logical column count (${columnCount})`,
+        );
+      }
+      for (let spanIndex = 0; spanIndex < cell.colSpan; spanIndex += 1) {
+        if (pendingRowSpans[columnIndex + spanIndex] > 0) {
+          throw new RenderCliError(
+            "TABLE_ROW_SHAPE_INVALID",
+            "Table row overlaps active row spans during width inference",
+          );
+        }
+      }
+      const colSpan = cell.colSpan;
       if (cell.rowSpan > 1) {
-        pendingRowSpans[columnIndex] = cell.rowSpan - 1;
+        for (let spanIndex = 0; spanIndex < colSpan; spanIndex += 1) {
+          pendingRowSpans[columnIndex + spanIndex] = cell.rowSpan - 1;
+        }
       }
 
       const text = cell.text.trim();
       if (!text) {
+        columnIndex += colSpan;
         continue;
       }
 
-      metrics[columnIndex].maxUnits = Math.max(
-        metrics[columnIndex].maxUnits,
-        measureTextUnits(text),
-      );
-      metrics[columnIndex].sampleCount += 1;
-      if (isNumericLike(text)) {
-        metrics[columnIndex].numericLikeCount += 1;
+      const measuredUnits = Math.max(measureTextUnits(text) / colSpan, 1.2);
+      for (let spanIndex = 0; spanIndex < colSpan; spanIndex += 1) {
+        metrics[columnIndex + spanIndex].maxUnits = Math.max(
+          metrics[columnIndex + spanIndex].maxUnits,
+          measuredUnits,
+        );
+        metrics[columnIndex + spanIndex].sampleCount += 1;
+        if (colSpan === 1 && isNumericLike(text)) {
+          metrics[columnIndex + spanIndex].numericLikeCount += 1;
+        }
       }
+      columnIndex += colSpan;
     }
   }
 

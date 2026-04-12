@@ -124,6 +124,17 @@ _HEADER_FOOTER_SCHEMA_PROPERTIES = {
         "enum": ["left", "center", "right"],
         "description": "Paragraph alignment used for the footer page number field.",
     },
+    "page_number_format": {
+        "type": "string",
+        "enum": [
+            "decimal",
+            "upperRoman",
+            "lowerRoman",
+            "upperLetter",
+            "lowerLetter",
+        ],
+        "description": "Optional page number format for this section, such as upperRoman.",
+    },
 }
 
 

@@ -140,6 +140,13 @@ def test_create_document_tool_schema_exposes_document_style():
     assert header_footer["even_page_show_page_number"]["type"] == "boolean"
     assert header_footer["show_page_number"]["type"] == "boolean"
     assert header_footer["page_number_align"]["enum"] == ["left", "center", "right"]
+    assert header_footer["page_number_format"]["enum"] == [
+        "decimal",
+        "upperRoman",
+        "lowerRoman",
+        "upperLetter",
+        "lowerLetter",
+    ]
     assert document_style["brief"]["type"] == "string"
     assert document_style["heading_color"]["type"] == "string"
     assert document_style["heading_level_1_color"]["type"] == "string"
@@ -293,6 +300,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     ]
     assert row_cell_properties["text"]["type"] == "string"
     assert row_cell_properties["row_span"]["minimum"] == 1
+    assert row_cell_properties["col_span"]["minimum"] == 1
     assert row_cell_properties["fill"]["type"] == "string"
     assert row_cell_properties["text_color"]["type"] == "string"
     assert row_cell_properties["bold"]["type"] == "boolean"
@@ -376,6 +384,7 @@ def test_create_document_request_accepts_header_footer_defaults():
             "even_page_show_page_number": False,
             "show_page_number": True,
             "page_number_align": "center",
+            "page_number_format": "upperRoman",
         },
     )
 
@@ -399,6 +408,7 @@ def test_create_document_request_accepts_header_footer_defaults():
     assert request.header_footer.even_page_show_page_number is False
     assert request.header_footer.show_page_number is True
     assert request.header_footer.page_number_align == "center"
+    assert request.header_footer.page_number_format == "upperRoman"
 
 def test_section_break_block_rejects_page_number_start_without_restart():
     with pytest.raises(
@@ -1173,6 +1183,87 @@ def test_add_table_request_supports_vertical_merge_cells():
     assert request.rows[0][0].row_span == 2
     assert request.header_fill_enabled is False
     assert request.header_bold is False
+
+
+def test_add_table_request_supports_horizontal_merge_cells():
+    request = AddTableRequest(
+        document_id="doc-1",
+        headers=["季度", "营收", "利润", "备注"],
+        rows=[
+            [
+                {"text": "Q1 汇总", "col_span": 2},
+                "18%",
+                "达成",
+            ],
+        ],
+    )
+
+    assert request.rows[0][0].col_span == 2
+
+
+def test_add_table_request_rejects_non_positive_col_span():
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["季度", "营收", "利润", "备注"],
+            rows=[
+                [
+                    {"text": "Q1 汇总", "col_span": 0},
+                    "18%",
+                    "达成",
+                ],
+            ],
+        )
+
+
+def test_add_table_request_rejects_combined_row_and_column_spans():
+    with pytest.raises(
+        ValidationError,
+        match="table cell cannot combine row_span and col_span",
+    ):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["季度", "营收", "备注"],
+            rows=[
+                [
+                    {"text": "Q1", "row_span": 2, "col_span": 2},
+                    "达成",
+                ],
+            ],
+        )
+
+
+def test_add_table_request_rejects_horizontal_merge_overlapping_vertical_merge():
+    with pytest.raises(
+        ValidationError,
+        match="table row 2 overlaps active row spans",
+    ):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["分类", "区域", "完成率"],
+            rows=[
+                ["单体", {"text": "上海", "row_span": 2}, "108%"],
+                [{"text": "汇总", "col_span": 2}, "达成"],
+            ],
+        )
+
+
+def test_add_table_request_rejects_horizontal_merge_exceeding_column_count():
+    with pytest.raises(
+        ValidationError,
+        match="table row 1 exceeds column count",
+    ):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["季度", "营收", "利润", "备注"],
+            rows=[
+                [
+                    {"text": "Q1 汇总", "col_span": 3},
+                    "18%",
+                    "达成",
+                ],
+            ],
+        )
 
 def test_add_table_request_accepts_empty_placeholder_cells_for_vertical_merge_rows():
     request = AddTableRequest(
