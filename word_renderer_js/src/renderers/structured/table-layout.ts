@@ -179,7 +179,12 @@ export function normalizeTableCell(cell: unknown): TableCellValue {
   const obj = asObject(cell);
   const rowSpan = numberValue(obj.row_span) ?? 1;
   const colSpan = numberValue(obj.col_span) ?? 1;
-  if (rowSpan < 1 || colSpan < 1) {
+  if (
+    !Number.isInteger(rowSpan) ||
+    !Number.isInteger(colSpan) ||
+    rowSpan < 1 ||
+    colSpan < 1
+  ) {
     throw new RenderCliError(
       "TABLE_CELL_SPAN_INVALID",
       "Table cell spans must be integers greater than or equal to 1",
@@ -478,7 +483,21 @@ function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[]
       rowCursor += 1;
 
       const cell = normalizeTableCell(rawCell);
-      const colSpan = Math.min(cell.colSpan, columnCount - columnIndex);
+      if (columnIndex + cell.colSpan > columnCount) {
+        throw new RenderCliError(
+          "TABLE_ROW_SHAPE_INVALID",
+          `Table row exceeds logical column count (${columnCount})`,
+        );
+      }
+      for (let spanIndex = 0; spanIndex < cell.colSpan; spanIndex += 1) {
+        if (pendingRowSpans[columnIndex + spanIndex] > 0) {
+          throw new RenderCliError(
+            "TABLE_ROW_SHAPE_INVALID",
+            "Table row overlaps active row spans during width inference",
+          );
+        }
+      }
+      const colSpan = cell.colSpan;
       if (cell.rowSpan > 1) {
         for (let spanIndex = 0; spanIndex < colSpan; spanIndex += 1) {
           pendingRowSpans[columnIndex + spanIndex] = cell.rowSpan - 1;

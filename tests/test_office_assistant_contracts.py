@@ -1201,6 +1201,21 @@ def test_add_table_request_supports_horizontal_merge_cells():
     assert request.rows[0][0].col_span == 2
 
 
+def test_add_table_request_rejects_non_positive_col_span():
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["季度", "营收", "利润", "备注"],
+            rows=[
+                [
+                    {"text": "Q1 汇总", "col_span": 0},
+                    "18%",
+                    "达成",
+                ],
+            ],
+        )
+
+
 def test_add_table_request_rejects_combined_row_and_column_spans():
     with pytest.raises(
         ValidationError,
@@ -1229,6 +1244,24 @@ def test_add_table_request_rejects_horizontal_merge_overlapping_vertical_merge()
             rows=[
                 ["单体", {"text": "上海", "row_span": 2}, "108%"],
                 [{"text": "汇总", "col_span": 2}, "达成"],
+            ],
+        )
+
+
+def test_add_table_request_rejects_horizontal_merge_exceeding_column_count():
+    with pytest.raises(
+        ValidationError,
+        match="table row 1 exceeds column count",
+    ):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["季度", "营收", "利润", "备注"],
+            rows=[
+                [
+                    {"text": "Q1 汇总", "col_span": 3},
+                    "18%",
+                    "达成",
+                ],
             ],
         )
 

@@ -2312,6 +2312,107 @@ def test_node_renderer_rejects_horizontal_merge_overlapping_vertical_merge(
     assert "overlaps active row spans" in error_payload["message"]
 
 
+def test_node_renderer_rejects_horizontal_merge_exceeding_column_count(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-colspan-exceeds-column-count",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "colspan-exceeds-column-count.docx"
+    payload_path = workspace_dir / "colspan-exceeds-column-count.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "colspan-exceeds-column-count",
+                "metadata": _business_report_metadata(title="列合并越界"),
+                "blocks": [
+                    {
+                        "type": "table",
+                        "headers": ["H1", "H2", "H3"],
+                        "rows": [
+                            [
+                                {"text": "A", "col_span": 2},
+                                {"text": "B", "col_span": 2},
+                            ],
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "TABLE_ROW_SHAPE_INVALID"
+    assert "exceeds logical column count" in error_payload["message"]
+
+
+def test_node_renderer_rejects_non_integer_col_span(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-non-integer-colspan",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "non-integer-colspan.docx"
+    payload_path = workspace_dir / "non-integer-colspan.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "non-integer-colspan",
+                "metadata": _business_report_metadata(title="非法列跨度"),
+                "blocks": [
+                    {
+                        "type": "table",
+                        "headers": ["H1", "H2", "H3"],
+                        "rows": [
+                            [
+                                {"text": "A", "col_span": 1.5},
+                                "B",
+                                "C",
+                            ],
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "TABLE_CELL_SPAN_INVALID"
+    assert "integers greater than or equal to 1" in error_payload["message"]
+
+
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
     docx = pytest.importorskip("docx")
 
