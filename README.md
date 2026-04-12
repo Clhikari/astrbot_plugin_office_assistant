@@ -8,7 +8,7 @@
 
 **让你的聊天bot能够生成office文件**
 
-[![Version](https://img.shields.io/badge/version-v1.6.0-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
+[![Version](https://img.shields.io/badge/version-v1.6.1-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-18%2B-5FA04E.svg)](https://nodejs.org/)
 
@@ -320,7 +320,7 @@ word_renderer_js/dist/cli.js
 分节：
 
 - `section_break` 支持 `new_page`、`continuous`、`odd_page`、`even_page`、`new_column`
-- 节级可覆盖页面方向、页边距、页码起始值和页眉页脚
+- 节级可覆盖页面方向、页边距、页码起始值、页码格式和页眉页脚
 
 目录：
 
@@ -355,11 +355,11 @@ Word 功能尽量做全，再考虑 Excel 和 PPT。
 
 ### Word
 
-- [ ] 合并单元格和简单的跨列表头
+- [x] 合并单元格和简单的跨列表头
 - [ ] 局部字体/颜色/边框自由编辑
 - [ ] 脚注/尾注
 - [ ] 超链接
-- [ ] 页码格式（罗马数字等）
+- [x] 页码格式（罗马数字等）
 
 ### Excel
 
