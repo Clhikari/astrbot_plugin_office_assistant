@@ -1217,6 +1217,21 @@ def test_add_table_request_rejects_combined_row_and_column_spans():
             ],
         )
 
+
+def test_add_table_request_rejects_horizontal_merge_overlapping_vertical_merge():
+    with pytest.raises(
+        ValidationError,
+        match="table row 2 overlaps active row spans",
+    ):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["分类", "区域", "完成率"],
+            rows=[
+                ["单体", {"text": "上海", "row_span": 2}, "108%"],
+                [{"text": "汇总", "col_span": 2}, "达成"],
+            ],
+        )
+
 def test_add_table_request_accepts_empty_placeholder_cells_for_vertical_merge_rows():
     request = AddTableRequest(
         document_id="doc-1",

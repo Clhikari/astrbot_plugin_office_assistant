@@ -391,6 +391,11 @@ def _resolve_table_body_column_count(
             while len(active_spans) < column_index + col_span:
                 active_spans.append(0)
                 next_active_spans.append(0)
+            if any(
+                active_spans[span_index] > 0
+                for span_index in range(column_index, column_index + col_span)
+            ):
+                raise ValueError(f"table row {row_index} overlaps active row spans")
             if row_span > 1:
                 for span_index in range(column_index, column_index + col_span):
                     next_active_spans[span_index] = max(

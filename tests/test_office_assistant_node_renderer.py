@@ -2263,6 +2263,55 @@ async def test_node_document_toolset_supports_horizontal_merge_and_page_number_f
     assert "PAGE" in loaded_doc.sections[1].footer._element.xml
 
 
+def test_node_renderer_rejects_horizontal_merge_overlapping_vertical_merge(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-overlapping-merge",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "overlapping-merge.docx"
+    payload_path = workspace_dir / "overlapping-merge.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "overlapping-merge",
+                "metadata": _business_report_metadata(title="重叠合并"),
+                "blocks": [
+                    {
+                        "type": "table",
+                        "headers": ["分类", "区域", "完成率"],
+                        "rows": [
+                            ["单体", {"text": "上海", "row_span": 2}, "108%"],
+                            [{"text": "汇总", "col_span": 2}, "达成"],
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "TABLE_ROW_SHAPE_INVALID"
+    assert "overlaps active row spans" in error_payload["message"]
+
+
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
     docx = pytest.importorskip("docx")
 

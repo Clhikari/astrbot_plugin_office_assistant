@@ -89,6 +89,14 @@ export function buildTableBodyRows(
           `Table row exceeds logical column count (${columnCount})`,
         );
       }
+      for (let spanIndex = 0; spanIndex < cell.colSpan; spanIndex += 1) {
+        if (pendingRowSpans[columnIndex + spanIndex] > 0) {
+          throw new RenderCliError(
+            "TABLE_ROW_SHAPE_INVALID",
+            `Table row ${rowIndex + 1} overlaps active row spans`,
+          );
+        }
+      }
       if (cell.rowSpan > 1) {
         for (let spanIndex = 0; spanIndex < cell.colSpan; spanIndex += 1) {
           pendingRowSpans[columnIndex + spanIndex] = cell.rowSpan - 1;
