@@ -59,6 +59,14 @@ import {
 } from "./utils";
 import { buildBusinessReviewFooterNote } from "./page-templates/business-review-cover";
 
+const SUPPORTED_PAGE_NUMBER_FORMATS = new Set([
+  "decimal",
+  "upperRoman",
+  "lowerRoman",
+  "upperLetter",
+  "lowerLetter",
+]);
+
 export async function renderStructuredDocument(
   payload: DocumentRenderPayload,
   outputPath: string,
@@ -373,6 +381,15 @@ function buildSection(
   };
   const orientation = mapPageOrientation(section.pageOrientation);
   const pageNumberFormat = stringValue(section.headerFooter.page_number_format);
+  if (
+    pageNumberFormat &&
+    !SUPPORTED_PAGE_NUMBER_FORMATS.has(pageNumberFormat)
+  ) {
+    throw new RenderCliError(
+      "PAGE_NUMBER_FORMAT_INVALID",
+      `Unsupported page_number_format: ${pageNumberFormat}`,
+    );
+  }
   if (orientation) {
     page.size = { orientation };
   }

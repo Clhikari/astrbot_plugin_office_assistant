@@ -2465,6 +2465,101 @@ def test_node_renderer_rejects_non_positive_col_span(workspace_root: Path):
         assert "integers greater than or equal to 1" in error_payload["message"]
 
 
+def test_node_renderer_rejects_combined_row_and_column_spans(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-combined-spans",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "combined-spans.docx"
+    payload_path = workspace_dir / "combined-spans.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "combined-spans",
+                "metadata": _business_report_metadata(title="非法合并跨度"),
+                "blocks": [
+                    {
+                        "type": "table",
+                        "headers": ["H1", "H2", "H3"],
+                        "rows": [
+                            [
+                                {"text": "A", "row_span": 2, "col_span": 2},
+                                "B",
+                            ],
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "TABLE_CELL_SPAN_INVALID"
+    assert "row_span and col_span" in error_payload["message"]
+
+
+def test_node_renderer_rejects_invalid_page_number_format(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-invalid-page-number-format",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "invalid-page-number-format.docx"
+    payload_path = workspace_dir / "invalid-page-number-format.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "invalid-page-number-format",
+                "metadata": _business_report_metadata(
+                    title="非法页码格式",
+                    header_footer={
+                        "show_page_number": True,
+                        "page_number_format": "badfmt",
+                    },
+                ),
+                "blocks": [
+                    {"type": "paragraph", "text": "正文"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "PAGE_NUMBER_FORMAT_INVALID"
+    assert "page_number_format" in error_payload["message"]
+
+
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
     docx = pytest.importorskip("docx")
 
