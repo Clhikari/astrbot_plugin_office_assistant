@@ -2756,6 +2756,66 @@ def test_node_renderer_rejects_invalid_hyperlink_url(
     assert invalid_url in error_payload["message"]
 
 
+@pytest.mark.parametrize(
+    ("invalid_url", "expected_fragment"),
+    [
+        (123, "123"),
+        ({"href": "https://example.com"}, '"href"'),
+        (None, "null"),
+    ],
+)
+def test_node_renderer_rejects_non_string_hyperlink_url(
+    workspace_root: Path,
+    invalid_url,
+    expected_fragment: str,
+):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-non-string-hyperlink-url",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "non-string-hyperlink-url.docx"
+    payload_path = workspace_dir / "non-string-hyperlink-url.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "non-string-hyperlink-url",
+                "metadata": _business_report_metadata(title="非法链接类型"),
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "runs": [
+                            {
+                                "text": "点击这里",
+                                "url": invalid_url,
+                            }
+                        ],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "HYPERLINK_URL_INVALID"
+    assert expected_fragment in error_payload["message"]
+
+
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
     docx = pytest.importorskip("docx")
 

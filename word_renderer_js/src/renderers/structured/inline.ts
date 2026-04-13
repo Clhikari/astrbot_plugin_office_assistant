@@ -92,8 +92,40 @@ function throwInvalidHyperlinkUrl(target: string): never {
   );
 }
 
+function formatHyperlinkTargetForError(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  if (value === null) {
+    return "null";
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch {
+    // Fall through to String(value) when JSON serialization fails.
+  }
+  return String(value);
+}
+
 function normalizeHyperlinkTarget(value: unknown): string | undefined {
-  const target = stringValue(value).trim();
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throwInvalidHyperlinkUrl(formatHyperlinkTargetForError(value));
+  }
+
+  const target = value.trim();
   if (!target) {
     return undefined;
   }
