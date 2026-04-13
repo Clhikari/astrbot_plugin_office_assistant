@@ -1331,7 +1331,13 @@ def test_node_renderer_normalizes_scheme_only_https_targets(workspace_root: Path
         rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
     rels_root = ET.fromstring(rels_xml)
     targets = [rel.attrib.get("Target", "") for rel in rels_root if rel.tag.endswith("Relationship")]
-    assert "https://example.com/" in targets
+    parsed_targets = [urlparse(target) for target in targets if target]
+    assert any(
+        parsed.scheme == "https"
+        and parsed.netloc == "example.com"
+        and (parsed.path or "/") == "/"
+        for parsed in parsed_targets
+    )
 
 
 def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_box(
@@ -2694,6 +2700,7 @@ def test_node_renderer_rejects_invalid_page_number_format(workspace_root: Path):
     [
         "javascript:alert(1)",
         "https://exa mple.com",
+        "ftp://example.com",
     ],
 )
 def test_node_renderer_rejects_invalid_hyperlink_url(

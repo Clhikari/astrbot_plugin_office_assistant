@@ -740,6 +740,7 @@ def test_build_document_render_payload_omits_none_in_page_template_runs():
     [
         "javascript:alert(1)",
         "https://exa mple.com",
+        "ftp://example.com",
     ],
 )
 def test_paragraph_run_rejects_invalid_hyperlink_url(url: str):
