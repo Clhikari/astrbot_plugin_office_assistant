@@ -649,7 +649,7 @@ def test_build_document_render_payload_preserves_hyperlink_run_urls():
 def test_paragraph_run_accepts_scheme_only_https_url():
     run = ParagraphRun(text="文档地址", url="https:example.com")
 
-    assert run.url == "https:example.com"
+    assert run.url == "https://example.com/"
 
 def test_build_document_render_payload_keeps_default_metadata_fields():
     document = DocumentModel(

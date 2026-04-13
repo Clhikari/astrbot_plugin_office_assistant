@@ -351,7 +351,7 @@ def normalize_optional_hyperlink_url(value: str | None) -> str | None:
         raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
     if scheme in HYPERLINK_SCHEMES_REQUIRING_AUTHORITY:
         try:
-            HTTP_URL_ADAPTER.validate_python(candidate)
+            return str(HTTP_URL_ADAPTER.validate_python(candidate))
         except PydanticValidationError as exc:
             raise ValueError(HYPERLINK_URL_ERROR_MESSAGE) from exc
     if scheme in HYPERLINK_SCHEMES_REQUIRING_PATH and not parsed.path:
