@@ -1305,6 +1305,35 @@ def test_node_renderer_emits_normalized_hyperlink_targets(workspace_root: Path):
     assert "https://example.com&#10;.evil.com" not in rels_xml
 
 
+def test_node_renderer_normalizes_scheme_only_https_targets(workspace_root: Path):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-scheme-only-hyperlink-runs",
+        {
+            "document_id": "node-scheme-only-hyperlink-runs",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [
+                {
+                    "type": "paragraph",
+                    "runs": [
+                        {"text": "链接："},
+                        {"text": "自动补全", "url": "https:example.com"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    paragraph = _find_paragraph(loaded_doc, "链接：自动补全")
+
+    assert paragraph.text == "链接：自动补全"
+    with zipfile.ZipFile(output_path) as archive:
+        rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    rels_root = ET.fromstring(rels_xml)
+    targets = [rel.attrib.get("Target", "") for rel in rels_root if rel.tag.endswith("Relationship")]
+    assert "https://example.com/" in targets
+
+
 def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_box(
     workspace_root: Path,
 ):

@@ -645,6 +645,12 @@ def test_build_document_render_payload_preserves_hyperlink_run_urls():
 
     assert payload["blocks"][0]["runs"][0]["url"] == "https://example.com/docs"
 
+
+def test_paragraph_run_accepts_scheme_only_https_url():
+    run = ParagraphRun(text="文档地址", url="https:example.com")
+
+    assert run.url == "https:example.com"
+
 def test_build_document_render_payload_keeps_default_metadata_fields():
     document = DocumentModel(
         document_id="doc-1",

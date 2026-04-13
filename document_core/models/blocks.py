@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -17,15 +15,11 @@ from pydantic import (
     model_validator,
 )
 
+from ...shared_contracts import load_json_contract
+
 
 HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
-_HYPERLINK_URL_CONTRACT = json.loads(
-    (
-        Path(__file__).resolve().parents[2]
-        / "shared_contracts"
-        / "hyperlink_url.json"
-    ).read_text(encoding="utf-8")
-)
+_HYPERLINK_URL_CONTRACT = load_json_contract("hyperlink_url.json")
 SUPPORTED_HYPERLINK_SCHEMES = tuple(_HYPERLINK_URL_CONTRACT["allowed_schemes"])
 HYPERLINK_SCHEMES_REQUIRING_AUTHORITY = frozenset(
     _HYPERLINK_URL_CONTRACT["schemes_requiring_authority"]
@@ -356,8 +350,6 @@ def normalize_optional_hyperlink_url(value: str | None) -> str | None:
     if scheme not in SUPPORTED_HYPERLINK_SCHEMES:
         raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
     if scheme in HYPERLINK_SCHEMES_REQUIRING_AUTHORITY:
-        if not parsed.netloc:
-            raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
         try:
             HTTP_URL_ADAPTER.validate_python(candidate)
         except PydanticValidationError as exc:

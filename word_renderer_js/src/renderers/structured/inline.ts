@@ -1,10 +1,8 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-
 import { ExternalHyperlink, ParagraphChild, TextRun } from "docx";
 
 import { JsonObject } from "../../core/payload";
 import { RenderCliError } from "../../core/errors";
+import { readSharedContract } from "../../core/shared-contracts";
 import { Block, RunDefaults, ThemeConfig } from "./types";
 import {
   arrayValue,
@@ -24,18 +22,8 @@ type HyperlinkUrlContract = {
   error_message: string;
 };
 
-const HYPERLINK_URL_CONTRACT_PATH = path.resolve(
-  __dirname,
-  "../../../../shared_contracts/hyperlink_url.json",
-);
-
-function readHyperlinkUrlContract(): HyperlinkUrlContract {
-  return JSON.parse(
-    fs.readFileSync(HYPERLINK_URL_CONTRACT_PATH, "utf8"),
-  ) as HyperlinkUrlContract;
-}
-
-const HYPERLINK_URL_CONTRACT = readHyperlinkUrlContract();
+const HYPERLINK_URL_CONTRACT =
+  readSharedContract<HyperlinkUrlContract>("hyperlink_url.json");
 const DEFAULT_HYPERLINK_COLOR = "0563C1";
 const SUPPORTED_HYPERLINK_PROTOCOLS = new Set(
   HYPERLINK_URL_CONTRACT.allowed_schemes.map((scheme) => `${scheme}:`),
