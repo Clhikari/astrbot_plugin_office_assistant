@@ -2701,6 +2701,7 @@ def test_node_renderer_rejects_invalid_page_number_format(workspace_root: Path):
         "javascript:alert(1)",
         "https://exa mple.com",
         "ftp://example.com",
+        "mailto:",
     ],
 )
 def test_node_renderer_rejects_invalid_hyperlink_url(
