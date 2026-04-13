@@ -1,8 +1,10 @@
 import json
 import subprocess
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlparse
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1291,7 +1293,15 @@ def test_node_renderer_emits_normalized_hyperlink_targets(workspace_root: Path):
     assert paragraph.text == "链接：归一化链接"
     with zipfile.ZipFile(output_path) as archive:
         rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
-    assert "https://example.com.evil.com/" in rels_xml
+    rels_root = ET.fromstring(rels_xml)
+    targets = [rel.attrib.get("Target", "") for rel in rels_root if rel.tag.endswith("Relationship")]
+    parsed_targets = [urlparse(target) for target in targets if target]
+    assert any(
+        parsed.scheme == "https"
+        and parsed.netloc == "example.com.evil.com"
+        and (parsed.path or "/") == "/"
+        for parsed in parsed_targets
+    )
     assert "https://example.com&#10;.evil.com" not in rels_xml
 
 
