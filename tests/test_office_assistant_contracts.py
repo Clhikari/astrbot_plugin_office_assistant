@@ -729,9 +729,16 @@ def test_build_document_render_payload_omits_none_in_page_template_runs():
     assert all("url" not in run for run in runs)
 
 
-def test_paragraph_run_rejects_invalid_hyperlink_url():
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript:alert(1)",
+        "https://exa mple.com",
+    ],
+)
+def test_paragraph_run_rejects_invalid_hyperlink_url(url: str):
     with pytest.raises(ValidationError, match="http, https, or mailto"):
-        ParagraphRun(text="错误链接", url="javascript:alert(1)")
+        ParagraphRun(text="错误链接", url=url)
 
 def test_build_document_render_payload_omits_unset_heading_bottom_border():
     document = DocumentModel(

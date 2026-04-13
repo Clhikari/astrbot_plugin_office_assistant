@@ -4,7 +4,19 @@ from typing import Annotated, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError as PydanticValidationError,
+    field_validator,
+    model_validator,
+)
+
+
+HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 
 
 class BlockLayout(BaseModel):
@@ -326,8 +338,13 @@ def normalize_optional_hyperlink_url(value: str | None) -> str | None:
     scheme = parsed.scheme.lower()
     if scheme not in {"http", "https", "mailto"}:
         raise ValueError("url must use http, https, or mailto")
-    if scheme in {"http", "https"} and not parsed.netloc:
-        raise ValueError("url must use http, https, or mailto")
+    if scheme in {"http", "https"}:
+        if not parsed.netloc:
+            raise ValueError("url must use http, https, or mailto")
+        try:
+            HTTP_URL_ADAPTER.validate_python(candidate)
+        except PydanticValidationError as exc:
+            raise ValueError("url must use http, https, or mailto") from exc
     if scheme == "mailto" and not parsed.path:
         raise ValueError("url must use http, https, or mailto")
     return candidate
