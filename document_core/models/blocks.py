@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError as PydanticValidationError,
+    field_validator,
+    model_validator,
+)
+
+from ...shared_contracts import load_json_contract
+
+
+HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+_HYPERLINK_URL_CONTRACT = load_json_contract("hyperlink_url.json")
+SUPPORTED_HYPERLINK_SCHEMES = tuple(_HYPERLINK_URL_CONTRACT["allowed_schemes"])
+HYPERLINK_SCHEMES_REQUIRING_AUTHORITY = frozenset(
+    _HYPERLINK_URL_CONTRACT["schemes_requiring_authority"]
+)
+HYPERLINK_SCHEMES_REQUIRING_PATH = frozenset(
+    _HYPERLINK_URL_CONTRACT["schemes_requiring_path"]
+)
+HYPERLINK_URL_ERROR_MESSAGE = str(_HYPERLINK_URL_CONTRACT["error_message"])
 
 
 class BlockLayout(BaseModel):
@@ -232,11 +256,17 @@ class ParagraphRun(BaseModel):
     underline: bool = False
     code: bool = False
     color: str | None = None
+    url: str | None = None
 
     @field_validator("color")
     @classmethod
     def validate_color(cls, value: str | None) -> str | None:
         return normalize_optional_hex_color(value)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        return normalize_optional_hyperlink_url(value)
 
 
 class ParagraphBlock(BlockBase):
@@ -307,6 +337,25 @@ def normalize_optional_hex_color(value: str | None) -> str | None:
         return None
     if len(candidate) != 6 or any(char not in "0123456789ABCDEF" for char in candidate):
         raise ValueError("must be a 6-digit hex color")
+    return candidate
+
+
+def normalize_optional_hyperlink_url(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+
+    parsed = urlparse(candidate)
+    scheme = parsed.scheme.lower()
+    if scheme not in SUPPORTED_HYPERLINK_SCHEMES:
+        raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
+    if scheme in HYPERLINK_SCHEMES_REQUIRING_AUTHORITY:
+        try:
+            return str(HTTP_URL_ADAPTER.validate_python(candidate))
+        except PydanticValidationError as exc:
+            raise ValueError(HYPERLINK_URL_ERROR_MESSAGE) from exc
+    if scheme in HYPERLINK_SCHEMES_REQUIRING_PATH and not parsed.path:
+        raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
     return candidate
 
 

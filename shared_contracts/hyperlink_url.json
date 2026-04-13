@@ -1,0 +1,6 @@
+{
+  "allowed_schemes": ["http", "https", "mailto"],
+  "schemes_requiring_authority": ["http", "https"],
+  "schemes_requiring_path": ["mailto"],
+  "error_message": "url must use http, https, or mailto"
+}

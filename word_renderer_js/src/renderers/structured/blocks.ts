@@ -285,7 +285,7 @@ export function renderList(
           size: halfPoint(bodyFontSize * (numberValue(style.font_scale) ?? 1)),
           font: buildFontAttributes(theme.fontName),
         }),
-        ...normalized.runs,
+        ...normalized.children,
       ],
       spacing: {
         before: point(numberValue(layout.spacing_before) ?? 0),
