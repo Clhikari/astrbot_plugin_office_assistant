@@ -17,6 +17,8 @@ from pydantic import (
 
 
 HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+SUPPORTED_HYPERLINK_SCHEMES = ("http", "https", "mailto")
+HYPERLINK_URL_ERROR_MESSAGE = "url must use http, https, or mailto"
 
 
 class BlockLayout(BaseModel):
@@ -336,17 +338,17 @@ def normalize_optional_hyperlink_url(value: str | None) -> str | None:
 
     parsed = urlparse(candidate)
     scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https", "mailto"}:
-        raise ValueError("url must use http, https, or mailto")
+    if scheme not in SUPPORTED_HYPERLINK_SCHEMES:
+        raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
     if scheme in {"http", "https"}:
         if not parsed.netloc:
-            raise ValueError("url must use http, https, or mailto")
+            raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
         try:
             HTTP_URL_ADAPTER.validate_python(candidate)
         except PydanticValidationError as exc:
-            raise ValueError("url must use http, https, or mailto") from exc
+            raise ValueError(HYPERLINK_URL_ERROR_MESSAGE) from exc
     if scheme == "mailto" and not parsed.path:
-        raise ValueError("url must use http, https, or mailto")
+        raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
     return candidate
 
 

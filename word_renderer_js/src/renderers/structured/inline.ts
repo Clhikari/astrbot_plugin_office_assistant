@@ -15,7 +15,11 @@ import {
 } from "./utils";
 
 const DEFAULT_HYPERLINK_COLOR = "0563C1";
+// Keep these rules aligned with document_core/models/blocks.py.
 const SUPPORTED_HYPERLINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+const HYPERLINK_URL_INVALID_CODE = "HYPERLINK_URL_INVALID";
+const HYPERLINK_URL_INVALID_MESSAGE =
+  "Hyperlink url must use http, https, or mailto";
 
 export function buildFontAttributes(fontName: string) {
   return {
@@ -63,6 +67,13 @@ function buildTextRuns(
   );
 }
 
+function throwInvalidHyperlinkUrl(target: string): never {
+  throw new RenderCliError(
+    HYPERLINK_URL_INVALID_CODE,
+    `${HYPERLINK_URL_INVALID_MESSAGE}: ${target}`,
+  );
+}
+
 function normalizeHyperlinkTarget(value: unknown): string | undefined {
   const target = stringValue(value).trim();
   if (!target) {
@@ -73,34 +84,22 @@ function normalizeHyperlinkTarget(value: unknown): string | undefined {
   try {
     parsed = new URL(target);
   } catch {
-    throw new RenderCliError(
-      "HYPERLINK_URL_INVALID",
-      `Hyperlink url must use http, https, or mailto: ${target}`,
-    );
+    throwInvalidHyperlinkUrl(target);
   }
 
   if (!SUPPORTED_HYPERLINK_PROTOCOLS.has(parsed.protocol)) {
-    throw new RenderCliError(
-      "HYPERLINK_URL_INVALID",
-      `Hyperlink url must use http, https, or mailto: ${target}`,
-    );
+    throwInvalidHyperlinkUrl(target);
   }
 
   if ((parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.host) {
-    throw new RenderCliError(
-      "HYPERLINK_URL_INVALID",
-      `Hyperlink url must use http, https, or mailto: ${target}`,
-    );
+    throwInvalidHyperlinkUrl(target);
   }
 
   if (parsed.protocol === "mailto:" && !parsed.pathname) {
-    throw new RenderCliError(
-      "HYPERLINK_URL_INVALID",
-      `Hyperlink url must use http, https, or mailto: ${target}`,
-    );
+    throwInvalidHyperlinkUrl(target);
   }
 
-  return target;
+  return parsed.toString();
 }
 
 export function buildRuns(

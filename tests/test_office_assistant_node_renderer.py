@@ -1264,6 +1264,37 @@ def test_node_renderer_supports_hyperlink_runs(workspace_root: Path):
     assert "https://example.com/docs" in rels_xml
 
 
+def test_node_renderer_emits_normalized_hyperlink_targets(workspace_root: Path):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-normalized-hyperlink-runs",
+        {
+            "document_id": "node-normalized-hyperlink-runs",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [
+                {
+                    "type": "paragraph",
+                    "runs": [
+                        {"text": "链接："},
+                        {
+                            "text": "归一化链接",
+                            "url": "https://example.com\n.evil.com",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+
+    paragraph = _find_paragraph(loaded_doc, "链接：归一化链接")
+
+    assert paragraph.text == "链接：归一化链接"
+    with zipfile.ZipFile(output_path) as archive:
+        rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert "https://example.com.evil.com/" in rels_xml
+    assert "https://example.com&#10;.evil.com" not in rels_xml
+
+
 def test_node_renderer_business_report_defaults_hero_divider_and_green_accent_box(
     workspace_root: Path,
 ):
@@ -2619,7 +2650,17 @@ def test_node_renderer_rejects_invalid_page_number_format(workspace_root: Path):
     assert "page_number_format" in error_payload["message"]
 
 
-def test_node_renderer_rejects_invalid_hyperlink_url(workspace_root: Path):
+@pytest.mark.parametrize(
+    "invalid_url",
+    [
+        "javascript:alert(1)",
+        "https://exa mple.com",
+    ],
+)
+def test_node_renderer_rejects_invalid_hyperlink_url(
+    workspace_root: Path,
+    invalid_url: str,
+):
     workspace_dir = _make_workspace(
         workspace_root,
         "pytest-node-renderer-invalid-hyperlink-url",
@@ -2641,7 +2682,7 @@ def test_node_renderer_rejects_invalid_hyperlink_url(workspace_root: Path):
                         "runs": [
                             {
                                 "text": "点击这里",
-                                "url": "javascript:alert(1)",
+                                "url": invalid_url,
                             }
                         ],
                     },
@@ -2665,6 +2706,7 @@ def test_node_renderer_rejects_invalid_hyperlink_url(workspace_root: Path):
     error_payload = json.loads(completed.stderr)
     assert error_payload["code"] == "HYPERLINK_URL_INVALID"
     assert "http, https, or mailto" in error_payload["message"]
+    assert invalid_url in error_payload["message"]
 
 
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
