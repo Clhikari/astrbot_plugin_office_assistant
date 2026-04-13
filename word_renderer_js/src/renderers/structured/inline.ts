@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { ExternalHyperlink, ParagraphChild, TextRun } from "docx";
 
 import { JsonObject } from "../../core/payload";
@@ -14,12 +17,39 @@ import {
   stringValue,
 } from "./utils";
 
+type HyperlinkUrlContract = {
+  allowed_schemes: string[];
+  schemes_requiring_authority: string[];
+  schemes_requiring_path: string[];
+  error_message: string;
+};
+
+const HYPERLINK_URL_CONTRACT_PATH = path.resolve(
+  __dirname,
+  "../../../../shared_contracts/hyperlink_url.json",
+);
+
+function readHyperlinkUrlContract(): HyperlinkUrlContract {
+  return JSON.parse(
+    fs.readFileSync(HYPERLINK_URL_CONTRACT_PATH, "utf8"),
+  ) as HyperlinkUrlContract;
+}
+
+const HYPERLINK_URL_CONTRACT = readHyperlinkUrlContract();
 const DEFAULT_HYPERLINK_COLOR = "0563C1";
-// Keep these rules aligned with document_core/models/blocks.py.
-const SUPPORTED_HYPERLINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+const SUPPORTED_HYPERLINK_PROTOCOLS = new Set(
+  HYPERLINK_URL_CONTRACT.allowed_schemes.map((scheme) => `${scheme}:`),
+);
+const HYPERLINK_PROTOCOLS_REQUIRING_HOST = new Set(
+  HYPERLINK_URL_CONTRACT.schemes_requiring_authority.map(
+    (scheme) => `${scheme}:`,
+  ),
+);
+const HYPERLINK_PROTOCOLS_REQUIRING_PATH = new Set(
+  HYPERLINK_URL_CONTRACT.schemes_requiring_path.map((scheme) => `${scheme}:`),
+);
 const HYPERLINK_URL_INVALID_CODE = "HYPERLINK_URL_INVALID";
-const HYPERLINK_URL_INVALID_MESSAGE =
-  "Hyperlink url must use http, https, or mailto";
+const HYPERLINK_URL_INVALID_MESSAGE = `Hyperlink ${HYPERLINK_URL_CONTRACT.error_message}`;
 
 export function buildFontAttributes(fontName: string) {
   return {
@@ -91,11 +121,11 @@ function normalizeHyperlinkTarget(value: unknown): string | undefined {
     throwInvalidHyperlinkUrl(target);
   }
 
-  if ((parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.host) {
+  if (HYPERLINK_PROTOCOLS_REQUIRING_HOST.has(parsed.protocol) && !parsed.host) {
     throwInvalidHyperlinkUrl(target);
   }
 
-  if (parsed.protocol === "mailto:" && !parsed.pathname) {
+  if (HYPERLINK_PROTOCOLS_REQUIRING_PATH.has(parsed.protocol) && !parsed.pathname) {
     throwInvalidHyperlinkUrl(target);
   }
 

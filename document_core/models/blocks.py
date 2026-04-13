@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -17,8 +19,21 @@ from pydantic import (
 
 
 HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
-SUPPORTED_HYPERLINK_SCHEMES = ("http", "https", "mailto")
-HYPERLINK_URL_ERROR_MESSAGE = "url must use http, https, or mailto"
+_HYPERLINK_URL_CONTRACT = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "shared_contracts"
+        / "hyperlink_url.json"
+    ).read_text(encoding="utf-8")
+)
+SUPPORTED_HYPERLINK_SCHEMES = tuple(_HYPERLINK_URL_CONTRACT["allowed_schemes"])
+HYPERLINK_SCHEMES_REQUIRING_AUTHORITY = frozenset(
+    _HYPERLINK_URL_CONTRACT["schemes_requiring_authority"]
+)
+HYPERLINK_SCHEMES_REQUIRING_PATH = frozenset(
+    _HYPERLINK_URL_CONTRACT["schemes_requiring_path"]
+)
+HYPERLINK_URL_ERROR_MESSAGE = str(_HYPERLINK_URL_CONTRACT["error_message"])
 
 
 class BlockLayout(BaseModel):
@@ -340,14 +355,14 @@ def normalize_optional_hyperlink_url(value: str | None) -> str | None:
     scheme = parsed.scheme.lower()
     if scheme not in SUPPORTED_HYPERLINK_SCHEMES:
         raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
-    if scheme in {"http", "https"}:
+    if scheme in HYPERLINK_SCHEMES_REQUIRING_AUTHORITY:
         if not parsed.netloc:
             raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
         try:
             HTTP_URL_ADAPTER.validate_python(candidate)
         except PydanticValidationError as exc:
             raise ValueError(HYPERLINK_URL_ERROR_MESSAGE) from exc
-    if scheme == "mailto" and not parsed.path:
+    if scheme in HYPERLINK_SCHEMES_REQUIRING_PATH and not parsed.path:
         raise ValueError(HYPERLINK_URL_ERROR_MESSAGE)
     return candidate
 
