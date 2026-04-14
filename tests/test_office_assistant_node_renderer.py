@@ -414,6 +414,57 @@ def test_node_renderer_schema_rejects_invalid_hero_banner_colors(workspace_root:
     assert "theme_color" in error_payload["message"]
 
 
+def test_node_renderer_schema_rejects_invalid_paragraph_border_style(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-schema-paragraph-border-style",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "invalid-paragraph-border-style.docx"
+    payload_path = workspace_dir / "invalid-paragraph-border-style.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "invalid-paragraph-border-style",
+                "metadata": _business_report_metadata(title="非法段落边框"),
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "text": "非法边框",
+                        "border": {
+                            "top": {
+                                "style": "groove",
+                            }
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "SCHEMA_VALIDATION_FAILED"
+    assert "border" in error_payload["message"]
+    assert "style" in error_payload["message"]
+
+
 def test_node_renderer_supports_business_review_cover_page_template(
     workspace_root: Path,
 ):

@@ -1409,6 +1409,52 @@ def test_add_table_request_accepts_runs_only_cells_beneath_vertical_merge():
     assert request.rows[1][0].text == ""
     assert request.rows[1][0].runs[0].text == "13:00"
 
+
+def test_add_table_request_accepts_cells_with_both_text_and_runs():
+    request = AddTableRequest(
+        document_id="doc-2",
+        headers=["日期", "时间", "课程"],
+        rows=[
+            [
+                {
+                    "text": "第一天 上午",
+                    "runs": [
+                        {"text": "第一天 "},
+                        {"text": "上午", "bold": True},
+                    ],
+                },
+                {
+                    "text": "09:00",
+                    "runs": [
+                        {"text": "09", "color": "FF0000"},
+                        {"text": ":00"},
+                    ],
+                },
+                {
+                    "text": "课程 A",
+                    "runs": [
+                        {"text": "课程 "},
+                        {"text": "A", "underline": True},
+                    ],
+                },
+            ],
+        ],
+    )
+
+    first_cell = request.rows[0][0]
+    time_cell = request.rows[0][1]
+    course_cell = request.rows[0][2]
+
+    assert isinstance(first_cell, TableCell)
+    assert isinstance(time_cell, TableCell)
+    assert isinstance(course_cell, TableCell)
+    assert first_cell.text == "第一天 上午"
+    assert "".join(run.text for run in first_cell.runs) == "第一天 上午"
+    assert time_cell.text == "09:00"
+    assert "".join(run.text for run in time_cell.runs) == "09:00"
+    assert course_cell.text == "课程 A"
+    assert "".join(run.text for run in course_cell.runs) == "课程 A"
+
 def test_add_table_request_rejects_underfilled_rows():
     with pytest.raises(ValidationError, match="table row 1 is missing cells"):
         AddTableRequest(
