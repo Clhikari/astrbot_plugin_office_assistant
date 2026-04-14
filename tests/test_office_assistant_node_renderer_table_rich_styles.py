@@ -1,3 +1,5 @@
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 from tests._docx_test_helpers import (
@@ -9,6 +11,12 @@ from tests._docx_test_helpers import (
     _table_border_color,
     _table_border_size,
 )
+
+
+NS = {
+    "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+}
 
 
 def _run_has_prop(run, prop_name: str) -> bool:
@@ -171,6 +179,71 @@ def test_node_renderer_supports_table_cell_rich_style_controls(
     assert _cell_border_size(rich_cell, "bottom") == _table_border_size(table, "bottom")
 
 
+def test_node_renderer_renders_valid_hyperlink_in_table_cell(
+    workspace_root: Path,
+):
+    url = "https://example.com/docs"
+    link_text = "在线说明"
+
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-table-cell-hyperlink",
+        {
+            "document_id": "table-cell-hyperlink",
+            "metadata": _business_report_metadata(title="表格单元格超链接"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["项目", "说明"],
+                    "rows": [
+                        [
+                            "链接",
+                            {
+                                "runs": [
+                                    {"text": "查看："},
+                                    {"text": link_text, "url": url},
+                                ]
+                            },
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+    assert table.rows[1].cells[1].text == f"查看：{link_text}"
+
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+        rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+
+    document_root = ET.fromstring(document_xml)
+    rels_root = ET.fromstring(rels_xml)
+    hyperlink_targets = {
+        rel.attrib.get("Id"): rel.attrib.get("Target")
+        for rel in rels_root
+        if rel.tag.endswith("Relationship")
+    }
+
+    found = False
+    for hyperlink in document_root.findall(".//w:tbl//w:hyperlink", NS):
+        text = "".join(
+            node.text or ""
+            for node in hyperlink.findall(".//w:t", NS)
+            if node.text is not None
+        )
+        if text != link_text:
+            continue
+        relation_id = hyperlink.attrib.get(f"{{{NS['r']}}}id")
+        assert relation_id is not None
+        assert hyperlink_targets.get(relation_id) == url
+        found = True
+        break
+
+    assert found is True
+
+
 def test_node_renderer_keeps_text_only_table_compatible(workspace_root: Path):
     loaded_doc, _ = _render_structured_payload_with_node(
         workspace_root,
@@ -269,3 +342,40 @@ def test_node_renderer_honors_empty_table_cell_border_side_defaults(
     cell = table.rows[1].cells[1]
     assert _cell_border_size(cell, "top") == "4"
     assert _cell_border_color(cell, "top") is None
+
+
+def test_node_renderer_does_not_create_cell_borders_without_explicit_border(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-object-cell-without-border",
+        {
+            "document_id": "object-cell-without-border",
+            "metadata": _business_report_metadata(title="无显式边框单元格"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["区域", "说明"],
+                    "rows": [
+                        [
+                            "华东",
+                            {
+                                "text": "只有填充",
+                                "fill": "EEF4FA",
+                                "align": "right",
+                            },
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+    cell = table.rows[1].cells[1]
+    assert cell.text == "只有填充"
+    assert _cell_border_size(cell, "top") is None
+    assert _cell_border_size(cell, "left") is None
+    assert _cell_border_size(cell, "bottom") is None
+    assert _cell_border_size(cell, "right") is None

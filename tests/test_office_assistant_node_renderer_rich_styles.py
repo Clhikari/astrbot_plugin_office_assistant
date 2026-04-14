@@ -144,6 +144,7 @@ def test_node_renderer_keeps_text_only_paragraph_and_list_intact(workspace_root:
     assert list_item_one.text == "• 第一项"
     assert list_item_two.text == "• 第二项"
     assert _paragraph_bottom_border_color(paragraph) is None
+    assert _paragraph_bottom_border_size(paragraph) is None
     assert _paragraph_bottom_border_color(list_item_one) is None
     assert _paragraph_bottom_border_color(list_item_two) is None
 
@@ -151,7 +152,7 @@ def test_node_renderer_keeps_text_only_paragraph_and_list_intact(workspace_root:
 def test_node_renderer_honors_empty_paragraph_border_side_defaults(
     workspace_root: Path,
 ):
-    loaded_doc, _ = _render_structured_payload_with_node(
+    loaded_doc, output_path = _render_structured_payload_with_node(
         workspace_root,
         "pytest-node-renderer-default-paragraph-border-side",
         {
@@ -172,3 +173,11 @@ def test_node_renderer_honors_empty_paragraph_border_side_defaults(
     paragraph = _find_paragraph(loaded_doc, "默认段落边框正文")
     assert _paragraph_bottom_border_size(paragraph) == "4"
     assert _paragraph_bottom_border_color(paragraph) is None
+
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    paragraph_xml = _paragraph_xml_by_text(document_xml, "默认段落边框正文")
+    assert paragraph_xml.find("./w:pPr/w:pBdr/w:top", NS) is None
+    assert paragraph_xml.find("./w:pPr/w:pBdr/w:left", NS) is None
+    assert paragraph_xml.find("./w:pPr/w:pBdr/w:right", NS) is None
