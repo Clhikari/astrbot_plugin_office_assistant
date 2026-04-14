@@ -480,6 +480,7 @@ function isPlaceholderCell(cell: unknown): boolean {
 function tableCellPlainText(cell: TableCellValue): string {
   const runs = arrayValue(cell.runs);
   if (runs.length > 0) {
+    // Keep width inference aligned with rendering: non-empty runs win over text.
     return runs
       .map((run) => normalizeLineBreaks(stringValue(asObject(run).text)))
       .join("");

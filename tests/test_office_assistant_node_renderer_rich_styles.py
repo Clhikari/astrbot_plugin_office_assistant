@@ -146,3 +146,29 @@ def test_node_renderer_keeps_text_only_paragraph_and_list_intact(workspace_root:
     assert _paragraph_bottom_border_color(paragraph) is None
     assert _paragraph_bottom_border_color(list_item_one) is None
     assert _paragraph_bottom_border_color(list_item_two) is None
+
+
+def test_node_renderer_honors_empty_paragraph_border_side_defaults(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-default-paragraph-border-side",
+        {
+            "document_id": "default-paragraph-border-side",
+            "metadata": _business_report_metadata(title="默认段落边框标题"),
+            "blocks": [
+                {
+                    "type": "paragraph",
+                    "text": "默认段落边框正文",
+                    "border": {
+                        "bottom": {},
+                    },
+                }
+            ],
+        },
+    )
+
+    paragraph = _find_paragraph(loaded_doc, "默认段落边框正文")
+    assert _paragraph_bottom_border_size(paragraph) == "4"
+    assert _paragraph_bottom_border_color(paragraph) is None

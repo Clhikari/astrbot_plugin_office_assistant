@@ -687,6 +687,21 @@ def test_paragraph_block_accepts_border_config():
     assert block.border.bottom.width_pt == pytest.approx(1.5)
 
 
+def test_paragraph_block_accepts_empty_border_side_defaults():
+    block = ParagraphBlock(
+        text="默认边框",
+        border={
+            "bottom": {},
+        },
+    )
+
+    assert block.border is not None
+    assert block.border.bottom is not None
+    assert block.border.bottom.style == "single"
+    assert block.border.bottom.color is None
+    assert block.border.bottom.width_pt is None
+
+
 @pytest.mark.parametrize(
     "border",
     [
@@ -1573,6 +1588,38 @@ def test_build_document_render_payload_preserves_rich_style_fields():
     assert table_cell["strikethrough"] is True
     assert table_cell["runs"][0]["font_name"] == "SimSun"
     assert table_cell["border"]["right"]["style"] == "dotted"
+
+
+def test_build_document_render_payload_preserves_empty_border_side_objects():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Default Border Sides"),
+        blocks=[
+            ParagraphBlock(
+                text="默认段落边框",
+                border={"bottom": {}},
+            ),
+            TableBlock(
+                headers=["区域", "说明"],
+                rows=[
+                    [
+                        "华东",
+                        TableCell(
+                            text="默认单元格边框",
+                            border={"top": {}},
+                        ),
+                    ]
+                ],
+            ),
+        ],
+    )
+
+    payload = build_document_render_payload(document)
+
+    assert payload["blocks"][0]["border"]["bottom"] == {}
+    assert payload["blocks"][1]["rows"][0][1]["border"]["top"] == {}
 
 def test_normalize_raw_block_payloads_flattens_nested_block_aliases():
     normalized = normalize_raw_block_payloads(

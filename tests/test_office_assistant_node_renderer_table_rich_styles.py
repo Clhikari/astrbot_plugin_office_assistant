@@ -234,3 +234,38 @@ def test_node_renderer_supports_runs_only_cells_beneath_vertical_merge(
     assert table.rows[1].cells[1].text == "09:00"
     assert table.rows[2].cells[1].text == "13:00"
     assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
+
+
+def test_node_renderer_honors_empty_table_cell_border_side_defaults(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-default-table-cell-border-side",
+        {
+            "document_id": "default-table-cell-border-side",
+            "metadata": _business_report_metadata(title="默认单元格边框"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["区域", "说明"],
+                    "rows": [
+                        [
+                            "华东",
+                            {
+                                "text": "默认单元格边框",
+                                "border": {
+                                    "top": {},
+                                },
+                            },
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+    cell = table.rows[1].cells[1]
+    assert _cell_border_size(cell, "top") == "4"
+    assert _cell_border_color(cell, "top") is None

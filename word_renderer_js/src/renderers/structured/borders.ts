@@ -14,10 +14,6 @@ const CELL_BORDER_SIDES = ["top", "bottom", "left", "right"] as const;
 
 function resolveBorderSide(side: unknown): DocxBorderSideSpec | undefined {
   const sideObject = asObject(side);
-  if (Object.keys(sideObject).length === 0) {
-    return undefined;
-  }
-
   const styleName = stringValue(sideObject.style) || "single";
   const style = BORDER_STYLE_MAP[styleName as keyof typeof BORDER_STYLE_MAP];
   if (!style) {
