@@ -61,6 +61,7 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     SectionMarginsConfig,
     SummaryCardBlock,
     TableBlock,
+    TableCell,
     TechnicalResumeData,
     TocBlock,
 )
@@ -644,6 +645,59 @@ def test_build_document_render_payload_preserves_hyperlink_run_urls():
     payload = build_document_render_payload(document)
 
     assert payload["blocks"][0]["runs"][0]["url"] == "https://example.com/docs"
+
+
+def test_paragraph_run_accepts_rich_style_fields():
+    run = ParagraphRun(
+        text="强调内容",
+        bold=True,
+        italic=True,
+        underline=True,
+        strikethrough=True,
+        color="1f4e79",
+        font_name="Source Han Sans SC",
+        font_scale=1.25,
+    )
+
+    assert run.bold is True
+    assert run.italic is True
+    assert run.underline is True
+    assert run.strikethrough is True
+    assert run.color == "1F4E79"
+    assert run.font_name == "Source Han Sans SC"
+    assert run.font_scale == pytest.approx(1.25)
+
+
+def test_paragraph_block_accepts_border_config():
+    block = ParagraphBlock(
+        text="带边框段落",
+        border={
+            "top": {"style": "dashed", "color": "1f4e79", "width_pt": 0.5},
+            "bottom": {"style": "double", "width_pt": 1.5},
+        },
+    )
+
+    assert block.border is not None
+    assert block.border.top is not None
+    assert block.border.top.style == "dashed"
+    assert block.border.top.color == "1F4E79"
+    assert block.border.top.width_pt == pytest.approx(0.5)
+    assert block.border.bottom is not None
+    assert block.border.bottom.style == "double"
+    assert block.border.bottom.width_pt == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    "border",
+    [
+        {"top": {"style": "groove"}},
+        {"top": {"color": "blue"}},
+        {"top": {"width_pt": 0}},
+    ],
+)
+def test_paragraph_block_rejects_invalid_border_config(border):
+    with pytest.raises(ValidationError):
+        ParagraphBlock(text="非法边框", border=border)
 
 
 def test_paragraph_run_accepts_scheme_only_https_url():
@@ -1318,6 +1372,28 @@ def test_add_table_request_accepts_empty_placeholder_cells_for_vertical_merge_ro
     assert request.rows[1][0] == ""
     assert request.rows[1][1] == "13:00"
 
+
+def test_add_table_request_accepts_runs_only_cells_beneath_vertical_merge():
+    request = AddTableRequest(
+        document_id="doc-1",
+        headers=["日期", "时间", "课程"],
+        rows=[
+            [
+                {"text": "第一天", "row_span": 2},
+                {"runs": [{"text": "09:00"}]},
+                "课程 A",
+            ],
+            [
+                {"runs": [{"text": "13:00"}]},
+                "课程 B",
+            ],
+        ],
+    )
+
+    assert isinstance(request.rows[1][0], TableCell)
+    assert request.rows[1][0].text == ""
+    assert request.rows[1][0].runs[0].text == "13:00"
+
 def test_add_table_request_rejects_underfilled_rows():
     with pytest.raises(ValidationError, match="table row 1 is missing cells"):
         AddTableRequest(
@@ -1364,10 +1440,20 @@ def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_style
                         "华东",
                         {
                             "text": "112%",
+                            "runs": [
+                                {"text": "112", "font_name": "SimSun"},
+                                {"text": "%", "color": "166534", "strikethrough": True},
+                            ],
                             "fill": "DCFCE7",
                             "text_color": "166534",
                             "bold": True,
+                            "italic": True,
+                            "underline": True,
                             "align": "right",
+                            "font_name": "Source Han Sans SC",
+                            "border": {
+                                "top": {"style": "single", "color": "1F4E79", "width_pt": 0.75}
+                            },
                         },
                     ]
                 ],
@@ -1385,7 +1471,108 @@ def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_style
     assert table.rows[0][1].fill == "DCFCE7"
     assert table.rows[0][1].text_color == "166534"
     assert table.rows[0][1].bold is True
+    assert table.rows[0][1].italic is True
+    assert table.rows[0][1].underline is True
     assert table.rows[0][1].align == "right"
+    assert table.rows[0][1].font_name == "Source Han Sans SC"
+    assert table.rows[0][1].runs[0].font_name == "SimSun"
+    assert table.rows[0][1].runs[1].strikethrough is True
+    assert table.rows[0][1].border is not None
+    assert table.rows[0][1].border.top is not None
+    assert table.rows[0][1].border.top.color == "1F4E79"
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        {"text": "112%", "border": {"top": {"style": "groove"}}},
+        {"text": "112%", "border": {"top": {"color": "green"}}},
+        {"text": "112%", "border": {"top": {"width_pt": 0}}},
+    ],
+)
+def test_add_blocks_request_rejects_invalid_table_cell_border(cell):
+    with pytest.raises(ValidationError):
+        AddBlocksRequest(
+            document_id="doc-1",
+            blocks=[
+                {
+                    "type": "table",
+                    "headers": ["区域", "预算完成率"],
+                    "rows": [["华东", cell]],
+                }
+            ],
+        )
+
+
+def test_build_document_render_payload_preserves_rich_style_fields():
+    document = DocumentModel(
+        document_id="doc-1",
+        session_id="",
+        format="word",
+        metadata=DocumentMetadata(title="Rich Styles"),
+        blocks=[
+            ParagraphBlock(
+                runs=[
+                    ParagraphRun(
+                        text="带字体",
+                        font_name="Source Han Sans SC",
+                        font_scale=1.2,
+                        strikethrough=True,
+                        color="1F4E79",
+                    )
+                ],
+                border={
+                    "top": {"style": "single", "color": "CBD5E1", "width_pt": 0.75}
+                },
+            ),
+            TableBlock(
+                headers=["区域", "完成率"],
+                rows=[
+                    [
+                        "华东",
+                        TableCell(
+                            runs=[
+                                ParagraphRun(text="112", font_name="SimSun"),
+                                ParagraphRun(text="%", color="166534"),
+                            ],
+                            fill="DCFCE7",
+                            text_color="166534",
+                            italic=True,
+                            underline=True,
+                            strikethrough=True,
+                            font_name="Source Han Sans SC",
+                            font_scale=1.1,
+                            border={
+                                "right": {
+                                    "style": "dotted",
+                                    "color": "1F4E79",
+                                    "width_pt": 0.5,
+                                }
+                            },
+                        ),
+                    ]
+                ],
+            ),
+        ],
+    )
+
+    payload = build_document_render_payload(document)
+
+    paragraph_run = payload["blocks"][0]["runs"][0]
+    paragraph_border = payload["blocks"][0]["border"]["top"]
+    table_cell = payload["blocks"][1]["rows"][0][1]
+
+    assert paragraph_run["font_name"] == "Source Han Sans SC"
+    assert paragraph_run["font_scale"] == pytest.approx(1.2)
+    assert paragraph_run["strikethrough"] is True
+    assert paragraph_border["color"] == "CBD5E1"
+    assert paragraph_border["width_pt"] == pytest.approx(0.75)
+    assert table_cell["font_name"] == "Source Han Sans SC"
+    assert table_cell["italic"] is True
+    assert table_cell["underline"] is True
+    assert table_cell["strikethrough"] is True
+    assert table_cell["runs"][0]["font_name"] == "SimSun"
+    assert table_cell["border"]["right"]["style"] == "dotted"
 
 def test_normalize_raw_block_payloads_flattens_nested_block_aliases():
     normalized = normalize_raw_block_payloads(

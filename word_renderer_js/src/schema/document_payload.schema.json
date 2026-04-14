@@ -5,6 +5,152 @@
     "hexColor": {
       "type": "string",
       "pattern": "^[0-9A-Fa-f]{6}$"
+    },
+    "borderStyle": {
+      "type": "string",
+      "enum": [
+        "single",
+        "double",
+        "dashed",
+        "dotted",
+        "none"
+      ]
+    },
+    "borderSide": {
+      "type": "object",
+      "properties": {
+        "style": {
+          "$ref": "#/definitions/borderStyle"
+        },
+        "color": {
+          "$ref": "#/definitions/hexColor"
+        },
+        "width_pt": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 12
+        }
+      },
+      "additionalProperties": false
+    },
+    "border": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "$ref": "#/definitions/borderSide"
+        },
+        "bottom": {
+          "$ref": "#/definitions/borderSide"
+        },
+        "left": {
+          "$ref": "#/definitions/borderSide"
+        },
+        "right": {
+          "$ref": "#/definitions/borderSide"
+        }
+      },
+      "additionalProperties": false
+    },
+    "paragraphRun": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "bold": {
+          "type": "boolean"
+        },
+        "italic": {
+          "type": "boolean"
+        },
+        "underline": {
+          "type": "boolean"
+        },
+        "strikethrough": {
+          "type": "boolean"
+        },
+        "code": {
+          "type": "boolean"
+        },
+        "color": {
+          "$ref": "#/definitions/hexColor"
+        },
+        "url": {
+          "type": "string"
+        },
+        "font_name": {
+          "type": "string"
+        },
+        "font_scale": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 3
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "tableCell": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/paragraphRun"
+          }
+        },
+        "row_span": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "col_span": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fill": {
+          "$ref": "#/definitions/hexColor"
+        },
+        "text_color": {
+          "$ref": "#/definitions/hexColor"
+        },
+        "bold": {
+          "type": "boolean"
+        },
+        "italic": {
+          "type": "boolean"
+        },
+        "underline": {
+          "type": "boolean"
+        },
+        "strikethrough": {
+          "type": "boolean"
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ]
+        },
+        "font_name": {
+          "type": "string"
+        },
+        "font_scale": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 3
+        },
+        "border": {
+          "$ref": "#/definitions/border"
+        }
+      },
+      "additionalProperties": true
     }
   },
   "required": [
@@ -110,6 +256,127 @@
           }
         },
         "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "paragraph"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "variant": {
+                  "type": "string",
+                  "enum": [
+                    "body",
+                    "summary_box",
+                    "key_takeaway"
+                  ]
+                },
+                "runs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/paragraphRun"
+                  }
+                },
+                "border": {
+                  "$ref": "#/definitions/border"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "list"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "items"
+              ],
+              "properties": {
+                "ordered": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          },
+                          "runs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/definitions/paragraphRun"
+                            }
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "table"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "headers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "$ref": "#/definitions/tableCell"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "caption": {
+                  "type": "string"
+                },
+                "border_style": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           {
             "if": {
               "properties": {
@@ -296,33 +563,7 @@
                                           "runs": {
                                             "type": "array",
                                             "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                "text": {
-                                                  "type": "string"
-                                                },
-                                                "bold": {
-                                                  "type": "boolean"
-                                                },
-                                                "italic": {
-                                                  "type": "boolean"
-                                                },
-                                                "underline": {
-                                                  "type": "boolean"
-                                                },
-                                                "code": {
-                                                  "type": "boolean"
-                                                },
-                                                "color": {
-                                                  "type": "string"
-                                                },
-                                                "url": {
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "text"
-                                              ]
+                                              "$ref": "#/definitions/paragraphRun"
                                             }
                                           }
                                         },
@@ -351,33 +592,7 @@
                                     "runs": {
                                       "type": "array",
                                       "items": {
-                                        "type": "object",
-                                        "properties": {
-                                          "text": {
-                                            "type": "string"
-                                          },
-                                          "bold": {
-                                            "type": "boolean"
-                                          },
-                                          "italic": {
-                                            "type": "boolean"
-                                          },
-                                          "underline": {
-                                            "type": "boolean"
-                                          },
-                                          "code": {
-                                            "type": "boolean"
-                                          },
-                                          "color": {
-                                            "type": "string"
-                                          },
-                                          "url": {
-                                            "type": "string"
-                                          }
-                                        },
-                                        "required": [
-                                          "text"
-                                        ]
+                                        "$ref": "#/definitions/paragraphRun"
                                       }
                                     }
                                   },

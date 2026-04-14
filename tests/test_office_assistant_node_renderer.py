@@ -2757,17 +2757,16 @@ def test_node_renderer_rejects_invalid_hyperlink_url(
 
 
 @pytest.mark.parametrize(
-    ("invalid_url", "expected_fragment"),
+    "invalid_url",
     [
-        (123, "123"),
-        ({"href": "https://example.com"}, '"href"'),
-        (None, "null"),
+        123,
+        {"href": "https://example.com"},
+        None,
     ],
 )
 def test_node_renderer_rejects_non_string_hyperlink_url(
     workspace_root: Path,
     invalid_url,
-    expected_fragment: str,
 ):
     workspace_dir = _make_workspace(
         workspace_root,
@@ -2812,8 +2811,66 @@ def test_node_renderer_rejects_non_string_hyperlink_url(
 
     assert completed.returncode != 0
     error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == "SCHEMA_VALIDATION_FAILED"
+    assert "data/blocks/0/runs/0/url must be string" in error_payload["message"]
+
+
+def test_node_renderer_rejects_invalid_table_cell_hyperlink_url(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-renderer-invalid-table-cell-hyperlink-url",
+    )
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "invalid-table-cell-hyperlink-url.docx"
+    payload_path = workspace_dir / "invalid-table-cell-hyperlink-url.json"
+    invalid_url = "javascript:alert(1)"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "invalid-table-cell-hyperlink-url",
+                "metadata": _business_report_metadata(title="表格非法链接"),
+                "blocks": [
+                    {
+                        "type": "table",
+                        "headers": ["名称"],
+                        "rows": [
+                            [
+                                {
+                                    "runs": [
+                                        {
+                                            "text": "点击这里",
+                                            "url": invalid_url,
+                                        }
+                                    ]
+                                }
+                            ]
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
     assert error_payload["code"] == "HYPERLINK_URL_INVALID"
-    assert expected_fragment in error_payload["message"]
+    assert invalid_url in error_payload["message"]
 
 
 def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
