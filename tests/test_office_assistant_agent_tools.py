@@ -1661,9 +1661,16 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
     table_schema = add_blocks_tool.parameters["properties"]["blocks"]["items"]["properties"][
         "rows"
     ]["items"]["items"]["anyOf"][1]["properties"]
+    run_schema = table_schema["runs"]["items"]["properties"]
 
     assert "row_span" not in table_schema
     assert "col_span" not in table_schema
+    assert table_schema["font_name"]["type"] == "string"
+    assert table_schema["font_scale"]["type"] == "number"
+    assert table_schema["border"]["type"] == "object"
+    assert table_schema["runs"]["type"] == "array"
+    assert run_schema["url"]["type"] == "string"
+    assert run_schema["strikethrough"]["type"] == "boolean"
 
 
 @pytest.mark.asyncio
