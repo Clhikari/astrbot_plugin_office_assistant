@@ -405,6 +405,14 @@ def _normalize_paragraph_items_alias(block: dict) -> None:
         block.pop("items", None)
 
 
+def _normalize_toc_title_alias(block: dict) -> None:
+    if block.get("type") != "toc" or block.get("title"):
+        return
+    toc_text = block.pop("text", "")
+    if isinstance(toc_text, str) and toc_text.strip():
+        block["title"] = toc_text.strip()
+
+
 def _normalize_heading_title_alias(block: dict) -> None:
     if block.get("type") != "heading":
         return
@@ -509,6 +517,39 @@ def _normalize_legacy_paragraph_border_aliases(block: dict) -> None:
     block["border"] = border
 
 
+_BLOCK_SHAPE_NORMALIZERS = (
+    _normalize_nested_block_payload_alias,
+    _normalize_toc_title_alias,
+)
+_BLOCK_STYLE_NORMALIZERS = (
+    _normalize_block_style_and_layout,
+    _drop_unsupported_block_aliases,
+)
+_BLOCK_CONTENT_NORMALIZERS = (
+    _normalize_heading_title_alias,
+    _normalize_paragraph_items_alias,
+    _normalize_block_run_aliases,
+    _normalize_legacy_paragraph_border_aliases,
+)
+_TABLE_BLOCK_NORMALIZERS = (
+    _normalize_table_header_alias,
+    _normalize_table_row_alias,
+    _normalize_table_cell_aliases,
+)
+_BLOCK_NORMALIZER_PIPELINE = (
+    _BLOCK_SHAPE_NORMALIZERS,
+    _BLOCK_STYLE_NORMALIZERS,
+    _BLOCK_CONTENT_NORMALIZERS,
+    _TABLE_BLOCK_NORMALIZERS,
+)
+
+
+def _apply_block_normalization_pipeline(block: dict) -> None:
+    for normalizer_group in _BLOCK_NORMALIZER_PIPELINE:
+        for normalizer in normalizer_group:
+            normalizer(block)
+
+
 def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
     normalized = dict(kwargs)
     raw_document_style = normalized.get("document_style")
@@ -581,23 +622,7 @@ def normalize_raw_block_payloads(
                 normalized_columns.append(normalized_column)
             block["columns"] = normalized_columns
 
-        _normalize_nested_block_payload_alias(block)
-        block_type = block.get("type")
-
-        if block_type == "toc" and not block.get("title"):
-            toc_text = block.pop("text", "")
-            if isinstance(toc_text, str) and toc_text.strip():
-                block["title"] = toc_text.strip()
-
-        _normalize_block_style_and_layout(block)
-        _drop_unsupported_block_aliases(block)
-        _normalize_heading_title_alias(block)
-        _normalize_paragraph_items_alias(block)
-        _normalize_block_run_aliases(block)
-        _normalize_legacy_paragraph_border_aliases(block)
-        _normalize_table_header_alias(block)
-        _normalize_table_row_alias(block)
-        _normalize_table_cell_aliases(block)
+        _apply_block_normalization_pipeline(block)
         section_break = _extract_compat_section_break(block)
         if section_break is not None:
             normalized_blocks.append(section_break)
@@ -665,13 +690,6 @@ def _coerce_table_input_rows_to_runtime(
         ]
         for row in rows
     ]
-
-
-def _coerce_public_table_rows(
-    rows: list[list[str | TableCellInput]],
-) -> list[list[str | TableCell]]:
-    return _coerce_table_input_rows_to_runtime(rows)
-
 
 class CreateDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1079,7 +1097,7 @@ class AddTableRequest(BaseModel):
     def validate_table_shape(self) -> AddTableRequest:
         validate_table_structure(
             self.headers,
-            _coerce_public_table_rows(self.rows),
+            _coerce_table_input_rows_to_runtime(self.rows),
             self.header_groups,
         )
         return self
@@ -1151,7 +1169,7 @@ class SectionTableInput(BaseModel):
     def validate_table_shape(self) -> SectionTableInput:
         validate_table_structure(
             self.headers,
-            _coerce_public_table_rows(self.rows),
+            _coerce_table_input_rows_to_runtime(self.rows),
             self.header_groups,
         )
         return self
