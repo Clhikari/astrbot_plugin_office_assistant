@@ -32,7 +32,6 @@ from ...document_core.models.blocks import (
     SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
-    TableCell,
     TechnicalResumeData,
     TocBlock,
 )
@@ -70,6 +69,7 @@ from .contracts import (
     SectionParagraphInput,
     SectionTableInput,
     TocInput,
+    _coerce_table_input_rows_to_runtime,
     _normalize_docx_filename,
 )
 from .hooks import (
@@ -527,15 +527,7 @@ class DocumentSessionStore:
         if isinstance(block, SectionTableInput):
             return TableBlock(
                 headers=block.headers,
-                rows=[
-                    [
-                        cell
-                        if isinstance(cell, str)
-                        else TableCell(**cell.model_dump(mode="json", exclude_none=True))
-                        for cell in row
-                    ]
-                    for row in block.rows
-                ],
+                rows=_coerce_table_input_rows_to_runtime(block.rows),
                 header_groups=block.header_groups,
                 table_style=block.table_style or document.metadata.table_template,
                 caption=block.caption or block.title,

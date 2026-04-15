@@ -408,11 +408,13 @@ def _normalize_paragraph_items_alias(block: dict) -> None:
 def _normalize_heading_title_alias(block: dict) -> None:
     if block.get("type") != "heading":
         return
-    heading_title = block.pop("title", None)
+    heading_title = block.get("title")
     if block.get("text"):
+        block.pop("title", None)
         return
     if isinstance(heading_title, str) and heading_title.strip():
         block["text"] = heading_title.strip()
+    block.pop("title", None)
 
 
 def _normalize_runs_color_aliases(runs: object) -> None:
@@ -651,7 +653,7 @@ def _normalize_table_title_text(value: str) -> str:
     return value.strip()
 
 
-def _coerce_public_table_rows(
+def _coerce_table_input_rows_to_runtime(
     rows: list[list[str | TableCellInput]],
 ) -> list[list[str | TableCell]]:
     return [
@@ -663,6 +665,12 @@ def _coerce_public_table_rows(
         ]
         for row in rows
     ]
+
+
+def _coerce_public_table_rows(
+    rows: list[list[str | TableCellInput]],
+) -> list[list[str | TableCell]]:
+    return _coerce_table_input_rows_to_runtime(rows)
 
 
 class CreateDocumentRequest(BaseModel):
