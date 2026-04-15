@@ -229,10 +229,13 @@ export function normalizeTableCell(cell: unknown): TableCellValue {
     colSpan,
     fill: stringValue(obj.fill) || undefined,
     textColor: stringValue(obj.text_color) || undefined,
-    bold: booleanValue(obj.bold),
-    italic: booleanValue(obj.italic),
-    underline: booleanValue(obj.underline),
-    strikethrough: booleanValue(obj.strikethrough),
+    bold: obj.bold !== undefined ? booleanValue(obj.bold) : undefined,
+    italic: obj.italic !== undefined ? booleanValue(obj.italic) : undefined,
+    underline: obj.underline !== undefined ? booleanValue(obj.underline) : undefined,
+    strikethrough:
+      obj.strikethrough !== undefined
+        ? booleanValue(obj.strikethrough)
+        : undefined,
     align: stringValue(obj.align) || undefined,
     fontName: stringValue(obj.font_name) || undefined,
     fontScale: numberValue(obj.font_scale),

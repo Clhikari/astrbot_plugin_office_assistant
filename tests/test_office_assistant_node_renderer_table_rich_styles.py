@@ -283,6 +283,38 @@ def test_node_renderer_allows_table_cell_run_font_scale_to_shrink(
     assert _run_size_pt(remark_runs[1]) < _run_size_pt(remark_runs[0])
 
 
+def test_node_renderer_preserves_first_column_bold_for_object_cells(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-table-object-cell-first-column-bold",
+        {
+            "document_id": "table-object-cell-first-column-bold",
+            "metadata": _business_report_metadata(title="对象单元格首列加粗"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["指标", "备注"],
+                    "first_column_bold": True,
+                    "rows": [
+                        [
+                            {"text": "营收", "fill": "EEF4FA"},
+                            {"text": "基础盘稳定"},
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    first_run = loaded_doc.tables[0].rows[1].cells[0].paragraphs[0].runs[0]
+    second_run = loaded_doc.tables[0].rows[1].cells[1].paragraphs[0].runs[0]
+
+    assert _run_has_prop(first_run, "b") is True
+    assert _run_has_prop(second_run, "b") is False
+
+
 def test_node_renderer_renders_valid_hyperlink_in_table_cell(
     workspace_root: Path,
 ):
