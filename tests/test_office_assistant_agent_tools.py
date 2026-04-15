@@ -976,7 +976,7 @@ async def test_create_document_tool_applies_border_style_color_mapping(
 @pytest.mark.parametrize(
     ("table_template", "expected_border_size", "expected_left_margin"),
     [
-        ("report_grid", "3", "84"),
+        ("report_grid", "3", "108"),
         ("minimal", "2", "72"),
     ],
 )
@@ -1270,6 +1270,60 @@ async def test_add_blocks_tool_supports_paragraph_run_colors(workspace_root: Pat
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_normalizes_legacy_paragraph_bottom_border_aliases(
+    workspace_root: Path,
+):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-paragraph-border-alias"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="段落边框别名",
+            output_name="paragraph-border-alias.docx",
+        )
+    )
+    document_id = created["document"]["document_id"]
+
+    add_blocks_result = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=document_id,
+            blocks=[
+                {
+                    "type": "paragraph",
+                    "text": "带底边框正文",
+                    "bottom_border": True,
+                    "bottom_border_style": "single",
+                    "bottom_border_color": "1F4E79",
+                    "bottom_border_size_pt": 1.0,
+                }
+            ],
+        )
+    )
+
+    assert add_blocks_result["success"] is True
+
+    exported = json.loads(
+        await tool_by_name["export_document"].call(
+            None,
+            document_id=document_id,
+        )
+    )
+
+    loaded_doc = docx.Document(exported["file_path"])
+    paragraph = _find_paragraph(loaded_doc, "带底边框正文")
+
+    assert _paragraph_bottom_border_color(paragraph) == "1F4E79"
+    assert _paragraph_bottom_border_size(paragraph) == "8"
+
+
+@pytest.mark.asyncio
 async def test_add_blocks_tool_supports_rich_text_list_items(workspace_root: Path):
     docx = pytest.importorskip("docx")
 
@@ -1455,6 +1509,11 @@ async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
     assert table.rows[0].cells[0].text == "季度经营指标"
     assert table.rows[1].cells[0].text == "区域"
     assert table.rows[2].cells[0].text == "华东"
+    assert _row_is_repeated_header(table.rows[0]) is True
+    assert _row_has_cant_split(table.rows[0]) is True
+    assert _paragraph_has_keep_next(table.rows[0].cells[0].paragraphs[0]) is True
+    assert _row_is_repeated_header(table.rows[1]) is True
+    assert _row_has_cant_split(table.rows[1]) is True
     assert table.rows[2].cells[1].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert table.rows[3].cells[2].paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert abs(table.rows[1].cells[0].width - Cm(4.2)) < 20000
@@ -1524,6 +1583,9 @@ async def test_add_blocks_tool_supports_grouped_table_headers(
 
     assert len(table.rows) == 5
     assert table.rows[0].cells[0].text == "季度经营指标"
+    assert _row_is_repeated_header(table.rows[0]) is True
+    assert _row_has_cant_split(table.rows[0]) is True
+    assert _paragraph_has_keep_next(table.rows[0].cells[0].paragraphs[0]) is True
     assert table.rows[1].cells[0].text == "经营数据"
     assert _grid_span(table.rows[1].cells[0]) == 2
     assert table.rows[1].cells[2].text == "结果"
@@ -1593,12 +1655,28 @@ async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_spl
     assert _row_has_cant_split(table.rows[2]) is True
 
 
+def test_add_blocks_tool_schema_hides_table_cell_spans():
+    toolset = build_document_toolset()
+    add_blocks_tool = next(tool for tool in toolset.tools if tool.name == "add_blocks")
+    table_schema = add_blocks_tool.parameters["properties"]["blocks"]["items"]["properties"][
+        "rows"
+    ]["items"]["items"]["anyOf"][1]["properties"]
+    run_schema = table_schema["runs"]["items"]["properties"]
+
+    assert "row_span" not in table_schema
+    assert "col_span" not in table_schema
+    assert table_schema["font_name"]["type"] == "string"
+    assert table_schema["font_scale"]["type"] == "number"
+    assert table_schema["border"]["type"] == "object"
+    assert table_schema["runs"]["type"] == "array"
+    assert run_schema["url"]["type"] == "string"
+    assert run_schema["strikethrough"]["type"] == "boolean"
+
+
 @pytest.mark.asyncio
-async def test_add_blocks_tool_supports_table_body_row_span_vertical_merge(
+async def test_add_blocks_tool_rejects_table_body_row_span_vertical_merge(
     workspace_root: Path,
 ):
-    docx = pytest.importorskip("docx")
-
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-table-row-span")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
     tool_by_name = {tool.name: tool for tool in toolset.tools}
@@ -1612,48 +1690,35 @@ async def test_add_blocks_tool_supports_table_body_row_span_vertical_merge(
     )
     document_id = created["document"]["document_id"]
 
-    await tool_by_name["add_blocks"].call(
-        None,
-        document_id=document_id,
-        blocks=[
-            {
-                "type": "table",
-                "headers": ["Date", "Time", "Session Title"],
-                "rows": [
-                    [
-                        {"text": "September 20", "row_span": 2},
-                        "09:00 AM - 12:00 PM",
-                        "Advanced Project Management",
-                    ],
-                    ["01:00 PM - 04:00 PM", "Stakeholder Alignment Workshop"],
-                ],
-            }
-        ],
-    )
-
-    exported = json.loads(
-        await tool_by_name["export_document"].call(
+    result = json.loads(
+        await tool_by_name["add_blocks"].call(
             None,
             document_id=document_id,
+            blocks=[
+                {
+                    "type": "table",
+                    "headers": ["Date", "Time", "Session Title"],
+                    "rows": [
+                        [
+                            {"text": "September 20", "row_span": 2},
+                            "09:00 AM - 12:00 PM",
+                            "Advanced Project Management",
+                        ],
+                        ["01:00 PM - 04:00 PM", "Stakeholder Alignment Workshop"],
+                    ],
+                }
+            ],
         )
     )
 
-    loaded_doc = docx.Document(exported["file_path"])
-    table = loaded_doc.tables[0]
-
-    assert table.rows[1].cells[0].text == "September 20"
-    assert _raw_row_cell_vertical_merge(table.rows[1], 0) == "restart"
-    assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
-    assert table.rows[2].cells[1].text == "01:00 PM - 04:00 PM"
-    assert table.rows[2].cells[2].text == "Stakeholder Alignment Workshop"
+    assert result["success"] is False
+    assert "row_span" in result["message"]
 
 
 @pytest.mark.asyncio
-async def test_add_blocks_tool_accepts_empty_object_placeholders_for_vertical_merge_rows(
+async def test_add_blocks_tool_rejects_table_body_col_span_horizontal_merge(
     workspace_root: Path,
 ):
-    docx = pytest.importorskip("docx")
-
     workspace_dir = _make_workspace(
         workspace_root, "pytest-agent-table-row-span-placeholder"
     )
@@ -1676,17 +1741,12 @@ async def test_add_blocks_tool_accepts_empty_object_placeholders_for_vertical_me
             blocks=[
                 {
                     "type": "table",
-                    "headers": ["Date", "Time", "Session Title"],
+                    "headers": ["Quarter", "Revenue", "Profit", "Status"],
                     "rows": [
                         [
-                            {"text": "September 20", "row_span": 2},
-                            "09:00 AM - 12:00 PM",
-                            "Advanced Project Management",
-                        ],
-                        [
-                            {"text": ""},
-                            "01:00 PM - 04:00 PM",
-                            "Stakeholder Alignment Workshop",
+                            {"text": "Q3 Summary", "col_span": 2},
+                            "18%",
+                            "On Track",
                         ],
                     ],
                 }
@@ -1694,23 +1754,8 @@ async def test_add_blocks_tool_accepts_empty_object_placeholders_for_vertical_me
         )
     )
 
-    assert result["success"] is True
-
-    exported = json.loads(
-        await tool_by_name["export_document"].call(
-            None,
-            document_id=document_id,
-        )
-    )
-
-    loaded_doc = docx.Document(exported["file_path"])
-    table = loaded_doc.tables[0]
-
-    assert table.rows[1].cells[0].text == "September 20"
-    assert _raw_row_cell_vertical_merge(table.rows[1], 0) == "restart"
-    assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
-    assert table.rows[2].cells[1].text == "01:00 PM - 04:00 PM"
-    assert table.rows[2].cells[2].text == "Stakeholder Alignment Workshop"
+    assert result["success"] is False
+    assert "col_span" in result["message"]
 
 
 def test_table_renderer_sets_cant_split_value_to_true_even_when_row_had_false():
@@ -2586,8 +2631,8 @@ async def test_mcp_server_exports_word_via_node_backend(workspace_root: Path):
                     "type": "table",
                     "headers": ["日期", "时间", "内容"],
                     "rows": [
-                        [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
-                        ["13:00", "课程 B"],
+                        ["第一天", "09:00", "课程 A"],
+                        ["第二天", "13:00", "课程 B"],
                     ],
                     "header_fill_enabled": False,
                     "header_bold": False,
@@ -2615,8 +2660,8 @@ async def test_mcp_server_exports_word_via_node_backend(workspace_root: Path):
     assert table.rows[0].cells[0].text == "一、经营总览"
     assert _find_paragraph(loaded_doc, "MCP Node Export").text == "MCP Node Export"
     assert len(table.rows) >= 4
-    assert _cell_vertical_merge(table.rows[2].cells[0]) == "restart"
-    assert _raw_row_cell_vertical_merge(table.rows[3], 0) == "continue"
+    assert table.rows[2].cells[0].text == "第一天"
+    assert table.rows[3].cells[0].text == "第二天"
 
 
 

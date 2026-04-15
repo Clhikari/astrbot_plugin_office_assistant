@@ -8,7 +8,7 @@ import {
   DEFAULT_TABLE_BANDED_ROW_FILL,
   DOCX_TABLE_STYLE_MAP,
 } from "./constants";
-import { Block, ThemeConfig } from "./types";
+import { Block, DocxBorderSpec, ThemeConfig } from "./types";
 import {
   booleanValue,
   numberValue,
@@ -109,7 +109,7 @@ export function resolveTableBorders(
   tableDefaults: JsonObject,
   theme: ThemeConfig,
   tableStyleName: string,
-): JsonObject | undefined {
+): DocxBorderSpec | undefined {
   const borderStyle =
     stringValue(block.border_style) || stringValue(tableDefaults.border_style);
   const borderMap: Record<string, { size: number; color: string }> = {
@@ -229,11 +229,11 @@ export function resolveTableBodyAlignment(
   if (explicit) {
     return explicit;
   }
-  if (tableStyleName === "report_grid") {
-    return AlignmentType.CENTER;
-  }
   if (numericColumns.has(columnIndex)) {
     return AlignmentType.RIGHT;
+  }
+  if (tableStyleName === "report_grid") {
+    return AlignmentType.CENTER;
   }
   if (tableStyleName === "metrics_compact" && columnIndex > 0) {
     return AlignmentType.CENTER;

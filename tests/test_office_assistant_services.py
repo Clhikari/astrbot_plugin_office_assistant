@@ -4386,8 +4386,8 @@ async def test_file_tool_service_create_office_file_exports_word_via_node_backen
                         "type": "table",
                         "headers": ["日期", "时间", "内容"],
                         "rows": [
-                            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
-                            ["13:00", "课程 B"],
+                            ["第一天", "09:00", "课程 A"],
+                            ["第二天", "13:00", "课程 B"],
                         ],
                     },
                     {

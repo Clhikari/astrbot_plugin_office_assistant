@@ -60,6 +60,7 @@ PageNumberFormat = Literal[
     "lowerLetter",
 ]
 PageOrientation = Literal["portrait", "landscape"]
+BorderStyle = Literal["single", "double", "dashed", "dotted", "none"]
 
 
 class SectionMarginsConfig(BaseModel):
@@ -133,6 +134,28 @@ class BlockBase(BaseModel):
     type: str
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
+
+
+class BorderSideConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    style: BorderStyle = "single"
+    color: str | None = None
+    width_pt: float | None = Field(default=None, gt=0, le=12)
+
+    @field_validator("color")
+    @classmethod
+    def validate_optional_color(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
+
+
+class BorderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    top: BorderSideConfig | None = None
+    bottom: BorderSideConfig | None = None
+    left: BorderSideConfig | None = None
+    right: BorderSideConfig | None = None
 
 
 class HeadingBlock(BlockBase):
@@ -254,8 +277,11 @@ class ParagraphRun(BaseModel):
     bold: bool = False
     italic: bool = False
     underline: bool = False
+    strikethrough: bool = False
     code: bool = False
     color: str | None = None
+    font_name: str | None = None
+    font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
     url: str | None = None
 
     @field_validator("color")
@@ -275,6 +301,7 @@ class ParagraphBlock(BlockBase):
     variant: Literal["body", "summary_box", "key_takeaway"] = "body"
     title: str = ""
     runs: list[ParagraphRun] = Field(default_factory=list)
+    border: BorderConfig | None = None
 
     @model_validator(mode="after")
     def validate_content(self) -> ParagraphBlock:
@@ -363,13 +390,19 @@ class TableCell(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = ""
+    runs: list[ParagraphRun] = Field(default_factory=list)
     row_span: int = Field(default=1, ge=1)
     col_span: int = Field(default=1, ge=1)
     fill: str | None = None
     text_color: str | None = None
     bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    strikethrough: bool | None = None
     align: Literal["left", "center", "right"] | None = None
+    font_name: str | None = None
     font_scale: float | None = Field(default=None, ge=0.5, le=3.0)
+    border: BorderConfig | None = None
 
     @field_validator("fill", "text_color")
     @classmethod
@@ -398,7 +431,12 @@ def resolve_table_cell_col_span(value: str | TableCell) -> int:
 def is_empty_table_cell_placeholder(value: str | TableCell) -> bool:
     if isinstance(value, str):
         return value.strip() == ""
-    return value.row_span == 1 and value.col_span == 1 and value.text.strip() == ""
+    return (
+        value.row_span == 1
+        and value.col_span == 1
+        and value.text.strip() == ""
+        and not value.runs
+    )
 
 
 def _resolve_table_body_column_count(

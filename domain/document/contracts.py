@@ -17,6 +17,7 @@ from ...constants import (
 from ...document_core.models.blocks import (
     BlockLayout,
     BlockStyle,
+    BorderConfig,
     HeaderFooterConfig,
     ListItem,
     ParagraphRun,
@@ -178,6 +179,13 @@ def _extract_text_from_column_alias(value: object) -> str:
     return ""
 
 
+def _unwrap_singleton_list(value: object) -> object:
+    current = value
+    while isinstance(current, list) and len(current) == 1:
+        current = current[0]
+    return current
+
+
 def _normalize_table_header_alias(block: dict) -> None:
     if block.get("type") != "table":
         return
@@ -216,6 +224,11 @@ def _normalize_table_row_alias(block: dict) -> None:
             if isinstance(row, Mapping) and isinstance(row.get("cells"), list):
                 normalized_rows.append(copy.deepcopy(row["cells"]))
                 changed = True
+                continue
+            if isinstance(row, list):
+                normalized_row = [_unwrap_singleton_list(cell) for cell in row]
+                normalized_rows.append(normalized_row)
+                changed = changed or normalized_row != row
                 continue
             normalized_rows.append(row)
         if changed:
@@ -392,6 +405,151 @@ def _normalize_paragraph_items_alias(block: dict) -> None:
         block.pop("items", None)
 
 
+def _normalize_toc_title_alias(block: dict) -> None:
+    if block.get("type") != "toc" or block.get("title"):
+        return
+    toc_text = block.pop("text", "")
+    if isinstance(toc_text, str) and toc_text.strip():
+        block["title"] = toc_text.strip()
+
+
+def _normalize_heading_title_alias(block: dict) -> None:
+    if block.get("type") != "heading":
+        return
+    heading_title = block.get("title")
+    if block.get("text"):
+        block.pop("title", None)
+        return
+    if isinstance(heading_title, str) and heading_title.strip():
+        block["text"] = heading_title.strip()
+    block.pop("title", None)
+
+
+def _normalize_runs_color_aliases(runs: object) -> None:
+    if not isinstance(runs, list):
+        return
+    for raw_run in runs:
+        if not isinstance(raw_run, dict):
+            continue
+        text_color = raw_run.pop("text_color", None)
+        if "color" not in raw_run and isinstance(text_color, str) and text_color.strip():
+            raw_run["color"] = text_color.strip()
+
+
+def _normalize_block_run_aliases(block: dict) -> None:
+    _normalize_runs_color_aliases(block.get("runs"))
+    items = block.get("items")
+    if not isinstance(items, list):
+        return
+    normalized_items: list[object] = []
+    changed = False
+    for item in items:
+        unwrapped_item = _unwrap_singleton_list(item)
+        normalized_items.append(unwrapped_item)
+        changed = changed or unwrapped_item != item
+    if changed:
+        block["items"] = normalized_items
+        items = normalized_items
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        _normalize_runs_color_aliases(item.get("runs"))
+
+
+def _normalize_table_cell_aliases(block: dict) -> None:
+    if block.get("type") != "table":
+        return
+    rows = block.get("rows")
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        for cell in row:
+            if not isinstance(cell, dict):
+                continue
+            if cell.get("type") == "cell":
+                cell.pop("type", None)
+            _normalize_runs_color_aliases(cell.get("runs"))
+
+
+def _normalize_legacy_paragraph_border_aliases(block: dict) -> None:
+    if block.get("type") != "paragraph":
+        return
+
+    bottom_border = block.pop("bottom_border", None)
+    bottom_border_color = block.pop("bottom_border_color", None)
+    bottom_border_size_pt = block.pop("bottom_border_size_pt", None)
+    bottom_border_style = block.pop("bottom_border_style", None)
+
+    if bottom_border is False:
+        return
+
+    has_legacy_border = (
+        bottom_border is True
+        or bottom_border_color not in (None, "")
+        or bottom_border_size_pt is not None
+        or (
+            isinstance(bottom_border_style, str)
+            and bottom_border_style.strip() != ""
+        )
+    )
+    if not has_legacy_border:
+        return
+
+    raw_border = block.get("border")
+    border = dict(raw_border) if isinstance(raw_border, Mapping) else {}
+    raw_bottom = border.get("bottom")
+    bottom = dict(raw_bottom) if isinstance(raw_bottom, Mapping) else {}
+
+    if (
+        isinstance(bottom_border_style, str)
+        and bottom_border_style.strip()
+        and "style" not in bottom
+    ):
+        bottom["style"] = bottom_border_style.strip()
+    if bottom_border_color not in (None, "") and "color" not in bottom:
+        bottom["color"] = bottom_border_color
+    if bottom_border_size_pt is not None and "width_pt" not in bottom:
+        bottom["width_pt"] = bottom_border_size_pt
+
+    border["bottom"] = bottom
+    block["border"] = border
+
+
+_BLOCK_SHAPE_NORMALIZERS = (
+    _normalize_nested_block_payload_alias,
+    _normalize_toc_title_alias,
+)
+_BLOCK_STYLE_NORMALIZERS = (
+    _normalize_block_style_and_layout,
+    _drop_unsupported_block_aliases,
+)
+_BLOCK_CONTENT_NORMALIZERS = (
+    _normalize_heading_title_alias,
+    _normalize_paragraph_items_alias,
+    _normalize_block_run_aliases,
+    _normalize_legacy_paragraph_border_aliases,
+)
+_TABLE_BLOCK_NORMALIZERS = (
+    _normalize_table_header_alias,
+    _normalize_table_row_alias,
+    _normalize_table_cell_aliases,
+)
+_BLOCK_NORMALIZER_PIPELINE = (
+    _BLOCK_SHAPE_NORMALIZERS,
+    _BLOCK_STYLE_NORMALIZERS,
+    _BLOCK_CONTENT_NORMALIZERS,
+    _TABLE_BLOCK_NORMALIZERS,
+)
+
+
+def _apply_block_normalization_pipeline(block: dict) -> None:
+    for normalizer_group in _BLOCK_NORMALIZER_PIPELINE:
+        for normalizer in normalizer_group:
+            normalizer(block)
+
+
 def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
     normalized = dict(kwargs)
     raw_document_style = normalized.get("document_style")
@@ -464,19 +622,7 @@ def normalize_raw_block_payloads(
                 normalized_columns.append(normalized_column)
             block["columns"] = normalized_columns
 
-        _normalize_nested_block_payload_alias(block)
-        block_type = block.get("type")
-
-        if block_type == "toc" and not block.get("title"):
-            toc_text = block.pop("text", "")
-            if isinstance(toc_text, str) and toc_text.strip():
-                block["title"] = toc_text.strip()
-
-        _normalize_block_style_and_layout(block)
-        _drop_unsupported_block_aliases(block)
-        _normalize_paragraph_items_alias(block)
-        _normalize_table_header_alias(block)
-        _normalize_table_row_alias(block)
+        _apply_block_normalization_pipeline(block)
         section_break = _extract_compat_section_break(block)
         if section_break is not None:
             normalized_blocks.append(section_break)
@@ -531,6 +677,19 @@ def _normalize_numeric_columns(value: list[int]) -> list[int]:
 def _normalize_table_title_text(value: str) -> str:
     return value.strip()
 
+
+def _coerce_table_input_rows_to_runtime(
+    rows: list[list[str | TableCellInput]],
+) -> list[list[str | TableCell]]:
+    return [
+        [
+            cell
+            if isinstance(cell, str)
+            else TableCell(**cell.model_dump(mode="json", exclude_none=True))
+            for cell in row
+        ]
+        for row in rows
+    ]
 
 class CreateDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -625,8 +784,30 @@ class ListItemInput(ListItem):
     model_config = ConfigDict(extra="forbid")
 
 
-class TableCellInput(TableCell):
+class TableCellInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    text: str = ""
+    runs: list[ParagraphRunInput] = Field(default_factory=list)
+    fill: str | None = None
+    text_color: str | None = None
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    strikethrough: bool | None = None
+    align: Literal["left", "center", "right"] | None = None
+    font_name: str | None = None
+    font_scale: float | None = Field(
+        default=None,
+        ge=DOCUMENT_BLOCK_FONT_SCALE_MIN,
+        le=3.0,
+    )
+    border: BorderConfig | None = None
+
+    @field_validator("fill", "text_color")
+    @classmethod
+    def validate_optional_colors(cls, value: str | None) -> str | None:
+        return normalize_optional_hex_color(value)
 
 
 class MetricCardInput(BaseModel):
@@ -672,6 +853,7 @@ class AddParagraphRequest(BaseModel):
     variant: Literal["body", "summary_box", "key_takeaway"] = "body"
     title: str = ""
     runs: list[ParagraphRunInput] = Field(default_factory=list)
+    border: BorderConfig | None = None
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -690,6 +872,7 @@ class SectionParagraphInput(BaseModel):
     variant: Literal["body", "summary_box", "key_takeaway"] = "body"
     title: str = ""
     runs: list[ParagraphRunInput] = Field(default_factory=list)
+    border: BorderConfig | None = None
     style: BlockStyle = Field(default_factory=BlockStyle)
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
@@ -912,7 +1095,11 @@ class AddTableRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> AddTableRequest:
-        validate_table_structure(self.headers, self.rows, self.header_groups)
+        validate_table_structure(
+            self.headers,
+            _coerce_table_input_rows_to_runtime(self.rows),
+            self.header_groups,
+        )
         return self
 
 
@@ -980,7 +1167,11 @@ class SectionTableInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_table_shape(self) -> SectionTableInput:
-        validate_table_structure(self.headers, self.rows, self.header_groups)
+        validate_table_structure(
+            self.headers,
+            _coerce_table_input_rows_to_runtime(self.rows),
+            self.header_groups,
+        )
         return self
 
 

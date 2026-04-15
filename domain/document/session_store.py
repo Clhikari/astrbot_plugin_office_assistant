@@ -69,6 +69,7 @@ from .contracts import (
     SectionParagraphInput,
     SectionTableInput,
     TocInput,
+    _coerce_table_input_rows_to_runtime,
     _normalize_docx_filename,
 )
 from .hooks import (
@@ -491,6 +492,7 @@ class DocumentSessionStore:
                 variant=block.variant,
                 title=block.title,
                 runs=block.runs,
+                border=block.border,
                 style=block.style,
                 layout=block.layout,
             )
@@ -525,7 +527,7 @@ class DocumentSessionStore:
         if isinstance(block, SectionTableInput):
             return TableBlock(
                 headers=block.headers,
-                rows=block.rows,
+                rows=_coerce_table_input_rows_to_runtime(block.rows),
                 header_groups=block.header_groups,
                 table_style=block.table_style or document.metadata.table_template,
                 caption=block.caption or block.title,
@@ -713,6 +715,11 @@ class DocumentSessionStore:
                         variant=request.variant,
                         title=request.title,
                         runs=[run.model_copy(deep=True) for run in request.runs],
+                        border=(
+                            request.border.model_copy(deep=True)
+                            if request.border is not None
+                            else None
+                        ),
                         style=request.style.model_copy(deep=True),
                         layout=request.layout.model_copy(deep=True),
                     )

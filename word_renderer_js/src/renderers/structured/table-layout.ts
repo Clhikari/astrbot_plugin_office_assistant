@@ -1,7 +1,9 @@
 import {
+  ExternalHyperlink,
   HeightRule,
   LineRuleType,
   Paragraph,
+  ParagraphChild,
   ShadingType,
   TableCell,
   TableRow,
@@ -14,6 +16,13 @@ import { RenderCliError } from "../../core/errors";
 import { JsonObject } from "../../core/payload";
 import { Block, TableCellValue, ThemeConfig } from "./types";
 import { buildFontAttributes } from "./inline";
+import { resolveBorderSpec, resolveTableCellBorders } from "./borders";
+import {
+  buildTextRuns,
+  DEFAULT_HYPERLINK_COLOR,
+  normalizeHyperlinkTarget,
+  normalizeLineBreaks,
+} from "./run-helpers";
 import {
   arrayValue,
   asObject,
@@ -28,10 +37,23 @@ import {
   resolveBandedRowFill,
   resolveFirstColumnBold,
   resolveTableBodyAlignment,
+  resolveTableBorders,
   resolveTableFontSize,
   resolveTableParagraphSpacing,
   resolveTableRowHeight,
 } from "./table-style";
+
+type CellRunDefaults = {
+  fontSize: number;
+  fontScale?: number;
+  fontName?: string;
+  codeFontName: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strikethrough: boolean;
+  color?: string;
+};
 
 export function buildTableBodyRows(
   block: Block,
@@ -49,6 +71,7 @@ export function buildTableBodyRows(
   const defaultBodyFill = stringValue(tableDefaults.body_fill) || undefined;
   const bodyParagraphSpacing = resolveTableParagraphSpacing(tableStyleName, false);
   const bodyRowHeight = resolveTableRowHeight(tableStyleName, false);
+  const tableBorders = resolveTableBorders(block, tableDefaults, theme, tableStyleName);
 
   return rows.map((row, rowIndex) => {
     const rowItems = arrayValue(row);
@@ -147,6 +170,9 @@ export function buildTableBodyRows(
                 type: ShadingType.CLEAR,
               }
             : undefined,
+          borders: cell.border
+            ? resolveTableCellBorders(tableBorders, cell.border)
+            : undefined,
         }),
       );
       columnIndex += cell.colSpan;
@@ -198,13 +224,22 @@ export function normalizeTableCell(cell: unknown): TableCellValue {
   }
   return {
     text: stringValue(obj.text),
+    runs: arrayValue(obj.runs) as JsonObject[],
     rowSpan,
     colSpan,
     fill: stringValue(obj.fill) || undefined,
     textColor: stringValue(obj.text_color) || undefined,
-    bold: booleanValue(obj.bold),
+    bold: obj.bold !== undefined ? booleanValue(obj.bold) : undefined,
+    italic: obj.italic !== undefined ? booleanValue(obj.italic) : undefined,
+    underline: obj.underline !== undefined ? booleanValue(obj.underline) : undefined,
+    strikethrough:
+      obj.strikethrough !== undefined
+        ? booleanValue(obj.strikethrough)
+        : undefined,
     align: stringValue(obj.align) || undefined,
+    fontName: stringValue(obj.font_name) || undefined,
     fontScale: numberValue(obj.font_scale),
+    border: resolveBorderSpec(obj.border),
   };
 }
 
@@ -215,29 +250,148 @@ function buildTableCellTextRuns(
   block: Block,
   tableStyleName: string,
   theme: ThemeConfig,
-): TextRun[] {
-  const resolvedFontSize = halfPoint(
-    resolveTableFontSize(
+): ParagraphChild[] {
+  const defaults = resolveCellRunDefaults(
+    cell,
+    firstColumnBold,
+    columnIndex,
+    block,
+    tableStyleName,
+    theme,
+  );
+  const cellRuns = arrayValue(cell.runs);
+  if (cellRuns.length > 0) {
+    return cellRuns.flatMap((run) =>
+      buildRichCellRunChildren(run, defaults, block, tableStyleName, theme),
+    );
+  }
+  return buildPlainCellRunChildren(cell.text, defaults);
+}
+
+function resolveCellRunDefaults(
+  cell: TableCellValue,
+  firstColumnBold: boolean,
+  columnIndex: number,
+  block: Block,
+  tableStyleName: string,
+  theme: ThemeConfig,
+): CellRunDefaults {
+  return {
+    fontSize: resolveTableFontSize(
       block,
       tableStyleName,
       theme,
       false,
       cell.fontScale,
     ),
-  );
-  const textLines = cell.text.replace(/\\n/g, "\n").split(/\r?\n/);
+    fontScale: cell.fontScale,
+    fontName: cell.fontName || theme.tableFontName,
+    codeFontName: theme.codeFontName || "Consolas",
+    bold: cell.bold ?? (firstColumnBold && columnIndex === 0),
+    italic: booleanValue(cell.italic) ?? false,
+    underline: booleanValue(cell.underline) ?? false,
+    strikethrough: booleanValue(cell.strikethrough) ?? false,
+    color: cell.textColor || undefined,
+  };
+}
 
-  return textLines.map(
-    (line, lineIndex) =>
-      new TextRun({
-        text: line,
-        break: lineIndex > 0 ? 1 : undefined,
-        bold: cell.bold ?? (firstColumnBold && columnIndex === 0),
-        color: cell.textColor,
-        size: resolvedFontSize,
-        font: buildFontAttributes(theme.tableFontName),
-      }),
+function buildPlainCellRunChildren(
+  text: string,
+  defaults: CellRunDefaults,
+): TextRun[] {
+  return buildTextRuns(text, {
+    bold: defaults.bold,
+    italics: defaults.italic,
+    underline: defaults.underline ? {} : undefined,
+    strike: defaults.strikethrough,
+    color: defaults.color,
+    size: halfPoint(defaults.fontSize),
+    font: defaults.fontName ? buildFontAttributes(defaults.fontName) : undefined,
+  });
+}
+
+function buildRichCellRunChildren(
+  rawRun: unknown,
+  defaults: CellRunDefaults,
+  block: Block,
+  tableStyleName: string,
+  theme: ThemeConfig,
+): ParagraphChild[] {
+  const run = asObject(rawRun);
+  const hyperlinkTarget = normalizeHyperlinkTarget(run.url);
+  const text = normalizeRichTableCellText(stringValue(run.text));
+  const effectiveFontScale = resolveRichTableCellRunFontScale(
+    numberValue(run.font_scale),
+    defaults.fontScale,
   );
+  const resolvedFontSize = halfPoint(
+    resolveTableFontSize(
+      block,
+      tableStyleName,
+      theme,
+      false,
+      effectiveFontScale,
+    ),
+  );
+  const fontName =
+    stringValue(run.font_name) ||
+    (booleanValue(run.code) === true ? defaults.codeFontName : defaults.fontName);
+  const textRuns = buildTextRuns(text, {
+    bold: booleanValue(run.bold) ?? defaults.bold,
+    italics: booleanValue(run.italic) ?? defaults.italic,
+    underline: hyperlinkTarget
+      ? {}
+      : ((booleanValue(run.underline) ?? defaults.underline) ? {} : undefined),
+    strike: booleanValue(run.strikethrough) ?? defaults.strikethrough,
+    color:
+      stringValue(run.color) ||
+      (hyperlinkTarget ? DEFAULT_HYPERLINK_COLOR : defaults.color),
+    size: resolvedFontSize,
+    font: fontName ? buildFontAttributes(fontName) : undefined,
+  });
+
+  if (!hyperlinkTarget) {
+    return textRuns;
+  }
+  return [new ExternalHyperlink({ link: hyperlinkTarget, children: textRuns })];
+}
+
+function resolveRichTableCellRunFontScale(
+  runFontScale: number | undefined,
+  defaultFontScale: number | undefined,
+): number | undefined {
+  if (runFontScale === undefined) {
+    return defaultFontScale;
+  }
+  const maxFontScale = defaultFontScale ?? 1;
+  return Math.min(runFontScale, maxFontScale);
+}
+
+function normalizeRichTableCellText(text: string): string {
+  const normalizedText = normalizeLineBreaks(text);
+  if (!normalizedText.includes("\n")) {
+    return normalizedText;
+  }
+  return normalizedText
+    .split("\n")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .join(" ")
+    .replace(/\s+([，。！？；：、）》」』】])/g, "$1")
+    .replace(/([（《「『【])\s+/g, "$1")
+    .replace(/([，。！？；：、])\s+/g, "$1")
+    .replace(
+      /([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])\s+([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])/g,
+      "$1$2",
+    )
+    .replace(
+      /([A-Za-z0-9])\s+([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])/g,
+      "$1$2",
+    )
+    .replace(
+      /([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])\s+([A-Za-z0-9])/g,
+      "$1$2",
+    );
 }
 
 export function resolveTableColumnCount(headers: string[], rows: unknown[]): number {
@@ -361,9 +515,21 @@ function isPlaceholderCell(cell: unknown): boolean {
   const obj = asObject(cell);
   return (
     stringValue(obj.text) === "" &&
+    arrayValue(obj.runs).length === 0 &&
     (numberValue(obj.row_span) ?? 1) === 1 &&
     (numberValue(obj.col_span) ?? 1) === 1
   );
+}
+
+function tableCellPlainText(cell: TableCellValue): string {
+  const runs = arrayValue(cell.runs);
+  if (runs.length > 0) {
+    // Keep width inference aligned with rendering: non-empty runs win over text.
+    return runs
+      .map((run) => normalizeRichTableCellText(stringValue(asObject(run).text)))
+      .join("");
+  }
+  return normalizeLineBreaks(cell.text);
 }
 
 type ColumnMetric = {
@@ -428,6 +594,7 @@ function resolvePresetColumnWidths(
   const firstColumnLike = /(区域|分区|地区|大区|市场|团队|部门|板块|region|area)/i.test(
     headers[0],
   );
+  const firstMetricColumnLike = /(指标|项目|科目|metric|kpi|item)/i.test(headers[0]);
   const lastColumnLike = /(备注|说明|comment|note|风险|措施|结论|行动|计划|分析|建议)/i.test(
     headers[4],
   );
@@ -439,9 +606,13 @@ function resolvePresetColumnWidths(
       ),
     ).length;
 
-  return firstColumnLike && lastColumnLike && middleColumnMatches >= 2
-    ? [1720, 1280, 1280, 1280, 3800]
-    : null;
+  if (firstColumnLike && lastColumnLike && middleColumnMatches >= 2) {
+    return [2120, 1340, 1340, 1340, 3220];
+  }
+  if (firstMetricColumnLike && lastColumnLike && middleColumnMatches >= 2) {
+    return [1600, 1080, 1080, 1165, 3360];
+  }
+  return null;
 }
 
 function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[] {
@@ -504,20 +675,20 @@ function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[]
         }
       }
 
-      const text = cell.text.trim();
-      if (!text) {
+      const metricText = tableCellPlainText(cell).trim();
+      if (!metricText) {
         columnIndex += colSpan;
         continue;
       }
 
-      const measuredUnits = Math.max(measureTextUnits(text) / colSpan, 1.2);
+      const measuredUnits = Math.max(measureTextUnits(metricText) / colSpan, 1.2);
       for (let spanIndex = 0; spanIndex < colSpan; spanIndex += 1) {
         metrics[columnIndex + spanIndex].maxUnits = Math.max(
           metrics[columnIndex + spanIndex].maxUnits,
           measuredUnits,
         );
         metrics[columnIndex + spanIndex].sampleCount += 1;
-        if (colSpan === 1 && isNumericLike(text)) {
+        if (colSpan === 1 && isNumericLike(metricText)) {
           metrics[columnIndex + spanIndex].numericLikeCount += 1;
         }
       }
@@ -548,7 +719,7 @@ function resolveHeuristicColumnWidth(
   // - all inferred widths remain bounded so the later total-width scaling step can
   //   normalize the table without producing extreme single-column growth
   if (remarkLike) {
-    return clampWidth(3.9 + Math.min(1.6, Math.max(textUnits - 6, 0) * 0.14), 4.2, 5.6);
+    return clampWidth(3.75 + Math.min(1.25, Math.max(textUnits - 6, 0) * 0.11), 4.0, 5.2);
   }
   if (numericLike) {
     return clampWidth(1.8 + Math.min(0.8, textUnits * 0.06), 1.9, 3.0);

@@ -33,6 +33,7 @@ import {
   normalizeInlineItem,
   paragraphPlainText,
 } from "./inline";
+import { resolveBorderSpec } from "./borders";
 
 export function renderDocumentTitle(
   metadata: JsonObject,
@@ -231,6 +232,7 @@ export function renderParagraph(
 
   return [
     new Paragraph({
+      border: resolveBorderSpec(block.border),
       children: buildRuns(block, theme, {
         fontSize: bodyFontSize,
         emphasis: stringValue(style.emphasis),
