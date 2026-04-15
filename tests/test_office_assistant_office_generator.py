@@ -12,6 +12,7 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     HeroBannerBlock,
     ParagraphBlock,
     TableBlock,
+    TableCell,
 )
 from astrbot_plugin_office_assistant.constants import OfficeType
 from astrbot_plugin_office_assistant.office_generator import (
@@ -64,8 +65,16 @@ def test_build_word_document_model_reuses_session_store_normalization(
                     "type": "table",
                     "headers": ["日期", "时间", "内容"],
                     "rows": [
-                        [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
-                        ["13:00", "课程 B"],
+                        [
+                            {
+                                "text": "第一天",
+                                "font_name": "SimSun",
+                                "fill": "#eef4fa",
+                            },
+                            "09:00",
+                            "课程 A",
+                        ],
+                        ["第二天", "13:00", "课程 B"],
                     ],
                 },
             ],
@@ -77,7 +86,9 @@ def test_build_word_document_model_reuses_session_store_normalization(
     assert document.blocks[0].text == "一、经营总览"
     assert isinstance(document.blocks[1], TableBlock)
     assert document.blocks[1].caption in (None, "")
-    assert document.blocks[1].rows[0][0].row_span == 2
+    assert isinstance(document.blocks[1].rows[0][0], TableCell)
+    assert document.blocks[1].rows[0][0].font_name == "SimSun"
+    assert document.blocks[1].rows[0][0].fill == "EEF4FA"
 
 
 def test_build_word_document_model_supports_hero_banner_blocks(

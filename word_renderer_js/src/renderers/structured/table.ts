@@ -77,15 +77,18 @@ export function renderTable(
       .map((value) => numberValue(value))
       .filter((value): value is number => value !== undefined),
   );
+  const headerGroups = arrayValue(block.header_groups).map((value) => asObject(value));
   const columnWidths = normalizeColumnWidths(block, columnCount);
   const fixedWidthTotal = columnWidths.reduce((sum, value) => sum + value, 0);
   const hasFixedWidths = columnWidths.length > 0 && fixedWidthTotal > 0;
+  const hasRepeatedHeaderRows = headerGroups.length > 0 || headers.length > 0;
 
   const tableRows: TableRow[] = [];
   const caption = stringValue(block.caption) || stringValue(block.title);
   if (caption.trim()) {
     tableRows.push(
       new TableRow({
+        tableHeader: hasRepeatedHeaderRows,
         cantSplit: true,
         children: [
           new TableCell({
@@ -94,6 +97,7 @@ export function renderTable(
             children: [
               new Paragraph({
                 alignment: AlignmentType.CENTER,
+                keepNext: hasRepeatedHeaderRows,
                 spacing: {
                   before: headerParagraphSpacing.before,
                   after: headerParagraphSpacing.after,
@@ -124,7 +128,6 @@ export function renderTable(
     );
   }
 
-  const headerGroups = arrayValue(block.header_groups).map((value) => asObject(value));
   if (headerGroups.length > 0) {
     let spanSum = 0;
     let columnCursor = 0;

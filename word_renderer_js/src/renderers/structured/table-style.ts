@@ -229,11 +229,11 @@ export function resolveTableBodyAlignment(
   if (explicit) {
     return explicit;
   }
-  if (tableStyleName === "report_grid") {
-    return AlignmentType.CENTER;
-  }
   if (numericColumns.has(columnIndex)) {
     return AlignmentType.RIGHT;
+  }
+  if (tableStyleName === "report_grid") {
+    return AlignmentType.CENTER;
   }
   if (tableStyleName === "metrics_compact" && columnIndex > 0) {
     return AlignmentType.CENTER;

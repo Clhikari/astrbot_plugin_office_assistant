@@ -10,6 +10,7 @@ from tests._docx_test_helpers import (
     _render_structured_payload_with_node,
     _table_border_color,
     _table_border_size,
+    _table_grid_widths,
 )
 
 
@@ -166,7 +167,7 @@ def test_node_renderer_supports_table_cell_rich_style_controls(
     assert _run_has_prop(rich_second_run, "strike") is False
     assert _run_size_pt(rich_first_run) is not None
     assert _run_size_pt(rich_second_run) is not None
-    assert _run_size_pt(rich_second_run) > _run_size_pt(rich_first_run)
+    assert _run_size_pt(rich_second_run) == _run_size_pt(rich_first_run)
     assert _run_size_pt(rich_first_run) > _run_size_pt(plain_run)
 
     assert _cell_border_color(rich_cell, "top") == "1F4E79"
@@ -177,6 +178,109 @@ def test_node_renderer_supports_table_cell_rich_style_controls(
     assert _cell_border_size(rich_cell, "right") == "6"
     assert _cell_border_size(rich_cell, "left") == _table_border_size(table, "left")
     assert _cell_border_size(rich_cell, "bottom") == _table_border_size(table, "bottom")
+
+
+def test_node_renderer_clamps_table_cell_run_font_scale_to_cell_default(
+    workspace_root: Path,
+):
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-table-cell-font-scale-clamp",
+        {
+            "document_id": "table-cell-font-scale-clamp",
+            "metadata": _business_report_metadata(title="表格字号收敛"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["项目", "备注"],
+                    "rows": [
+                        [
+                            "毛利率",
+                            {
+                                "font_name": "SimSun",
+                                "font_scale": 1.15,
+                                "text_color": "666666",
+                                "runs": [
+                                    {"text": "基础盘稳定，"},
+                                    {
+                                        "text": "重点增长来自华东渠道，",
+                                        "font_name": "Consolas",
+                                        "font_scale": 1.35,
+                                        "color": "B91C1C",
+                                    },
+                                    {"text": "查看明细", "url": "https://example.com/detail"},
+                                ],
+                            },
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    remark_runs = loaded_doc.tables[0].rows[1].cells[1].paragraphs[0].runs
+
+    assert len(remark_runs) == 2
+    assert _run_size_pt(remark_runs[0]) == _run_size_pt(remark_runs[1])
+
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    document_root = ET.fromstring(document_xml)
+    remark_cell = document_root.findall(".//w:tbl", NS)[0].findall("./w:tr", NS)[1].findall(
+        "./w:tc", NS
+    )[1]
+    hyperlink_run_size = (
+        remark_cell.find(".//w:hyperlink//w:rPr/w:sz", NS)
+        .attrib.get(f"{{{NS['w']}}}val")
+    )
+    first_run_size = remark_cell.findall(".//w:rPr/w:sz", NS)[0].attrib.get(
+        f"{{{NS['w']}}}val"
+    )
+
+    assert hyperlink_run_size == first_run_size
+
+
+def test_node_renderer_allows_table_cell_run_font_scale_to_shrink(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-table-cell-font-scale-shrink",
+        {
+            "document_id": "table-cell-font-scale-shrink",
+            "metadata": _business_report_metadata(title="表格字号缩小"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["项目", "备注"],
+                    "rows": [
+                        [
+                            "毛利率",
+                            {
+                                "font_name": "SimSun",
+                                "font_scale": 1.15,
+                                "text_color": "666666",
+                                "runs": [
+                                    {"text": "基础盘稳定，"},
+                                    {
+                                        "text": "附注",
+                                        "font_scale": 0.95,
+                                        "color": "B91C1C",
+                                    },
+                                ],
+                            },
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    remark_runs = loaded_doc.tables[0].rows[1].cells[1].paragraphs[0].runs
+
+    assert len(remark_runs) == 2
+    assert _run_size_pt(remark_runs[1]) < _run_size_pt(remark_runs[0])
 
 
 def test_node_renderer_renders_valid_hyperlink_in_table_cell(
@@ -242,6 +346,147 @@ def test_node_renderer_renders_valid_hyperlink_in_table_cell(
         break
 
     assert found is True
+
+
+def test_node_renderer_flattens_rich_table_cell_line_breaks(
+    workspace_root: Path,
+):
+    url = "https://example.com/detail"
+    expected_text = "基础盘稳定，重点增长来自华东渠道，查看明细"
+
+    loaded_doc, output_path = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-table-cell-line-break-flattening",
+        {
+            "document_id": "table-cell-line-break-flattening",
+            "metadata": _business_report_metadata(title="表格备注换行压平"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["指标", "Q1 目标", "Q1 实际", "同比变化", "备注"],
+                    "rows": [
+                        [
+                            "营收（万元）",
+                            "50,000",
+                            "59,000",
+                            "+18%",
+                            {
+                                "runs": [
+                                    {"text": "基础盘稳定，\n重点增长来自华东渠道，\n"},
+                                    {"text": "查看明细", "url": url},
+                                ]
+                            },
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    table = loaded_doc.tables[0]
+    assert table.rows[1].cells[4].text == expected_text
+
+    with zipfile.ZipFile(output_path) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+        rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+
+    document_root = ET.fromstring(document_xml)
+    rels_root = ET.fromstring(rels_xml)
+    hyperlink_targets = {
+        rel.attrib.get("Id"): rel.attrib.get("Target")
+        for rel in rels_root
+        if rel.tag.endswith("Relationship")
+    }
+
+    table_node = document_root.findall(".//w:tbl", NS)[0]
+    body_row = table_node.findall("./w:tr", NS)[1]
+    remark_cell = body_row.findall("./w:tc", NS)[4]
+
+    assert remark_cell.findall(".//w:br", NS) == []
+
+    hyperlinks = remark_cell.findall(".//w:hyperlink", NS)
+    assert len(hyperlinks) == 1
+    relation_id = hyperlinks[0].attrib.get(f"{{{NS['r']}}}id")
+    assert relation_id is not None
+    assert hyperlink_targets.get(relation_id) == url
+
+
+def test_node_renderer_balances_business_review_remark_column_widths(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-business-review-width-balance",
+        {
+            "document_id": "business-review-width-balance",
+            "metadata": _business_report_metadata(title="经营复盘列宽"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["指标", "Q1 目标", "Q1 实际", "同比变化", "备注"],
+                    "rows": [
+                        [
+                            "营收（万元）",
+                            "50,000",
+                            "59,000",
+                            "+18%",
+                            {
+                                "runs": [
+                                    {"text": "基础盘稳定，\n重点增长来自华东渠道，\n"},
+                                    {"text": "查看明细", "url": "https://example.com/detail"},
+                                ]
+                            },
+                        ],
+                        ["毛利率", "35.0%", "37.5%", "+2.5pts", "产品结构优化"],
+                    ],
+                }
+            ],
+        },
+    )
+
+    widths = _table_grid_widths(loaded_doc.tables[0])
+
+    assert len(widths) == 5
+    assert widths[4] > widths[0]
+    assert widths[4] >= 3300
+    assert widths[4] < 3400
+    assert widths[0] <= 1650
+
+
+def test_node_renderer_balances_preset_operating_review_column_widths(
+    workspace_root: Path,
+):
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-preset-width-balance",
+        {
+            "document_id": "preset-width-balance",
+            "metadata": _business_report_metadata(title="经营类预设列宽"),
+            "blocks": [
+                {
+                    "type": "table",
+                    "headers": ["区域", "Q1 目标", "Q1 实际", "同比变化", "备注"],
+                    "rows": [
+                        [
+                            "华东",
+                            "50,000",
+                            "59,000",
+                            "+18%",
+                            "重点增长来自直营网点和区域渠道联动",
+                        ]
+                    ],
+                }
+            ],
+        },
+    )
+
+    widths = _table_grid_widths(loaded_doc.tables[0])
+
+    assert len(widths) == 5
+    assert widths[4] > widths[0]
+    assert widths[4] >= 3100
+    assert widths[4] < 3400
+    assert widths[4] - widths[0] < 1200
 
 
 def test_node_renderer_keeps_text_only_table_compatible(workspace_root: Path):

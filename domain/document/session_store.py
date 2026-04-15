@@ -32,6 +32,7 @@ from ...document_core.models.blocks import (
     SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
+    TableCell,
     TechnicalResumeData,
     TocBlock,
 )
@@ -491,6 +492,7 @@ class DocumentSessionStore:
                 variant=block.variant,
                 title=block.title,
                 runs=block.runs,
+                border=block.border,
                 style=block.style,
                 layout=block.layout,
             )
@@ -525,7 +527,15 @@ class DocumentSessionStore:
         if isinstance(block, SectionTableInput):
             return TableBlock(
                 headers=block.headers,
-                rows=block.rows,
+                rows=[
+                    [
+                        cell
+                        if isinstance(cell, str)
+                        else TableCell(**cell.model_dump(mode="json", exclude_none=True))
+                        for cell in row
+                    ]
+                    for row in block.rows
+                ],
                 header_groups=block.header_groups,
                 table_style=block.table_style or document.metadata.table_template,
                 caption=block.caption or block.title,
@@ -713,6 +723,11 @@ class DocumentSessionStore:
                         variant=request.variant,
                         title=request.title,
                         runs=[run.model_copy(deep=True) for run in request.runs],
+                        border=(
+                            request.border.model_copy(deep=True)
+                            if request.border is not None
+                            else None
+                        ),
                         style=request.style.model_copy(deep=True),
                         layout=request.layout.model_copy(deep=True),
                     )

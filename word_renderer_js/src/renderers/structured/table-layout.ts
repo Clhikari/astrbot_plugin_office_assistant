@@ -316,8 +316,11 @@ function buildRichCellRunChildren(
 ): ParagraphChild[] {
   const run = asObject(rawRun);
   const hyperlinkTarget = normalizeHyperlinkTarget(run.url);
-  const text = stringValue(run.text);
-  const effectiveFontScale = numberValue(run.font_scale) ?? defaults.fontScale;
+  const text = normalizeRichTableCellText(stringValue(run.text));
+  const effectiveFontScale = resolveRichTableCellRunFontScale(
+    numberValue(run.font_scale),
+    defaults.fontScale,
+  );
   const resolvedFontSize = halfPoint(
     resolveTableFontSize(
       block,
@@ -348,6 +351,44 @@ function buildRichCellRunChildren(
     return textRuns;
   }
   return [new ExternalHyperlink({ link: hyperlinkTarget, children: textRuns })];
+}
+
+function resolveRichTableCellRunFontScale(
+  runFontScale: number | undefined,
+  defaultFontScale: number | undefined,
+): number | undefined {
+  if (runFontScale === undefined) {
+    return defaultFontScale;
+  }
+  const maxFontScale = defaultFontScale ?? 1;
+  return Math.min(runFontScale, maxFontScale);
+}
+
+function normalizeRichTableCellText(text: string): string {
+  const normalizedText = normalizeLineBreaks(text);
+  if (!normalizedText.includes("\n")) {
+    return normalizedText;
+  }
+  return normalizedText
+    .split("\n")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .join(" ")
+    .replace(/\s+([，。！？；：、）》」』】])/g, "$1")
+    .replace(/([（《「『【])\s+/g, "$1")
+    .replace(/([，。！？；：、])\s+/g, "$1")
+    .replace(
+      /([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])\s+([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])/g,
+      "$1$2",
+    )
+    .replace(
+      /([A-Za-z0-9])\s+([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])/g,
+      "$1$2",
+    )
+    .replace(
+      /([\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF])\s+([A-Za-z0-9])/g,
+      "$1$2",
+    );
 }
 
 export function resolveTableColumnCount(headers: string[], rows: unknown[]): number {
@@ -482,7 +523,7 @@ function tableCellPlainText(cell: TableCellValue): string {
   if (runs.length > 0) {
     // Keep width inference aligned with rendering: non-empty runs win over text.
     return runs
-      .map((run) => normalizeLineBreaks(stringValue(asObject(run).text)))
+      .map((run) => normalizeRichTableCellText(stringValue(asObject(run).text)))
       .join("");
   }
   return normalizeLineBreaks(cell.text);
@@ -550,6 +591,7 @@ function resolvePresetColumnWidths(
   const firstColumnLike = /(区域|分区|地区|大区|市场|团队|部门|板块|region|area)/i.test(
     headers[0],
   );
+  const firstMetricColumnLike = /(指标|项目|科目|metric|kpi|item)/i.test(headers[0]);
   const lastColumnLike = /(备注|说明|comment|note|风险|措施|结论|行动|计划|分析|建议)/i.test(
     headers[4],
   );
@@ -561,9 +603,13 @@ function resolvePresetColumnWidths(
       ),
     ).length;
 
-  return firstColumnLike && lastColumnLike && middleColumnMatches >= 2
-    ? [1720, 1280, 1280, 1280, 3800]
-    : null;
+  if (firstColumnLike && lastColumnLike && middleColumnMatches >= 2) {
+    return [2120, 1340, 1340, 1340, 3220];
+  }
+  if (firstMetricColumnLike && lastColumnLike && middleColumnMatches >= 2) {
+    return [1600, 1080, 1080, 1165, 3360];
+  }
+  return null;
 }
 
 function collectColumnMetrics(block: Block, columnCount: number): ColumnMetric[] {
@@ -670,7 +716,7 @@ function resolveHeuristicColumnWidth(
   // - all inferred widths remain bounded so the later total-width scaling step can
   //   normalize the table without producing extreme single-column growth
   if (remarkLike) {
-    return clampWidth(3.9 + Math.min(1.6, Math.max(textUnits - 6, 0) * 0.14), 4.2, 5.6);
+    return clampWidth(3.75 + Math.min(1.25, Math.max(textUnits - 6, 0) * 0.11), 4.0, 5.2);
   }
   if (numericLike) {
     return clampWidth(1.8 + Math.min(0.8, textUnits * 0.06), 1.9, 3.0);

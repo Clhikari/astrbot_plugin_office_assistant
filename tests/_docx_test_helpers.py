@@ -156,6 +156,19 @@ def _paragraph_has_page_break(paragraph) -> bool:
     )
 
 
+def _paragraph_has_keep_next(paragraph) -> bool:
+    from docx.oxml.ns import qn
+
+    p_pr = paragraph._p.pPr
+    if p_pr is None:
+        return False
+    keep_next = p_pr.find(qn("w:keepNext"))
+    if keep_next is None:
+        return False
+    value = keep_next.get(qn("w:val"))
+    return value in {None, "1", "true", "on"}
+
+
 def _paragraph_after(doc, paragraph, offset: int = 1):
     for index, candidate in enumerate(doc.paragraphs):
         if candidate._p is paragraph._p:

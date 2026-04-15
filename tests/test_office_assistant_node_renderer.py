@@ -718,14 +718,14 @@ def test_node_renderer_uses_relaxed_report_grid_defaults_for_business_tables(
     table = loaded_doc.tables[0]
 
     assert _table_width(table) == ("9360", "dxa")
-    assert _table_grid_widths(table) == [1720, 1280, 1280, 1280, 3800]
+    assert _table_grid_widths(table) == [2120, 1340, 1340, 1340, 3220]
     assert _table_cell_margin(table, "left") == "108"
     assert _table_cell_margin(table, "top") == "136"
     assert _table_row_height(table.rows[0]) == ("520", "atLeast")
     assert _table_row_height(table.rows[1]) == ("480", "atLeast")
 
 
-def test_node_renderer_uses_business_report_heading_dividers_when_theme_name_is_blank(
+def test_node_renderer_does_not_add_heading_dividers_when_theme_name_is_blank(
     workspace_root: Path,
 ):
     loaded_doc, _ = _render_structured_payload_with_node(
@@ -757,12 +757,9 @@ def test_node_renderer_uses_business_report_heading_dividers_when_theme_name_is_
     )
 
     level_1_heading = _find_paragraph(loaded_doc, "一、分区业绩")
-    level_1_divider = _paragraph_after(loaded_doc, level_1_heading)
     level_2_heading = _find_paragraph(loaded_doc, "1.1 各区营收完成情况")
-    level_2_divider = _paragraph_after(loaded_doc, level_2_heading)
-
-    assert _paragraph_bottom_border_color(level_1_divider) == "1F4E79"
-    assert _paragraph_bottom_border_color(level_2_divider) == "1F4E79"
+    assert _paragraph_bottom_border_color(level_1_heading) is None
+    assert _paragraph_bottom_border_color(level_2_heading) is None
 
 
 def test_node_renderer_business_report_metric_cards_use_fixed_cover_widths(
@@ -1878,19 +1875,19 @@ async def test_node_document_toolset_exports_training_summary_golden_sample(
                 "border_style": "minimal",
                 "rows": [
                     [
-                        {"text": "2026-04-10", "row_span": 2},
+                        "2026-04-10",
                         "09:00 - 12:00",
                         "Introduction to Tools",
                         "Alice Smith",
                     ],
-                    ["13:00 - 16:00", "Hands-on Practice", "Bob Johnson"],
+                    ["2026-04-10", "13:00 - 16:00", "Hands-on Practice", "Bob Johnson"],
                     [
-                        {"text": "2026-04-11", "row_span": 2},
+                        "2026-04-11",
                         "09:00 - 12:00",
                         "Advanced Techniques",
                         "Alice Smith",
                     ],
-                    ["13:00 - 16:00", "Group Project", "Bob Johnson"],
+                    ["2026-04-11", "13:00 - 16:00", "Group Project", "Bob Johnson"],
                 ],
             },
             {
@@ -1929,8 +1926,8 @@ async def test_node_document_toolset_exports_training_summary_golden_sample(
         for paragraph in loaded_doc.paragraphs
     )
     assert schedule_table.rows[0].cells[0].text == "III. Training Schedule"
-    assert _cell_vertical_merge(schedule_table.rows[2].cells[0]) == "restart"
-    assert _raw_row_cell_vertical_merge(schedule_table.rows[3], 0) == "continue"
+    assert schedule_table.rows[2].cells[0].text == "2026-04-10"
+    assert schedule_table.rows[3].cells[0].text == "2026-04-10"
     assert _run_rgb(schedule_table.rows[1].cells[0]) == "666666"
     assert _run_bold(schedule_table.rows[1].cells[0]) is False
     assert feedback_table.rows[0].cells[0].text == "IV. Participant Feedback"
@@ -2357,7 +2354,7 @@ async def test_node_document_toolset_exports_low_frequency_parity_sample(
 
 
 @pytest.mark.asyncio
-async def test_node_document_toolset_supports_horizontal_merge_and_page_number_format(
+async def test_node_document_toolset_supports_header_groups_and_page_number_format(
     workspace_root: Path,
 ):
     loaded_doc, _ = await _export_docx_via_node_toolset(
@@ -2381,11 +2378,7 @@ async def test_node_document_toolset_supports_horizontal_merge_and_page_number_f
                 ],
                 "headers": ["分类", "区域", "完成率", "备注"],
                 "rows": [
-                    [
-                        {"text": "华东大区汇总", "col_span": 2},
-                        "112%",
-                        "达成",
-                    ],
+                    ["华东大区汇总", "上海", "112%", "达成"],
                     ["单体", "上海", "108%", "推进"],
                 ],
             },
@@ -2410,7 +2403,7 @@ async def test_node_document_toolset_supports_horizontal_merge_and_page_number_f
     assert table.rows[0].cells[2].text == "结果"
     assert _grid_span(table.rows[0].cells[2]) == 2
     assert table.rows[2].cells[0].text == "华东大区汇总"
-    assert _grid_span(table.rows[2].cells[0]) == 2
+    assert _grid_span(table.rows[2].cells[0]) == 1
     assert table.rows[2].cells[2].text == "112%"
     assert _section_page_number_format(loaded_doc.sections[0]) == "upperRoman"
     assert _section_page_number_format(loaded_doc.sections[1]) == "decimal"
@@ -2595,8 +2588,8 @@ def test_node_renderer_rejects_non_integer_col_span(workspace_root: Path):
 
     assert completed.returncode != 0
     error_payload = json.loads(completed.stderr)
-    assert error_payload["code"] == "TABLE_CELL_SPAN_INVALID"
-    assert "integers greater than or equal to 1" in error_payload["message"]
+    assert error_payload["code"] == "SCHEMA_VALIDATION_FAILED"
+    assert "data/blocks/0/rows/0/0/col_span must be integer" in error_payload["message"]
 
 
 def test_node_renderer_rejects_non_positive_col_span(workspace_root: Path):
@@ -2647,8 +2640,8 @@ def test_node_renderer_rejects_non_positive_col_span(workspace_root: Path):
 
         assert completed.returncode != 0
         error_payload = json.loads(completed.stderr)
-        assert error_payload["code"] == "TABLE_CELL_SPAN_INVALID"
-        assert "integers greater than or equal to 1" in error_payload["message"]
+        assert error_payload["code"] == "SCHEMA_VALIDATION_FAILED"
+        assert "data/blocks/0/rows/0/0/col_span must be >= 1" in error_payload["message"]
 
 
 def test_node_renderer_rejects_combined_row_and_column_spans(workspace_root: Path):

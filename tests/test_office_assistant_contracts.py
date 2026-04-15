@@ -83,6 +83,7 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     FinalizeDocumentRequest,
     SectionListInput,
     SectionParagraphInput,
+    TableCellInput,
     SectionTableInput,
     normalize_create_document_kwargs,
     normalize_raw_block_payloads,
@@ -216,8 +217,12 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     run_properties = block_properties["runs"]["items"]["properties"]
     assert run_properties["bold"]["type"] == "boolean"
     assert run_properties["underline"]["type"] == "boolean"
+    assert run_properties["strikethrough"]["type"] == "boolean"
     assert run_properties["code"]["type"] == "boolean"
     assert run_properties["color"]["type"] == "string"
+    assert run_properties["font_name"]["type"] == "string"
+    assert run_properties["font_scale"]["type"] == "number"
+    assert run_properties["url"]["type"] == "string"
     assert block_properties["template"]["type"] == "string"
     assert block_properties["data"]["type"] == "object"
     assert block_properties["data"]["properties"]["title"]["type"] == "string"
@@ -237,6 +242,11 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["subtitle"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"
     assert block_properties["runs"]["items"]["type"] == "object"
+    assert block_properties["border"]["type"] == "object"
+    assert (
+        block_properties["border"]["properties"]["bottom"]["properties"]["style"]["enum"]
+        == ["single", "double", "dashed", "dotted", "none"]
+    )
     assert block_properties["bottom_border"]["type"] == "boolean"
     assert block_properties["bottom_border_color"]["type"] == "string"
     assert block_properties["bottom_border_size_pt"]["type"] == "number"
@@ -300,13 +310,20 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         "properties"
     ]
     assert row_cell_properties["text"]["type"] == "string"
-    assert row_cell_properties["row_span"]["minimum"] == 1
-    assert row_cell_properties["col_span"]["minimum"] == 1
+    assert "row_span" not in row_cell_properties
+    assert "col_span" not in row_cell_properties
     assert row_cell_properties["fill"]["type"] == "string"
     assert row_cell_properties["text_color"]["type"] == "string"
     assert row_cell_properties["bold"]["type"] == "boolean"
+    assert row_cell_properties["italic"]["type"] == "boolean"
+    assert row_cell_properties["underline"]["type"] == "boolean"
+    assert row_cell_properties["strikethrough"]["type"] == "boolean"
     assert row_cell_properties["align"]["enum"] == ["left", "center", "right"]
     assert row_cell_properties["font_scale"]["type"] == "number"
+    assert row_cell_properties["font_name"]["type"] == "string"
+    assert row_cell_properties["runs"]["items"]["properties"]["font_name"]["type"] == "string"
+    assert row_cell_properties["runs"]["items"]["properties"]["strikethrough"]["type"] == "boolean"
+    assert row_cell_properties["border"]["type"] == "object"
     assert block_properties["theme_color"]["type"] == "string"
     assert block_properties["text_color"]["type"] == "string"
     assert block_properties["subtitle_color"]["type"] == "string"
@@ -565,6 +582,117 @@ def test_normalize_raw_block_payloads_repairs_paragraph_items_alias():
     assert "items" not in normalized[0]
     assert normalized[0]["runs"][0]["text"] == "Training Title: "
     assert normalized[0]["runs"][1]["text"] == "Advanced Skills Workshop"
+
+
+def test_normalize_raw_block_payloads_repairs_legacy_paragraph_border_aliases():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "paragraph",
+                "text": "季度经营复盘",
+                "border": {"bottom": {"color": "CBD5E1"}},
+                "bottom_border": True,
+                "bottom_border_style": "double",
+                "bottom_border_color": "1F4E79",
+                "bottom_border_size_pt": 1.0,
+            }
+        ]
+    )
+
+    paragraph = normalized[0]
+
+    assert paragraph["border"]["bottom"] == {
+        "color": "CBD5E1",
+        "style": "double",
+        "width_pt": 1.0,
+    }
+    assert "bottom_border" not in paragraph
+    assert "bottom_border_style" not in paragraph
+    assert "bottom_border_color" not in paragraph
+    assert "bottom_border_size_pt" not in paragraph
+
+
+def test_normalize_raw_block_payloads_repairs_heading_run_and_cell_aliases():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "heading",
+                "title": "第一章：整体经营概览",
+                "level": 1,
+            },
+            {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "结论：", "text_color": "0F4C81"},
+                    {"text": "营收同比增长 18%", "text_color": "C2410C"},
+                ],
+            },
+            {
+                "type": "table",
+                "headers": ["项目", "备注"],
+                "rows": [
+                    [
+                        "供应链自动化改造",
+                        {
+                            "type": "cell",
+                            "runs": [
+                                {"text": "查看明细", "text_color": "B91C1C"},
+                            ],
+                        },
+                    ]
+                ],
+            },
+        ]
+    )
+
+    assert normalized[0]["text"] == "第一章：整体经营概览"
+    assert "title" not in normalized[0]
+    assert normalized[1]["runs"][0]["color"] == "0F4C81"
+    assert normalized[1]["runs"][1]["color"] == "C2410C"
+    assert "text_color" not in normalized[1]["runs"][0]
+    assert "text_color" not in normalized[1]["runs"][1]
+    assert "type" not in normalized[2]["rows"][0][1]
+    assert normalized[2]["rows"][0][1]["runs"][0]["color"] == "B91C1C"
+
+
+def test_normalize_raw_block_payloads_unwraps_singleton_table_cell_lists():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "table",
+                "headers": ["指标", "备注"],
+                "rows": [
+                    [["营收 (万元)"], [{"text": "超预期达成"}]],
+                    [["新增用户 (万)"], [[{"runs": [{"text": "查看明细"}]}]]],
+                ],
+            }
+        ]
+    )
+
+    assert normalized[0]["rows"][0][0] == "营收 (万元)"
+    assert normalized[0]["rows"][0][1] == {"text": "超预期达成"}
+    assert normalized[0]["rows"][1][0] == "新增用户 (万)"
+    assert normalized[0]["rows"][1][1] == {"runs": [{"text": "查看明细"}]}
+
+
+def test_normalize_raw_block_payloads_unwraps_singleton_list_items():
+    normalized = normalize_raw_block_payloads(
+        [
+            {
+                "type": "list",
+                "ordered": True,
+                "items": [
+                    ["渠道优化：资源向高产出门店倾斜。"],
+                    [{"runs": [{"text": "库存健康：建立动态安全库存模型。"}]}],
+                ],
+            }
+        ]
+    )
+
+    assert normalized[0]["items"][0] == "渠道优化：资源向高产出门店倾斜。"
+    assert normalized[0]["items"][1] == {
+        "runs": [{"text": "库存健康：建立动态安全库存模型。"}]
+    }
 
 def test_normalize_create_document_kwargs_moves_top_level_style_fields():
     normalized = normalize_create_document_kwargs(
@@ -1277,47 +1405,28 @@ def test_table_schema_allows_empty_placeholder_tables():
     assert block.headers == []
     assert block.rows == []
 
-def test_add_table_request_supports_vertical_merge_cells():
-    request = AddTableRequest(
-        document_id="doc-1",
-        headers=["日期", "时间", "课程"],
-        rows=[
-            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
-            ["13:00", "课程 B"],
-        ],
-        header_fill_enabled=False,
-        header_bold=False,
-    )
-
-    assert request.rows[0][0].row_span == 2
-    assert request.header_fill_enabled is False
-    assert request.header_bold is False
-
-
-def test_add_table_request_supports_horizontal_merge_cells():
-    request = AddTableRequest(
-        document_id="doc-1",
-        headers=["季度", "营收", "利润", "备注"],
-        rows=[
-            [
-                {"text": "Q1 汇总", "col_span": 2},
-                "18%",
-                "达成",
+def test_add_table_request_rejects_row_span_cells():
+    with pytest.raises(ValidationError, match="row_span"):
+        AddTableRequest(
+            document_id="doc-1",
+            headers=["日期", "时间", "课程"],
+            rows=[
+                [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+                ["13:00", "课程 B"],
             ],
-        ],
-    )
+            header_fill_enabled=False,
+            header_bold=False,
+        )
 
-    assert request.rows[0][0].col_span == 2
 
-
-def test_add_table_request_rejects_non_positive_col_span():
-    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+def test_add_table_request_rejects_col_span_cells():
+    with pytest.raises(ValidationError, match="col_span"):
         AddTableRequest(
             document_id="doc-1",
             headers=["季度", "营收", "利润", "备注"],
             rows=[
                 [
-                    {"text": "Q1 汇总", "col_span": 0},
+                    {"text": "Q1 汇总", "col_span": 2},
                     "18%",
                     "达成",
                 ],
@@ -1325,89 +1434,15 @@ def test_add_table_request_rejects_non_positive_col_span():
         )
 
 
-def test_add_table_request_rejects_combined_row_and_column_spans():
-    with pytest.raises(
-        ValidationError,
-        match="table cell cannot combine row_span and col_span",
-    ):
-        AddTableRequest(
-            document_id="doc-1",
-            headers=["季度", "营收", "备注"],
+def test_section_table_input_rejects_row_span_cells():
+    with pytest.raises(ValidationError, match="row_span"):
+        SectionTableInput(
+            headers=["日期", "时间", "课程"],
             rows=[
-                [
-                    {"text": "Q1", "row_span": 2, "col_span": 2},
-                    "达成",
-                ],
+                [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
+                ["13:00", "课程 B"],
             ],
         )
-
-
-def test_add_table_request_rejects_horizontal_merge_overlapping_vertical_merge():
-    with pytest.raises(
-        ValidationError,
-        match="table row 2 overlaps active row spans",
-    ):
-        AddTableRequest(
-            document_id="doc-1",
-            headers=["分类", "区域", "完成率"],
-            rows=[
-                ["单体", {"text": "上海", "row_span": 2}, "108%"],
-                [{"text": "汇总", "col_span": 2}, "达成"],
-            ],
-        )
-
-
-def test_add_table_request_rejects_horizontal_merge_exceeding_column_count():
-    with pytest.raises(
-        ValidationError,
-        match="table row 1 exceeds column count",
-    ):
-        AddTableRequest(
-            document_id="doc-1",
-            headers=["季度", "营收", "利润", "备注"],
-            rows=[
-                [
-                    {"text": "Q1 汇总", "col_span": 3},
-                    "18%",
-                    "达成",
-                ],
-            ],
-        )
-
-def test_add_table_request_accepts_empty_placeholder_cells_for_vertical_merge_rows():
-    request = AddTableRequest(
-        document_id="doc-1",
-        headers=["日期", "时间", "课程"],
-        rows=[
-            [{"text": "第一天", "row_span": 2}, "09:00", "课程 A"],
-            ["", "13:00", "课程 B"],
-        ],
-    )
-
-    assert request.rows[1][0] == ""
-    assert request.rows[1][1] == "13:00"
-
-
-def test_add_table_request_accepts_runs_only_cells_beneath_vertical_merge():
-    request = AddTableRequest(
-        document_id="doc-1",
-        headers=["日期", "时间", "课程"],
-        rows=[
-            [
-                {"text": "第一天", "row_span": 2},
-                {"runs": [{"text": "09:00"}]},
-                "课程 A",
-            ],
-            [
-                {"runs": [{"text": "13:00"}]},
-                "课程 B",
-            ],
-        ],
-    )
-
-    assert isinstance(request.rows[1][0], TableCell)
-    assert request.rows[1][0].text == ""
-    assert request.rows[1][0].runs[0].text == "13:00"
 
 
 def test_add_table_request_accepts_cells_with_both_text_and_runs():
@@ -1445,9 +1480,9 @@ def test_add_table_request_accepts_cells_with_both_text_and_runs():
     time_cell = request.rows[0][1]
     course_cell = request.rows[0][2]
 
-    assert isinstance(first_cell, TableCell)
-    assert isinstance(time_cell, TableCell)
-    assert isinstance(course_cell, TableCell)
+    assert isinstance(first_cell, TableCellInput)
+    assert isinstance(time_cell, TableCellInput)
+    assert isinstance(course_cell, TableCellInput)
     assert first_cell.text == "第一天 上午"
     assert "".join(run.text for run in first_cell.runs) == "第一天 上午"
     assert time_cell.text == "09:00"
@@ -1563,6 +1598,27 @@ def test_add_blocks_request_rejects_invalid_table_cell_border(cell):
                 }
             ],
         )
+
+
+def test_add_blocks_request_accepts_paragraph_border_config():
+    request = AddBlocksRequest(
+        document_id="doc-1",
+        blocks=[
+            {
+                "type": "paragraph",
+                "text": "段落边框",
+                "border": {"bottom": {"style": "single", "color": "1F4E79"}},
+            }
+        ],
+    )
+
+    paragraph = request.blocks[0]
+
+    assert isinstance(paragraph, SectionParagraphInput)
+    assert paragraph.border is not None
+    assert paragraph.border.bottom is not None
+    assert paragraph.border.bottom.style == "single"
+    assert paragraph.border.bottom.color == "1F4E79"
 
 
 def test_build_document_render_payload_preserves_rich_style_fields():
@@ -1915,16 +1971,17 @@ def test_add_blocks_request_accepts_page_template_technical_resume():
     assert block.data.sections[0].entries[0].heading == "北京大学"
     assert block.data.sections[1].lines[0] == "语言：Go（熟练）、Java（熟练）、Python、SQL"
 
-def test_add_table_request_rejects_vertical_merge_rows_that_exceed_header_columns():
-    with pytest.raises(
-        ValidationError,
-        match=r"table row 2 exceeds column count \(2\)",
-    ):
-        AddTableRequest(
+def test_add_blocks_request_rejects_table_cell_col_span():
+    with pytest.raises(ValidationError, match="col_span"):
+        AddBlocksRequest(
             document_id="doc-1",
-            headers=["日期", "课程"],
-            rows=[
-                [{"text": "第一天", "row_span": 2}, "课程 A"],
-                ["09:00", "课程 B"],
+            blocks=[
+                {
+                    "type": "table",
+                    "headers": ["日期", "课程"],
+                    "rows": [
+                        [{"text": "第一天", "col_span": 2}],
+                    ],
+                }
             ],
         )

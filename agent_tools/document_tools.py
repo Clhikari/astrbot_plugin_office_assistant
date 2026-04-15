@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -80,6 +81,119 @@ _COLUMN_ITEM_SCHEMA = {
             "type": "array",
             "items": _GENERIC_BLOCK_ITEM_SCHEMA,
         }
+    },
+}
+
+
+def _schema_copy(schema: dict[str, Any]) -> dict[str, Any]:
+    return copy.deepcopy(schema)
+
+
+_INLINE_RUN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "bold": {"type": "boolean"},
+        "italic": {"type": "boolean"},
+        "underline": {"type": "boolean"},
+        "strikethrough": {"type": "boolean"},
+        "code": {"type": "boolean"},
+        "color": {
+            "type": "string",
+            "description": "Optional 6-digit hex color for this run, such as 666666.",
+        },
+        "font_name": {
+            "type": "string",
+            "description": "Optional font family override for this run.",
+        },
+        "font_scale": {
+            "type": "number",
+            "description": "Optional font scale override for this run.",
+        },
+        "url": {
+            "type": "string",
+            "description": "Optional external hyperlink target for this run. Supported schemes are http, https, and mailto.",
+        },
+    },
+    "required": ["text"],
+}
+
+_BORDER_SIDE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "style": {
+            "type": "string",
+            "enum": ["single", "double", "dashed", "dotted", "none"],
+        },
+        "color": {
+            "type": "string",
+            "description": "Optional 6-digit hex color for this border side.",
+        },
+        "width_pt": {
+            "type": "number",
+            "description": "Optional border width in points for this side.",
+        },
+    },
+}
+
+_BORDER_SCHEMA = {
+    "type": "object",
+    "description": "Optional per-side border config for paragraph blocks or table body cells.",
+    "properties": {
+        "top": _schema_copy(_BORDER_SIDE_SCHEMA),
+        "bottom": _schema_copy(_BORDER_SIDE_SCHEMA),
+        "left": _schema_copy(_BORDER_SIDE_SCHEMA),
+        "right": _schema_copy(_BORDER_SIDE_SCHEMA),
+    },
+}
+
+_TABLE_CELL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "fill": {
+            "type": "string",
+            "description": "Optional 6-digit hex fill color for this body cell.",
+        },
+        "text_color": {
+            "type": "string",
+            "description": "Optional 6-digit hex text color for this body cell.",
+        },
+        "bold": {
+            "type": "boolean",
+            "description": "Optional bold override for this body cell.",
+        },
+        "italic": {
+            "type": "boolean",
+            "description": "Optional italic default for runs inside this body cell.",
+        },
+        "underline": {
+            "type": "boolean",
+            "description": "Optional underline default for runs inside this body cell.",
+        },
+        "strikethrough": {
+            "type": "boolean",
+            "description": "Optional strikethrough default for runs inside this body cell.",
+        },
+        "align": {
+            "type": "string",
+            "enum": ["left", "center", "right"],
+            "description": "Optional alignment override for this body cell.",
+        },
+        "font_scale": {
+            "type": "number",
+            "description": "Optional body cell font scale override.",
+        },
+        "font_name": {
+            "type": "string",
+            "description": "Optional default font family for runs inside this body cell.",
+        },
+        "runs": {
+            "type": "array",
+            "description": "Optional inline rich-text runs for this body cell. When provided, runs take precedence over text.",
+            "items": _schema_copy(_INLINE_RUN_SCHEMA),
+        },
+        "border": _schema_copy(_BORDER_SCHEMA),
     },
 }
 
@@ -341,12 +455,18 @@ class AddBlocksTool(DocumentToolBase):
     description: str = (
         "Append one or more blocks in order. Use this for mixed content such as "
         "page_template, hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
+        "For heading blocks, use text instead of title. "
+        "For paragraph, list, or table-cell runs, use color instead of text_color. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
         "not as a separate heading block. For table styling, use table-specific fields like "
         "header_fill, header_text_color, header_bold, banded_rows, first_column_bold, table_align, "
-        "border_style, caption_emphasis, and row_span when the user requests a custom visual style. "
-        "header_fill_enabled and header_bold are table block fields, not document_style.table_defaults fields."
+        "border_style, caption_emphasis, cell border, and cell fill when the user requests a custom visual style. "
+        "Do not pass row_span or col_span in public table payloads. "
+        "Table body cell objects must not include type=cell. "
+        "Use paragraph border via border.top/bottom/left/right. bottom_border, bottom_border_color, "
+        "and bottom_border_size_pt are heading-only fields. header_fill_enabled and header_bold are "
+        "table block fields, not document_style.table_defaults fields."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -448,19 +568,7 @@ class AddBlocksTool(DocumentToolBase):
                                                                                 "text": {"type": "string"},
                                                                                 "runs": {
                                                                                     "type": "array",
-                                                                                    "items": {
-                                                                                        "type": "object",
-                                                                                        "properties": {
-                                                                                            "text": {"type": "string"},
-                                                                                            "bold": {"type": "boolean"},
-                                                                                            "italic": {"type": "boolean"},
-                                                                                            "underline": {"type": "boolean"},
-                                                                                            "code": {"type": "boolean"},
-                                                                                            "color": {"type": "string"},
-                                                                                            "url": {"type": "string"},
-                                                                                        },
-                                                                                        "required": ["text"],
-                                                                                    },
+                                                                                    "items": _schema_copy(_INLINE_RUN_SCHEMA),
                                                                                 },
                                                                             },
                                                                         },
@@ -482,19 +590,7 @@ class AddBlocksTool(DocumentToolBase):
                                                                     "text": {"type": "string"},
                                                                     "runs": {
                                                                         "type": "array",
-                                                                        "items": {
-                                                                            "type": "object",
-                                                                            "properties": {
-                                                                                "text": {"type": "string"},
-                                                                                "bold": {"type": "boolean"},
-                                                                                "italic": {"type": "boolean"},
-                                                                                "underline": {"type": "boolean"},
-                                                                                "code": {"type": "boolean"},
-                                                                                "color": {"type": "string"},
-                                                                                "url": {"type": "string"},
-                                                                            },
-                                                                            "required": ["text"],
-                                                                        },
+                                                                        "items": _schema_copy(_INLINE_RUN_SCHEMA),
                                                                     },
                                                                 },
                                                             },
@@ -511,26 +607,9 @@ class AddBlocksTool(DocumentToolBase):
                             "runs": {
                                 "type": "array",
                                 "description": "Optional inline rich-text runs for paragraph or list item content.",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "text": {"type": "string"},
-                                        "bold": {"type": "boolean"},
-                                        "italic": {"type": "boolean"},
-                                        "underline": {"type": "boolean"},
-                                        "code": {"type": "boolean"},
-                                        "color": {
-                                            "type": "string",
-                                            "description": "Optional 6-digit hex color for this run, such as 666666.",
-                                        },
-                                        "url": {
-                                            "type": "string",
-                                            "description": "Optional external hyperlink target for this run. Supported schemes are http, https, and mailto.",
-                                        },
-                                    },
-                                    "required": ["text"],
-                                },
+                                "items": _schema_copy(_INLINE_RUN_SCHEMA),
                             },
+                            "border": _schema_copy(_BORDER_SCHEMA),
                             "level": {"type": "number"},
                             "bottom_border": {"type": "boolean"},
                             "bottom_border_color": {
@@ -552,19 +631,7 @@ class AddBlocksTool(DocumentToolBase):
                                                 "text": {"type": "string"},
                                                 "runs": {
                                                     "type": "array",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "text": {"type": "string"},
-                                                            "bold": {"type": "boolean"},
-                                                            "italic": {"type": "boolean"},
-                                                            "underline": {"type": "boolean"},
-                                                            "code": {"type": "boolean"},
-                                                            "color": {"type": "string"},
-                                                            "url": {"type": "string"},
-                                                        },
-                                                        "required": ["text"],
-                                                    },
+                                                    "items": _schema_copy(_INLINE_RUN_SCHEMA),
                                                 },
                                             },
                                         },
@@ -583,43 +650,7 @@ class AddBlocksTool(DocumentToolBase):
                                     "items": {
                                         "anyOf": [
                                             {"type": "string"},
-                                            {
-                                                "type": "object",
-                                                "properties": {
-                                                    "text": {"type": "string"},
-                                                    "row_span": {
-                                                        "type": "integer",
-                                                        "minimum": 1,
-                                                        "description": "Optional row span for vertically merged body cells.",
-                                                    },
-                                                    "col_span": {
-                                                        "type": "integer",
-                                                        "minimum": 1,
-                                                        "description": "Optional column span for horizontally merged body cells.",
-                                                    },
-                                                    "fill": {
-                                                        "type": "string",
-                                                        "description": "Optional 6-digit hex fill color for this body cell.",
-                                                    },
-                                                    "text_color": {
-                                                        "type": "string",
-                                                        "description": "Optional 6-digit hex text color for this body cell.",
-                                                    },
-                                                    "bold": {
-                                                        "type": "boolean",
-                                                        "description": "Optional bold override for this body cell.",
-                                                    },
-                                                    "align": {
-                                                        "type": "string",
-                                                        "enum": ["left", "center", "right"],
-                                                        "description": "Optional alignment override for this body cell.",
-                                                    },
-                                                    "font_scale": {
-                                                        "type": "number",
-                                                        "description": "Optional body cell font scale override.",
-                                                    },
-                                                },
-                                            },
+                                            _schema_copy(_TABLE_CELL_SCHEMA),
                                         ]
                                     },
                                 },

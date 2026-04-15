@@ -630,9 +630,17 @@ def test_document_session_store_add_helpers_build_typed_blocks(
     assert captured["request"].blocks[0].bottom_border_size_pt == pytest.approx(1.25)
 
     store.add_paragraph(
-        AddParagraphRequest(document_id="doc-1", text="正文", title="摘要")
+        AddParagraphRequest(
+            document_id="doc-1",
+            text="正文",
+            title="摘要",
+            border={"bottom": {"style": "single", "color": "1F4E79"}},
+        )
     )
     assert isinstance(captured["request"].blocks[0], SectionParagraphInput)
+    assert captured["request"].blocks[0].border is not None
+    assert captured["request"].blocks[0].border.bottom is not None
+    assert captured["request"].blocks[0].border.bottom.color == "1F4E79"
 
     store.add_list(AddListRequest(document_id="doc-1", items=["要点 1"]))
     assert isinstance(captured["request"].blocks[0], SectionListInput)
@@ -646,6 +654,39 @@ def test_document_session_store_add_helpers_build_typed_blocks(
         )
     )
     assert isinstance(captured["request"].blocks[0], SectionTableInput)
+
+
+def test_document_session_store_builds_runtime_paragraph_border_block():
+    store = DocumentSessionStore()
+    document = store.create_document(CreateDocumentRequest(title="段落边框"))
+
+    updated = store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                {
+                    "type": "paragraph",
+                    "text": "带边框正文",
+                    "border": {
+                        "bottom": {
+                            "style": "double",
+                            "color": "1F4E79",
+                            "width_pt": 1.0,
+                        }
+                    },
+                }
+            ],
+        )
+    )
+
+    paragraph = updated.blocks[0]
+
+    assert isinstance(paragraph, ParagraphBlock)
+    assert paragraph.border is not None
+    assert paragraph.border.bottom is not None
+    assert paragraph.border.bottom.style == "double"
+    assert paragraph.border.bottom.color == "1F4E79"
+    assert paragraph.border.bottom.width_pt == pytest.approx(1.0)
 
 def test_document_session_store_builds_prompt_summary_for_draft_documents():
     store = DocumentSessionStore()
