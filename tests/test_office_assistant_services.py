@@ -47,12 +47,16 @@ from astrbot_plugin_office_assistant.services import (
 )
 from astrbot_plugin_office_assistant.services.runtime_builder import (
     _build_document_summary_lookup,
+    _build_workbook_summary_lookup,
 )
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+    SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
     SECTION_SCENE_UPLOADED_CONTEXT,
     SECTION_STATIC_DOCUMENT_TOOLS,
     SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
+    SECTION_STATIC_WORKBOOK_TOOLS,
+    SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
     PromptContextService,
 )
 from astrbot_plugin_office_assistant.utils import (
@@ -471,6 +475,37 @@ async def test_llm_request_policy_handles_events_without_get_extra():
 
     assert "read_file" not in set(request.func_tool.names())
     assert "当前聊天不可使用文件/Office/PDF 相关功能" in request.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_llm_request_policy_exposes_document_and_workbook_toolsets_together():
+    event = _build_event(
+        sender_id="1474436119298048127",
+        message_type=MessageType.FRIEND_MESSAGE,
+    )
+    request = ProviderRequest(
+        prompt="请生成 Excel 报表",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("existing_tool")]),
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=ToolSet([_tool("create_document")]),
+        workbook_toolset=ToolSet([_tool("create_workbook"), _tool("write_rows")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=lambda _event: True,
+        check_permission=lambda _event: True,
+        is_bot_mentioned=lambda _event: True,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+
+    await policy.apply(event, request)
+
+    tool_names = set(request.func_tool.names())
+    assert "create_document" in tool_names
+    assert "create_workbook" in tool_names
+    assert "write_rows" in tool_names
+    assert "existing_tool" in tool_names
 
 
 def test_build_plugin_runtime_returns_temp_workspace_and_services():
@@ -1505,6 +1540,121 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_draft(
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_injects_workbook_follow_up_notice_for_draft():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=lambda workbook_id: {
+            "workbook_id": workbook_id,
+            "status": "draft",
+            "sheet_names": ["总表", "华东"],
+            "sheet_count": 2,
+            "latest_written_sheets": ["华东"],
+            "next_allowed_actions": ["write_rows", "export_workbook"],
+        },
+    )
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt='继续补充 workbook_id="wb-1" 的数据',
+            system_prompt="base",
+            func_tool=ToolSet([_tool("create_workbook")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert context.section_names == [SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP]
+    assert "当前 `workbook_id=wb-1` 仍是 draft" in context.notices[0]
+    assert "继续调用 `write_rows`" in context.notices[0]
+    assert context.system_notices == []
+    assert context.system_section_names == []
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_workbook_follow_up_notice_for_missing_summary():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=lambda _workbook_id: None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='继续处理 workbook_id="wb-missing"',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("write_rows")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP]
+    assert "没有找到 `workbook_id=wb-missing` 对应的工作簿会话" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_prioritizes_workbook_follow_up_when_workbook_id_present():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 1,
+        },
+        lookup_workbook_summary=lambda workbook_id: {
+            "workbook_id": workbook_id,
+            "status": "draft",
+            "sheet_names": ["Sheet1"],
+            "sheet_count": 1,
+            "latest_written_sheets": ["Sheet1"],
+            "next_allowed_actions": ["write_rows"],
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='document_id="doc-7"，同时继续 workbook_id="wb-7"',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("write_rows")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP]
+    assert "workbook_id=wb-7" in context.notices[0]
+    assert "document_id=doc-7" not in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_injects_document_follow_up_notice_for_space_separated_document_id():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -1893,6 +2043,30 @@ def test_runtime_builder_uses_document_summary_lookup_when_available():
     assert lookup("doc-1") == {"status": "draft"}
 
 
+def test_runtime_builder_returns_none_when_workbook_summary_lookup_is_unavailable():
+    workbook_toolset = SimpleNamespace(workbook_store=SimpleNamespace())
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.runtime_builder.logger.warning"
+    ) as mock_warning:
+        lookup = _build_workbook_summary_lookup(workbook_toolset)
+
+    assert lookup is None
+    mock_warning.assert_called_once()
+
+
+def test_runtime_builder_uses_workbook_summary_lookup_when_available():
+    build_prompt_summary = MagicMock(return_value={"status": "draft"})
+    workbook_toolset = SimpleNamespace(
+        workbook_store=SimpleNamespace(build_prompt_summary=build_prompt_summary)
+    )
+
+    lookup = _build_workbook_summary_lookup(workbook_toolset)
+
+    assert lookup is build_prompt_summary
+    assert lookup("wb-1") == {"status": "draft"}
+
+
 @pytest.mark.asyncio
 async def test_request_hook_service_reraises_unexpected_summary_lookup_errors():
     service = RequestHookService(
@@ -1949,6 +2123,30 @@ def test_prompt_context_service_orders_dynamic_document_notice_after_scene_notic
         SECTION_STATIC_DOCUMENT_TOOLS,
         SECTION_SCENE_UPLOADED_CONTEXT,
         SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+    ]
+    assert ordered_notices == ["static", "scene", "dynamic"]
+
+
+def test_prompt_context_service_orders_dynamic_workbook_notice_after_scene_notice():
+    service = PromptContextService(allow_external_input_files=False)
+
+    ordered_names, ordered_notices = service.order_notice_sections(
+        section_names=[
+            SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
+            SECTION_SCENE_UPLOADED_CONTEXT,
+            SECTION_STATIC_WORKBOOK_TOOLS,
+        ],
+        notices=[
+            "dynamic",
+            "scene",
+            "static",
+        ],
+    )
+
+    assert ordered_names == [
+        SECTION_STATIC_WORKBOOK_TOOLS,
+        SECTION_SCENE_UPLOADED_CONTEXT,
+        SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
     ]
     assert ordered_notices == ["static", "scene", "dynamic"]
 
@@ -2067,6 +2265,72 @@ async def test_request_hook_service_allows_detail_notice_without_core_when_only_
     )
 
     assert context.section_names == [SECTION_STATIC_DOCUMENT_TOOLS_DETAIL]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_workbook_core_and_detail_notices():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请用 create_workbook 和 write_rows 生成 xlsx 报表，多 sheet，start_row=2",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("create_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_WORKBOOK_TOOLS,
+        SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
+    ]
+    assert "create_workbook" in context.notices[0]
+    assert "write_rows" in context.notices[0]
+    assert "create_office_file" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_falls_back_to_workbook_guide_when_workbook_lookup_disabled():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='请返回 workbook_id 并导出 workbook_id="wb-11" 的 xlsx',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [SECTION_STATIC_WORKBOOK_TOOLS]
+    assert "create_workbook" in context.notices[0]
+    assert "export_workbook" in context.notices[0]
 
 
 def test_prompt_context_service_orders_notice_sections_by_stability():

@@ -13,14 +13,21 @@ from ..prompts.static import (
     build_document_tools_core_notice,
     build_document_tools_detail_notice,
     build_tools_denied_notice,
+    build_workbook_follow_up_missing_notice,
+    build_workbook_follow_up_notice,
+    build_workbook_tools_core_notice,
+    build_workbook_tools_detail_notice,
 )
 from .upload_types import UploadInfo
 
 SECTION_STATIC_ACCESS = "static_access"
 SECTION_STATIC_DOCUMENT_TOOLS = "static_document_tools"
 SECTION_STATIC_DOCUMENT_TOOLS_DETAIL = "static_document_tools_detail"
+SECTION_STATIC_WORKBOOK_TOOLS = "static_workbook_tools"
+SECTION_STATIC_WORKBOOK_TOOLS_DETAIL = "static_workbook_tools_detail"
 SECTION_SCENE_UPLOADED_CONTEXT = "scene_uploaded_context"
 SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP = "dynamic_document_follow_up"
+SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP = "dynamic_workbook_follow_up"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +152,20 @@ class PromptContextService:
             target="prompt_suffix",
         )
 
+    def build_workbook_tool_guide_section(self) -> PromptSection:
+        return PromptSection(
+            name=SECTION_STATIC_WORKBOOK_TOOLS,
+            content=build_workbook_tools_core_notice(),
+            target="prompt_suffix",
+        )
+
+    def build_workbook_tool_detail_section(self) -> PromptSection:
+        return PromptSection(
+            name=SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
+            content=build_workbook_tools_detail_notice(),
+            target="prompt_suffix",
+        )
+
     def build_uploaded_file_context_section(
         self,
         *,
@@ -181,6 +202,40 @@ class PromptContextService:
         return PromptSection(
             name=SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
             content=build_document_follow_up_missing_notice(document_id=document_id),
+            target="prompt_suffix",
+        )
+
+    def build_workbook_follow_up_section(
+        self,
+        *,
+        workbook_id: str,
+        status: str,
+        sheet_names: list[str],
+        sheet_count: int,
+        latest_written_sheets: list[str],
+        next_allowed_actions: list[str],
+    ) -> PromptSection:
+        return PromptSection(
+            name=SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
+            content=build_workbook_follow_up_notice(
+                workbook_id=workbook_id,
+                status=status,
+                sheet_names=sheet_names,
+                sheet_count=sheet_count,
+                latest_written_sheets=latest_written_sheets,
+                next_allowed_actions=next_allowed_actions,
+            ),
+            target="prompt_suffix",
+        )
+
+    def build_workbook_follow_up_missing_section(
+        self,
+        *,
+        workbook_id: str,
+    ) -> PromptSection:
+        return PromptSection(
+            name=SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
+            content=build_workbook_follow_up_missing_notice(workbook_id=workbook_id),
             target="prompt_suffix",
         )
 

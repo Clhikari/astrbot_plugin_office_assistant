@@ -8,6 +8,10 @@ from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from ..agent_tools import build_document_toolset
+try:
+    from ..agent_tools import build_workbook_toolset
+except ImportError:  # pragma: no cover - workbook toolset may be introduced incrementally
+    build_workbook_toolset = None
 from ..app.runtime import (
     AdminUsersResolver,
     FileProcessingServices,
@@ -123,11 +127,16 @@ def build_plugin_runtime(
         render_backend_config=document_render_backend_config,
         default_document_style=default_document_style,
     )
+    workbook_toolset = _build_workbook_toolset(
+        workspace_dir=plugin_data_path,
+        after_export=handle_exported_document_tool,
+    )
     request_pipeline_services = _build_request_pipeline_services(
         settings=settings,
         upload_session_service=upload_session_service,
         access_policy_service=access_policy_service,
         document_toolset=document_toolset,
+        workbook_toolset=workbook_toolset,
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
     )
@@ -180,6 +189,7 @@ def build_plugin_runtime(
         access_policy_service=access_policy_service,
         upload_session_service=upload_session_service,
         document_toolset=document_toolset,
+        workbook_toolset=workbook_toolset,
         llm_request_policy=request_pipeline_services.llm_request_policy,
         prompt_context_service=request_pipeline_services.prompt_context_service,
         delivery_service=delivery_service,
@@ -229,9 +239,10 @@ def _build_request_pipeline_services(
     upload_session_service: UploadSessionService,
     access_policy_service: AccessPolicyService,
     document_toolset,
+    workbook_toolset,
     extract_upload_source,
     store_uploaded_file,
-    ) -> RequestPipelineServices:
+) -> RequestPipelineServices:
     prompt_context_service = PromptContextService(
         allow_external_input_files=settings.allow_external_input_files
     )
@@ -245,9 +256,11 @@ def _build_request_pipeline_services(
         allow_external_input_files=settings.allow_external_input_files,
         prompt_context_service=prompt_context_service,
         lookup_document_summary=_build_document_summary_lookup(document_toolset),
+        lookup_workbook_summary=_build_workbook_summary_lookup(workbook_toolset),
     )
     llm_request_policy = LLMRequestPolicy(
         document_toolset=document_toolset,
+        workbook_toolset=workbook_toolset,
         require_at_in_group=settings.require_at_in_group,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
@@ -268,6 +281,29 @@ def _build_document_summary_lookup(document_toolset):
     if not callable(build_prompt_summary):
         logger.warning(
             "[文件管理] document_store.build_prompt_summary 不可用，文档跟进提示将退化为普通工具指南"
+        )
+        return None
+    return build_prompt_summary
+
+
+def _build_workbook_toolset(*, workspace_dir: Path, after_export):
+    if build_workbook_toolset is None:
+        logger.info("[文件管理] build_workbook_toolset 不可用，跳过 workbook 原语工具挂载")
+        return None
+    return build_workbook_toolset(
+        workspace_dir=workspace_dir,
+        after_export=after_export,
+    )
+
+
+def _build_workbook_summary_lookup(workbook_toolset):
+    if workbook_toolset is None:
+        return None
+    workbook_store = getattr(workbook_toolset, "workbook_store", None)
+    build_prompt_summary = getattr(workbook_store, "build_prompt_summary", None)
+    if not callable(build_prompt_summary):
+        logger.warning(
+            "[文件管理] workbook_store.build_prompt_summary 不可用，工作簿跟进提示将退化为普通工具指南"
         )
         return None
     return build_prompt_summary

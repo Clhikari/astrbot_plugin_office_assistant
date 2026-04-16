@@ -46,6 +46,7 @@ class LLMRequestPolicy:
         self,
         *,
         document_toolset,
+        workbook_toolset=None,
         require_at_in_group: bool,
         is_group_feature_enabled: Callable[[AstrMessageEvent], bool],
         check_permission: Callable[[AstrMessageEvent], bool],
@@ -56,6 +57,12 @@ class LLMRequestPolicy:
         tool_exposure_hooks: list[ToolExposureHook] | None = None,
     ) -> None:
         self._document_toolset = document_toolset
+        self._workbook_toolset = workbook_toolset
+        self._structured_toolsets = [
+            toolset
+            for toolset in (document_toolset, workbook_toolset)
+            if toolset is not None
+        ]
         self._require_at_in_group = require_at_in_group
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
@@ -286,8 +293,9 @@ class LLMRequestPolicy:
             return
 
         if decision.should_expose and req.func_tool:
-            for tool in self._document_toolset.tools:
-                req.func_tool.add_tool(tool)
+            for toolset in self._structured_toolsets:
+                for tool in getattr(toolset, "tools", []):
+                    req.func_tool.add_tool(tool)
 
         await self._run_before_expose_tools(
             ToolExposureContext(

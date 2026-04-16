@@ -61,8 +61,40 @@ class RequestHookService:
         + r"\s+[`\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
         flags=re.IGNORECASE,
     )
+    _WORKBOOK_ID_TOKEN_RE = r"(?<![A-Za-z0-9_])workbook_id(?![A-Za-z0-9_])"
+    _WORKBOOK_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
+    _WORKBOOK_ID_PREFIX_RE = re.compile(
+        r"(?:wb|workbook)-[A-Za-z0-9_-]+",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_WORKFLOW_HINT_RE = re.compile(
+        r"(create_workbook|write_rows|export_workbook|"
+        r"\bexcel\b|\bxlsx\b|报表|汇总表|多\s*sheet|工作簿|"
+        r"生成\s*(?:excel|xlsx|报表|汇总表)|整理成\s*(?:excel|xlsx|报表|汇总表))",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_DETAIL_HINT_RE = re.compile(
+        r"(create_workbook|write_rows|export_workbook|start_row|多\s*sheet)",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_ID_FOLLOW_UP_RE = re.compile(
+        _WORKBOOK_ID_TOKEN_RE,
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_ID_EXPLICIT_CAPTURE_RE = re.compile(
+        _WORKBOOK_ID_TOKEN_RE
+        + r"(?:\s*[:=：]\s*|\s*(?:为|是)\s*|\s+is\s+)[`\"']?(?P<workbook_id>[A-Za-z0-9_-]+)[`\"']?",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_ID_BARE_CAPTURE_RE = re.compile(
+        _WORKBOOK_ID_TOKEN_RE
+        + r"\s+[`\"']?(?P<workbook_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
+        flags=re.IGNORECASE,
+    )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
     _DOCUMENT_DETAIL_NOTICE_KEY = "document_detail_guide"
+    _WORKBOOK_CORE_NOTICE_KEY = "workbook_core_guide"
+    _WORKBOOK_DETAIL_NOTICE_KEY = "workbook_detail_guide"
 
     def __init__(
         self,
@@ -77,6 +109,7 @@ class RequestHookService:
         allow_external_input_files: bool,
         prompt_context_service: PromptContextService | None = None,
         lookup_document_summary: Callable[[str], dict[str, object] | None] | None = None,
+        lookup_workbook_summary: Callable[[str], dict[str, object] | None] | None = None,
     ) -> None:
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
@@ -84,6 +117,7 @@ class RequestHookService:
         self._store_uploaded_file = store_uploaded_file
         self._consume_session_notice_once = consume_session_notice_once
         self._lookup_document_summary = lookup_document_summary
+        self._lookup_workbook_summary = lookup_workbook_summary
         self.prompt_context_service = prompt_context_service or PromptContextService(
             allow_external_input_files=allow_external_input_files
         )
@@ -122,6 +156,11 @@ class RequestHookService:
             return context
 
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
+        if self._is_workbook_follow_up(request_text=request_text):
+            section = self._build_workbook_follow_up_section(request_text=request_text)
+            if section is not None:
+                self._append_notice_section(context, section)
+                return context
         if self._is_document_follow_up(request_text=request_text):
             section = self._build_document_follow_up_section(request_text=request_text)
             if section is not None:
@@ -133,7 +172,18 @@ class RequestHookService:
         should_inject_detail = self._should_inject_document_tool_detail(
             request_text=request_text
         )
-        if not should_inject_core and not should_inject_detail:
+        should_inject_workbook_core = self._should_inject_workbook_tool_guide(
+            request_text=request_text
+        )
+        should_inject_workbook_detail = self._should_inject_workbook_tool_detail(
+            request_text=request_text
+        )
+        if (
+            not should_inject_core
+            and not should_inject_detail
+            and not should_inject_workbook_core
+            and not should_inject_workbook_detail
+        ):
             return context
 
         if should_inject_core and self._consume_session_notice_once(
@@ -149,6 +199,20 @@ class RequestHookService:
             self._append_notice_section(
                 context,
                 self.prompt_context_service.build_document_tool_detail_section(),
+            )
+        if should_inject_workbook_core and self._consume_session_notice_once(
+            context.event, self._WORKBOOK_CORE_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_workbook_tool_guide_section(),
+            )
+        if should_inject_workbook_detail and self._consume_session_notice_once(
+            context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_workbook_tool_detail_section(),
             )
         return context
 
@@ -179,10 +243,32 @@ class RequestHookService:
         return bool(cls._DOCUMENT_DETAIL_HINT_RE.search(request_text))
 
     @classmethod
+    def _should_inject_workbook_tool_guide(cls, *, request_text: str) -> bool:
+        if not request_text:
+            return False
+        return bool(cls._WORKBOOK_WORKFLOW_HINT_RE.search(request_text))
+
+    @classmethod
+    def _should_inject_workbook_tool_detail(
+        cls,
+        *,
+        request_text: str,
+    ) -> bool:
+        if not request_text:
+            return False
+        return bool(cls._WORKBOOK_DETAIL_HINT_RE.search(request_text))
+
+    @classmethod
     def _is_document_follow_up(cls, *, request_text: str) -> bool:
         if not request_text:
             return False
         return bool(cls._DOCUMENT_ID_FOLLOW_UP_RE.search(request_text))
+
+    @classmethod
+    def _is_workbook_follow_up(cls, *, request_text: str) -> bool:
+        if not request_text:
+            return False
+        return bool(cls._WORKBOOK_ID_FOLLOW_UP_RE.search(request_text))
 
     @classmethod
     def _extract_document_id(cls, *, request_text: str) -> str:
@@ -200,12 +286,36 @@ class RequestHookService:
         return ""
 
     @classmethod
+    def _extract_workbook_id(cls, *, request_text: str) -> str:
+        if not request_text:
+            return ""
+        explicit_match = cls._WORKBOOK_ID_EXPLICIT_CAPTURE_RE.search(request_text)
+        if explicit_match:
+            return str(explicit_match.group("workbook_id") or "").strip()
+
+        bare_match = cls._WORKBOOK_ID_BARE_CAPTURE_RE.search(request_text)
+        if bare_match:
+            candidate = str(bare_match.group("workbook_id") or "").strip()
+            if cls._looks_like_bare_workbook_id(candidate):
+                return candidate
+        return ""
+
+    @classmethod
     def _looks_like_bare_document_id(cls, candidate: str) -> bool:
         if not candidate:
             return False
         return bool(
             cls._DOCUMENT_ID_HEX_RE.fullmatch(candidate)
             or cls._DOCUMENT_ID_DOC_PREFIX_RE.fullmatch(candidate)
+        )
+
+    @classmethod
+    def _looks_like_bare_workbook_id(cls, candidate: str) -> bool:
+        if not candidate:
+            return False
+        return bool(
+            cls._WORKBOOK_ID_HEX_RE.fullmatch(candidate)
+            or cls._WORKBOOK_ID_PREFIX_RE.fullmatch(candidate)
         )
 
     def _build_document_follow_up_section(
@@ -235,6 +345,57 @@ class RequestHookService:
             document_id=document_id,
             status=str(summary.get("status") or ""),
             block_count=int(summary.get("block_count") or 0),
+        )
+
+    def _build_workbook_follow_up_section(
+        self,
+        *,
+        request_text: str,
+    ) -> PromptSection | None:
+        workbook_id = self._extract_workbook_id(request_text=request_text)
+        if not workbook_id:
+            return None
+        if self._lookup_workbook_summary is None:
+            return None
+        try:
+            summary = self._lookup_workbook_summary(workbook_id)
+        except KeyError:
+            summary = None
+        except Exception as exc:
+            logger.exception(
+                f"[文件管理] 查询工作簿会话摘要失败 workbook_id={workbook_id}: {exc}"
+            )
+            raise
+        if not isinstance(summary, dict):
+            return self.prompt_context_service.build_workbook_follow_up_missing_section(
+                workbook_id=workbook_id
+            )
+
+        raw_sheet_names = summary.get("sheet_names")
+        sheet_names = (
+            [str(name) for name in raw_sheet_names if str(name)]
+            if isinstance(raw_sheet_names, list)
+            else []
+        )
+        raw_latest_sheets = summary.get("latest_written_sheets")
+        latest_written_sheets = (
+            [str(name) for name in raw_latest_sheets if str(name)]
+            if isinstance(raw_latest_sheets, list)
+            else []
+        )
+        raw_next_actions = summary.get("next_allowed_actions")
+        next_allowed_actions = (
+            [str(action) for action in raw_next_actions if str(action)]
+            if isinstance(raw_next_actions, list)
+            else []
+        )
+        return self.prompt_context_service.build_workbook_follow_up_section(
+            workbook_id=workbook_id,
+            status=str(summary.get("status") or ""),
+            sheet_names=sheet_names,
+            sheet_count=int(summary.get("sheet_count") or 0),
+            latest_written_sheets=latest_written_sheets,
+            next_allowed_actions=next_allowed_actions,
         )
 
     @staticmethod

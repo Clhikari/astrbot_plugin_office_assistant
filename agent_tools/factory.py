@@ -7,7 +7,10 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
 from ..domain.document.render_backends import DocumentRenderBackendConfig
-from ..tools.astrbot_adapter import build_document_toolset_from_registry
+from ..tools.astrbot_adapter import (
+    build_document_toolset_from_registry,
+    build_workbook_toolset_from_registry,
+)
 
 
 def build_document_toolset(
@@ -30,5 +33,16 @@ def build_document_toolset(
         default_document_style=default_document_style,
     )
 
+def build_workbook_toolset(
+    workspace_dir: Path | None = None,
+    after_export: (
+        Callable[[ContextWrapper[AstrAgentContext], str], Awaitable[str | None]] | None
+    ) = None,
+) -> ToolSet:
+    return build_workbook_toolset_from_registry(
+        workspace_dir=workspace_dir,
+        after_export=after_export,
+    )
 
-__all__ = ["build_document_toolset"]
+
+__all__ = ["build_document_toolset", "build_workbook_toolset"]

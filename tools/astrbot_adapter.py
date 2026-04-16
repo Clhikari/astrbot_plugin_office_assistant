@@ -11,12 +11,17 @@ from ..domain.document.render_backends import DocumentRenderBackendConfig
 from .registry import (
     AfterExportCallback,
     AstrBotDocumentTool,
+    AstrBotWorkbookTool,
+    WorkbookAfterExportCallback,
     build_document_store,
+    build_workbook_store,
     get_document_tool_specs,
+    get_workbook_tool_specs,
 )
 
 if TYPE_CHECKING:
     from ..domain.document.session_store import DocumentSessionStore
+    from ..domain.workbook.session_store import WorkbookSessionStore
 
 
 class DocumentToolSet(ToolSet):
@@ -30,6 +35,19 @@ class DocumentToolSet(ToolSet):
     ) -> None:
         super().__init__(list(tools))
         self.document_store = document_store
+
+
+class WorkbookToolSet(ToolSet):
+    workbook_store: WorkbookSessionStore
+
+    def __init__(
+        self,
+        tools: Sequence[AstrBotWorkbookTool],
+        *,
+        workbook_store: WorkbookSessionStore,
+    ) -> None:
+        super().__init__(list(tools))
+        self.workbook_store = workbook_store
 
 
 def build_document_toolset_from_registry(
@@ -58,3 +76,18 @@ def build_document_toolset_from_registry(
         for spec in get_document_tool_specs()
     ]
     return DocumentToolSet(tools, document_store=store)
+
+
+def build_workbook_toolset_from_registry(
+    workspace_dir: Path | None = None,
+    after_export: WorkbookAfterExportCallback | None = None,
+) -> WorkbookToolSet:
+    store = build_workbook_store(workspace_dir=workspace_dir)
+    tools = [
+        spec.astrbot_factory(
+            store,
+            after_export,
+        )
+        for spec in get_workbook_tool_specs()
+    ]
+    return WorkbookToolSet(tools, workbook_store=store)

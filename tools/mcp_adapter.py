@@ -5,10 +5,11 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
-from .registry import get_document_tool_specs
+from .registry import get_document_tool_specs, get_workbook_tool_specs
 
 if TYPE_CHECKING:
     from ..domain.document.session_store import DocumentSessionStore
+    from ..domain.workbook.session_store import WorkbookSessionStore
 
 
 def register_document_tools_from_registry(
@@ -27,3 +28,11 @@ def register_document_tools_from_registry(
             resolved_before_export_hooks,
             resolved_after_export_hooks,
         )
+
+
+def register_workbook_tools_from_registry(
+    server: FastMCP,
+    store: WorkbookSessionStore,
+) -> None:
+    for spec in get_workbook_tool_specs():
+        spec.mcp_registrar(server, store)

@@ -17,6 +17,7 @@ import pytest
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
+    build_workbook_toolset,
 )
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
@@ -87,13 +88,16 @@ from astrbot_plugin_office_assistant.mcp_server.server import (
 )
 from astrbot_plugin_office_assistant.tools.mcp_adapter import (
     register_document_tools_from_registry,
+    register_workbook_tools_from_registry,
 )
 from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
     build_document_toolset_from_registry,
+    build_workbook_toolset_from_registry,
 )
 from astrbot_plugin_office_assistant.tools.registry import (
     DocumentToolSpec,
     get_document_tool_specs,
+    get_workbook_tool_specs,
 )
 from pydantic import ValidationError
 
@@ -123,6 +127,28 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
         Path(get_astrbot_plugin_data_path())
         / "astrbot_plugin_office_assistant"
         / "documents"
+    )
+    assert stores[0].workspace_dir == expected_workspace
+
+
+def test_build_workbook_toolset_uses_shared_store_and_default_workspace():
+    toolset = build_workbook_toolset()
+    tool_names = [tool.name for tool in toolset.tools]
+
+    assert tool_names == [
+        "create_workbook",
+        "write_rows",
+        "export_workbook",
+    ]
+
+    stores = [tool.store for tool in toolset.tools if hasattr(tool, "store")]
+    assert len(stores) == len(tool_names)
+    assert len({id(store) for store in stores}) == 1
+
+    expected_workspace = (
+        Path(get_astrbot_plugin_data_path())
+        / "astrbot_plugin_office_assistant"
+        / "workbooks"
     )
     assert stores[0].workspace_dir == expected_workspace
 
@@ -219,6 +245,22 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
 
     assert [tool.name for tool in toolset.tools] == [
         spec.name for spec in get_document_tool_specs()
+    ]
+
+
+def test_workbook_tool_registry_keeps_workbook_tool_order():
+    assert [spec.name for spec in get_workbook_tool_specs()] == [
+        "create_workbook",
+        "write_rows",
+        "export_workbook",
+    ]
+
+
+def test_astrbot_toolset_preserves_workbook_tool_registry_order():
+    toolset = build_workbook_toolset_from_registry()
+
+    assert [tool.name for tool in toolset.tools] == [
+        spec.name for spec in get_workbook_tool_specs()
     ]
 
 
@@ -375,6 +417,38 @@ def test_mcp_document_tool_registration_matches_registry_order(
     )
 
     assert registered_names == [spec.name for spec in get_document_tool_specs()]
+
+
+def test_mcp_workbook_tool_registration_matches_registry_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registered_names: list[str] = []
+
+    def _make_registrar(name: str):
+        def _record(*_args, **_kwargs):
+            registered_names.append(name)
+
+        return _record
+
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.create_workbook.register_create_workbook_tool",
+        _make_registrar("create_workbook"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.write_rows.register_write_rows_tool",
+        _make_registrar("write_rows"),
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.export_workbook.register_export_workbook_tool",
+        _make_registrar("export_workbook"),
+    )
+
+    register_workbook_tools_from_registry(
+        server=MagicMock(),
+        store=MagicMock(),
+    )
+
+    assert registered_names == [spec.name for spec in get_workbook_tool_specs()]
 
 
 def test_mcp_document_tool_registration_passes_export_hooks(
@@ -2523,7 +2597,7 @@ async def test_document_toolset_runs_before_export_hooks(workspace_root: Path):
 
 
 @pytest.mark.asyncio
-async def test_mcp_registers_only_core_document_tools():
+async def test_mcp_registers_document_and_workbook_tools():
     server = create_server()
     tools = await server.list_tools()
     tool_names = [tool.name for tool in tools]
@@ -2533,14 +2607,19 @@ async def test_mcp_registers_only_core_document_tools():
         "add_blocks",
         "finalize_document",
         "export_document",
+        "create_workbook",
+        "write_rows",
+        "export_workbook",
     ]
 
     add_blocks_tool = next(tool for tool in tools if tool.name == "add_blocks")
+    write_rows_tool = next(tool for tool in tools if tool.name == "write_rows")
 
     assert add_blocks_tool.inputSchema["required"] == ["document_id", "blocks"]
     add_blocks_items = add_blocks_tool.inputSchema["properties"]["blocks"]["items"]
     assert add_blocks_items["type"] == "object"
     assert add_blocks_items["additionalProperties"] is True
+    assert write_rows_tool.inputSchema["required"] == ["workbook_id", "sheet", "rows"]
 
 
 @pytest.mark.asyncio
