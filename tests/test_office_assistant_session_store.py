@@ -740,6 +740,19 @@ def test_document_session_store_builds_prompt_summary_for_later_states():
     assert exported_summary["next_allowed_actions"] == []
 
 
+def test_document_session_store_assigns_incrementing_short_document_ids():
+    store = DocumentSessionStore()
+    first = store.create_document(
+        CreateDocumentRequest(title="季度复盘", session_id="pytest-session")
+    )
+    second = store.create_document(
+        CreateDocumentRequest(title="经营复盘", session_id="pytest-session")
+    )
+
+    assert first.document_id == "doc-1"
+    assert second.document_id == "doc-2"
+
+
 def test_document_session_store_rejects_add_blocks_after_finalize():
     store = DocumentSessionStore()
     document = store.create_document(CreateDocumentRequest(title="经营复盘"))

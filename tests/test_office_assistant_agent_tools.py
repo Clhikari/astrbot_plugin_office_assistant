@@ -194,6 +194,17 @@ async def test_add_blocks_failure_message_keeps_model_on_same_tool(workspace_roo
     assert "不要改调 finalize_document 或 export_document" in failed["message"]
 
 
+@pytest.mark.asyncio
+async def test_create_document_tool_returns_incrementing_short_document_ids():
+    tool = CreateDocumentTool()
+
+    first = json.loads(await tool.call(None, title="第一份"))
+    second = json.loads(await tool.call(None, title="第二份"))
+
+    assert first["document"]["document_id"] == "doc-1"
+    assert second["document"]["document_id"] == "doc-2"
+
+
 def test_document_tool_registry_keeps_document_tool_order():
     assert [spec.name for spec in get_document_tool_specs()] == [
         "create_document",

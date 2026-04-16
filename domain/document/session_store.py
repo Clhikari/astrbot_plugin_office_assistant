@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 from threading import RLock
-from uuid import uuid4
 
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
@@ -159,6 +158,7 @@ class DocumentSessionStore:
     ) -> None:
         self._lock = RLock()
         self._documents: dict[str, DocumentModel] = {}
+        self._next_document_id = 1
         self.workspace_dir = workspace_dir or _default_workspace_dir()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self._max_documents = max_documents
@@ -202,9 +202,14 @@ class DocumentSessionStore:
         self._evict_expired_locked()
         self._evict_excess_locked()
 
+    def _allocate_document_id_locked(self) -> str:
+        document_id = f"doc-{self._next_document_id}"
+        self._next_document_id += 1
+        return document_id
+
     def create_document(self, request: CreateDocumentRequest) -> DocumentModel:
         with self._lock:
-            document_id = uuid4().hex
+            document_id = self._allocate_document_id_locked()
             document_style = merge_document_style_defaults(
                 request.document_style,
                 get_document_style_defaults(self),
