@@ -57,6 +57,7 @@ class CreateWorkbookRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = ""
+    title: str = ""
     filename: str = DEFAULT_XLSX_FILENAME
 
     @field_validator("filename")

@@ -13,8 +13,12 @@ from ..domain.document.session_store import (
     DocumentSessionStore,
     attach_document_style_defaults,
 )
-from ..domain.workbook.session_store import WorkbookSessionStore
 from .tools import register_document_tools, register_workbook_tools
+
+try:
+    from ..domain.workbook.session_store import WorkbookSessionStore
+except Exception:  # pragma: no cover - workbook domain may be provided by another worker.
+    WorkbookSessionStore = None  # type: ignore[assignment]
 
 
 def create_server(
@@ -43,7 +47,9 @@ def create_server(
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
     )
-    register_workbook_tools(server, workbook_store)
+    if WorkbookSessionStore is not None:
+        workbook_store = WorkbookSessionStore(workspace_dir=workspace_dir)
+        register_workbook_tools(server, workbook_store)
     return server
 
 

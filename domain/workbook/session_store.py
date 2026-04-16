@@ -50,11 +50,12 @@ class WorkbookSessionStore:
         with self._lock:
             workbook_id = self._allocate_workbook_id_locked()
             preferred_filename = _normalize_xlsx_filename(request.filename)
+            title = request.title.strip() or Path(preferred_filename).stem
             workbook = WorkbookModel(
                 workbook_id=workbook_id,
                 session_id=request.session_id,
                 metadata=WorkbookMetadata(
-                    title=Path(preferred_filename).stem,
+                    title=title,
                     preferred_filename=preferred_filename,
                 ),
             )
@@ -106,6 +107,8 @@ class WorkbookSessionStore:
                     "export_workbook is only allowed while the workbook status is draft"
                 )
             preferred_name = request.output_name or workbook.metadata.preferred_filename
+            if "/" in preferred_name or "\\" in preferred_name:
+                raise ValueError("output_path cannot escape the workbook workspace")
             file_name = _normalize_xlsx_filename(preferred_name)
 
             workspace_dir = self.workspace_dir.resolve()
