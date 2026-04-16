@@ -20,6 +20,7 @@ def test_create_workbook_returns_draft_summary(workspace_root: Path):
     workbook = store.create_workbook(
         CreateWorkbookRequest(
             session_id="pytest-session",
+            title="季度销量汇总",
             filename="sales-report",
         )
     )
@@ -27,11 +28,11 @@ def test_create_workbook_returns_draft_summary(workspace_root: Path):
     summary = store.build_prompt_summary(workbook.workbook_id)
 
     assert workbook.workbook_id == "wb-1"
-    assert workbook.metadata.title == "sales-report"
+    assert workbook.metadata.title == "季度销量汇总"
     assert workbook.metadata.preferred_filename == "sales-report.xlsx"
     assert summary == {
         "workbook_id": workbook.workbook_id,
-        "title": "sales-report",
+        "title": "季度销量汇总",
         "status": "draft",
         "sheet_names": [],
         "sheet_count": 0,
@@ -107,6 +108,18 @@ def test_export_request_rejects_absolute_output_name():
             workbook_id="wb-1",
             output_name="C:/temp/final.xlsx",
         )
+
+
+def test_export_rejects_output_path_outside_workspace(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
+    escaped_request = ExportWorkbookRequest.model_construct(
+        workbook_id=workbook.workbook_id,
+        output_name="../evil.xlsx",
+    )
+
+    with pytest.raises(ValueError, match="escape the workbook workspace"):
+        store.export_workbook(escaped_request)
 
 
 def test_exporter_writes_values_and_header_style(workspace_root: Path):

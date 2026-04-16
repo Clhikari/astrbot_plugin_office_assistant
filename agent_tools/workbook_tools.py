@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -19,7 +20,6 @@ from ..domain.workbook.contracts import (
     WriteRowsRequest,
     build_workbook_summary,
 )
-from ..domain.workbook.exporter import export_workbook_to_xlsx
 from ..domain.workbook.session_store import WorkbookSessionStore
 
 
@@ -186,9 +186,10 @@ class ExportWorkbookTool(WorkbookToolBase):
                 workbook_id=str(kwargs.get("workbook_id") or ""),
                 output_name=str(kwargs.get("output_name") or ""),
             )
-            workbook, output_path = self.store.prepare_export_path(request)
-            export_workbook_to_xlsx(workbook, output_path)
-            workbook = self.store.complete_export(workbook.workbook_id)
+            workbook, output_path = await asyncio.to_thread(
+                self.store.export_workbook,
+                request,
+            )
         except Exception as exc:
             return _dump_result(ToolResult(success=False, message=str(exc)))
 
