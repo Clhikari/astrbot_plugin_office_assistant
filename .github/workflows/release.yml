@@ -1,0 +1,95 @@
+name: Publish GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的版本 tag，例如 v1.6.2"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata from CHANGELOG
+        id: notes
+        shell: python
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          import os
+          import re
+          from pathlib import Path
+
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          requested_tag = (os.getenv("INPUT_TAG") or os.getenv("GITHUB_REF_NAME") or "").strip()
+          if not requested_tag:
+              raise SystemExit("Missing tag name.")
+
+          pattern = re.compile(
+              rf"^## \[{re.escape(requested_tag)}\] - (?P<date>[^\n]+)\n(?P<body>.*?)(?=^## \[|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(changelog)
+          if not match:
+              raise SystemExit(f"Could not find changelog section for {requested_tag}.")
+
+          release_body = match.group("body").strip()
+          release_name = requested_tag
+
+          heading_map = {
+              "Added": "新增",
+              "Changed": "优化",
+              "Fixed": "修复",
+              "Removed": "移除",
+              "Security": "安全",
+          }
+
+          section_pattern = re.compile(
+              r"^###\s+(?P<title>[^\n]+)\n(?P<body>.*?)(?=^###\s+|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+
+          formatted_sections: list[str] = []
+          for section in section_pattern.finditer(release_body):
+              title = section.group("title").strip()
+              body = section.group("body").strip()
+              if not body:
+                  continue
+              localized_title = heading_map.get(title, title)
+              formatted_sections.append(f"### {localized_title}\n\n{body}")
+
+          if formatted_sections:
+              release_body = "\n\n".join(formatted_sections).strip()
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as fh:
+              fh.write(f"tag={requested_tag}\n")
+              fh.write(f"name={release_name}\n")
+              fh.write("body<<__BODY__\n")
+              fh.write(release_body + "\n")
+              fh.write("__BODY__\n")
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.notes.outputs.tag }}
+          name: ${{ steps.notes.outputs.name }}
+          body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: false
+          draft: false
+          prerelease: false
