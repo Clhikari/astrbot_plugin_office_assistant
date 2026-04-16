@@ -7,6 +7,9 @@ from astrbot_plugin_office_assistant.constants import DOC_COMMAND_TRIGGER_EVENT_
 from astrbot_plugin_office_assistant.domain.document.contracts import (
     CreateDocumentRequest,
 )
+from astrbot_plugin_office_assistant.domain.workbook.contracts import (
+    CreateWorkbookRequest,
+)
 from astrbot_plugin_office_assistant.internal_hooks import (
     NoticeBuildContext,
     ToolExposureContext,
@@ -163,6 +166,78 @@ async def test_before_llm_chat_keeps_document_id_follow_up_prompt_lightweight():
         assert "文件工具使用指南" not in req.prompt
         assert "当前文档状态摘要" not in req.prompt
         assert "文件工具细节指南" not in req.prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_injects_workbook_tools_per_request():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = ProviderRequest(
+            prompt="请生成一个 Excel 汇总表，分多 sheet 输出给我。",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("astrbot_execute_shell"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "astrbot_execute_shell" not in tool_names
+        assert {
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+        }.issubset(tool_names)
+        assert "Excel 原语工具使用指南" in req.prompt
+        assert "create_workbook" in req.prompt
+        assert "write_rows" in req.prompt
+        assert "export_workbook" in req.prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_keeps_workbook_id_follow_up_prompt_lightweight():
+    context = MagicMock()
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = ProviderRequest(
+            prompt='继续补充 workbook_id="wb-1" 的数据',
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("create_workbook"),
+                ]
+            ),
+        )
+        workbook_store = plugin._runtime.workbook_toolset.workbook_store
+        workbook = workbook_store.create_workbook(
+            CreateWorkbookRequest(filename="sales-summary.xlsx")
+        )
+
+        req.prompt = f'继续补充 workbook_id="{workbook.workbook_id}" 的数据'
+
+        await plugin.before_llm_chat(event, req)
+
+        assert "Excel 原语工具使用指南" not in req.system_prompt
+        assert "Excel 原语工具使用指南" not in req.prompt
+        assert "当前工作簿阶段" in req.prompt
+        assert "`create_workbook` → `write_rows`" not in req.prompt
     finally:
         await plugin.terminate()
 

@@ -20,9 +20,14 @@ from ..domain.document.session_store import attach_document_style_defaults
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
+    from ..domain.workbook.session_store import WorkbookSessionStore
 
 
 class AstrBotDocumentTool(Protocol):
+    name: str
+
+
+class AstrBotWorkbookTool(Protocol):
     name: str
 
 
@@ -43,12 +48,28 @@ McpToolRegistrar = Callable[
     None,
 ]
 
+WorkbookAfterExportCallback = Callable[
+    [ContextWrapper[AstrAgentContext], str], Awaitable[str | None]
+]
+AstrBotWorkbookToolFactory = Callable[
+    ["WorkbookSessionStore", WorkbookAfterExportCallback | None],
+    AstrBotWorkbookTool,
+]
+WorkbookMcpToolRegistrar = Callable[["FastMCP", "WorkbookSessionStore"], None]
+
 
 @dataclass(frozen=True)
 class DocumentToolSpec:
     name: str
     astrbot_factory: AstrBotToolFactory
     mcp_registrar: McpToolRegistrar
+
+
+@dataclass(frozen=True)
+class WorkbookToolSpec:
+    name: str
+    astrbot_factory: AstrBotWorkbookToolFactory
+    mcp_registrar: WorkbookMcpToolRegistrar
 
 
 def _build_create_document_tool(
@@ -163,6 +184,60 @@ def _register_export_document_tool(
     )
 
 
+def _build_create_workbook_tool(
+    store: "WorkbookSessionStore",
+    _after_export: WorkbookAfterExportCallback | None,
+) -> AstrBotWorkbookTool:
+    from ..agent_tools.workbook_tools import CreateWorkbookTool
+
+    return CreateWorkbookTool(store=store)
+
+
+def _build_write_rows_tool(
+    store: "WorkbookSessionStore",
+    _after_export: WorkbookAfterExportCallback | None,
+) -> AstrBotWorkbookTool:
+    from ..agent_tools.workbook_tools import WriteRowsTool
+
+    return WriteRowsTool(store=store)
+
+
+def _build_export_workbook_tool(
+    store: "WorkbookSessionStore",
+    after_export: WorkbookAfterExportCallback | None,
+) -> AstrBotWorkbookTool:
+    from ..agent_tools.workbook_tools import ExportWorkbookTool
+
+    return ExportWorkbookTool(store=store, after_export=after_export)
+
+
+def _register_create_workbook_tool(
+    server: FastMCP,
+    store: "WorkbookSessionStore",
+) -> None:
+    from ..mcp_server.tools.create_workbook import register_create_workbook_tool
+
+    register_create_workbook_tool(server, store)
+
+
+def _register_write_rows_tool(
+    server: FastMCP,
+    store: "WorkbookSessionStore",
+) -> None:
+    from ..mcp_server.tools.write_rows import register_write_rows_tool
+
+    register_write_rows_tool(server, store)
+
+
+def _register_export_workbook_tool(
+    server: FastMCP,
+    store: "WorkbookSessionStore",
+) -> None:
+    from ..mcp_server.tools.export_workbook import register_export_workbook_tool
+
+    register_export_workbook_tool(server, store)
+
+
 _DOCUMENT_TOOL_SPECS: tuple[DocumentToolSpec, ...] = (
     DocumentToolSpec(
         name="create_document",
@@ -186,9 +261,31 @@ _DOCUMENT_TOOL_SPECS: tuple[DocumentToolSpec, ...] = (
     ),
 )
 
+_WORKBOOK_TOOL_SPECS: tuple[WorkbookToolSpec, ...] = (
+    WorkbookToolSpec(
+        name="create_workbook",
+        astrbot_factory=_build_create_workbook_tool,
+        mcp_registrar=_register_create_workbook_tool,
+    ),
+    WorkbookToolSpec(
+        name="write_rows",
+        astrbot_factory=_build_write_rows_tool,
+        mcp_registrar=_register_write_rows_tool,
+    ),
+    WorkbookToolSpec(
+        name="export_workbook",
+        astrbot_factory=_build_export_workbook_tool,
+        mcp_registrar=_register_export_workbook_tool,
+    ),
+)
+
 
 def get_document_tool_specs() -> tuple[DocumentToolSpec, ...]:
     return _DOCUMENT_TOOL_SPECS
+
+
+def get_workbook_tool_specs() -> tuple[WorkbookToolSpec, ...]:
+    return _WORKBOOK_TOOL_SPECS
 
 
 def build_document_store(
@@ -204,3 +301,12 @@ def build_document_store(
     )
     attach_document_style_defaults(store, default_document_style)
     return store
+
+
+def build_workbook_store(
+    workspace_dir: Path | None = None,
+) -> "WorkbookSessionStore":
+    # Lazy import keeps the document-only path free from workbook dependencies.
+    from ..domain.workbook.session_store import WorkbookSessionStore
+
+    return WorkbookSessionStore(workspace_dir=workspace_dir)

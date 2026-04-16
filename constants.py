@@ -89,6 +89,9 @@ FILE_TOOLS = (
     "add_blocks",
     "finalize_document",
     "export_document",
+    "create_workbook",
+    "write_rows",
+    "export_workbook",
     "convert_to_pdf",
     "convert_from_pdf",
 )

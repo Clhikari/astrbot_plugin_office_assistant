@@ -49,6 +49,7 @@ class PluginRuntimeBundle:
     access_policy_service: AccessPolicyService
     upload_session_service: UploadSessionService
     document_toolset: Any
+    workbook_toolset: Any
     llm_request_policy: LLMRequestPolicy
     prompt_context_service: PromptContextService
     delivery_service: DeliveryService

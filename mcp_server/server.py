@@ -13,7 +13,8 @@ from ..domain.document.session_store import (
     DocumentSessionStore,
     attach_document_style_defaults,
 )
-from .tools import register_document_tools
+from ..domain.workbook.session_store import WorkbookSessionStore
+from .tools import register_document_tools, register_workbook_tools
 
 
 def create_server(
@@ -27,11 +28,13 @@ def create_server(
     server = FastMCP(
         name="astrbot-office-assistant",
         instructions=(
-            "Stateful document builder for complex Word generation. "
-            "Use create_document first, then append content blocks, finalize, and export."
+            "Stateful Office builder for structured Word and Excel generation. "
+            "Use create_document/add_blocks/finalize_document/export_document for Word, "
+            "and use create_workbook/write_rows/export_workbook for Excel."
         ),
     )
     store = DocumentSessionStore(workspace_dir=workspace_dir)
+    workbook_store = WorkbookSessionStore(workspace_dir=workspace_dir)
     attach_render_backend_config(store, render_backend_config)
     attach_document_style_defaults(store, default_document_style)
     register_document_tools(
@@ -40,6 +43,7 @@ def create_server(
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
     )
+    register_workbook_tools(server, workbook_store)
     return server
 
 
