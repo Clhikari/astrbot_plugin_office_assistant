@@ -1581,6 +1581,45 @@ async def test_request_hook_service_injects_workbook_follow_up_notice_for_draft(
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_filters_none_values_from_workbook_follow_up_notice():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=lambda workbook_id: {
+            "workbook_id": workbook_id,
+            "status": "draft",
+            "sheet_names": [None, "总表", "   "],
+            "sheet_count": 1,
+            "latest_written_sheets": [None, "华东"],
+            "next_allowed_actions": [None, "write_rows", " "],
+        },
+    )
+    context = NoticeBuildContext(
+        event=_build_event(),
+        request=ProviderRequest(
+            prompt='继续补充 workbook_id="wb-2" 的数据',
+            system_prompt="base",
+            func_tool=ToolSet([_tool("write_rows")]),
+        ),
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+        notices=[],
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert "None" not in context.notices[0]
+    assert "总表" in context.notices[0]
+    assert "华东" in context.notices[0]
+    assert "write_rows" in context.notices[0]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_injects_workbook_follow_up_notice_for_missing_summary():
     service = RequestHookService(
         auto_block_execution_tools=True,
