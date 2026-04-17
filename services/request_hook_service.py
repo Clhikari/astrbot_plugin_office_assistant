@@ -373,19 +373,34 @@ class RequestHookService:
 
         raw_sheet_names = summary.get("sheet_names")
         sheet_names = (
-            [str(name) for name in raw_sheet_names if str(name)]
+            [
+                normalized_name
+                for name in raw_sheet_names
+                if name is not None
+                and (normalized_name := str(name).strip())
+            ]
             if isinstance(raw_sheet_names, list)
             else []
         )
         raw_latest_sheets = summary.get("latest_written_sheets")
         latest_written_sheets = (
-            [str(name) for name in raw_latest_sheets if str(name)]
+            [
+                normalized_name
+                for name in raw_latest_sheets
+                if name is not None
+                and (normalized_name := str(name).strip())
+            ]
             if isinstance(raw_latest_sheets, list)
             else []
         )
         raw_next_actions = summary.get("next_allowed_actions")
         next_allowed_actions = (
-            [str(action) for action in raw_next_actions if str(action)]
+            [
+                normalized_action
+                for action in raw_next_actions
+                if action is not None
+                and (normalized_action := str(action).strip())
+            ]
             if isinstance(raw_next_actions, list)
             else []
         )
