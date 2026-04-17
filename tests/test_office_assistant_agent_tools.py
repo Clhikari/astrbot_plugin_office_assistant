@@ -83,6 +83,7 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     normalize_create_document_kwargs,
     normalize_raw_block_payloads,
 )
+import astrbot_plugin_office_assistant.mcp_server.server as mcp_server_module
 from astrbot_plugin_office_assistant.mcp_server.server import (
     create_server,
 )
@@ -2620,6 +2621,44 @@ async def test_mcp_registers_document_and_workbook_tools():
     assert add_blocks_items["type"] == "object"
     assert add_blocks_items["additionalProperties"] is True
     assert write_rows_tool.inputSchema["required"] == ["workbook_id", "sheet", "rows"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_registers_only_document_tools_when_workbook_store_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(mcp_server_module, "WorkbookSessionStore", None)
+
+    server = create_server()
+    tools = await server.list_tools()
+
+    assert [tool.name for tool in tools] == [
+        "create_document",
+        "add_blocks",
+        "finalize_document",
+        "export_document",
+    ]
+
+
+def test_mcp_create_server_constructs_workbook_store_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    constructed_workspaces: list[Path | None] = []
+
+    class StubWorkbookSessionStore:
+        def __init__(self, workspace_dir=None):
+            constructed_workspaces.append(workspace_dir)
+
+    register_mock = MagicMock()
+    monkeypatch.setattr(
+        mcp_server_module, "WorkbookSessionStore", StubWorkbookSessionStore
+    )
+    monkeypatch.setattr(mcp_server_module, "register_workbook_tools", register_mock)
+
+    create_server()
+
+    assert constructed_workspaces == [None]
+    register_mock.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -290,10 +290,14 @@ def _build_workbook_toolset(*, workspace_dir: Path, after_export):
     if build_workbook_toolset is None:
         logger.info("[文件管理] build_workbook_toolset 不可用，跳过 workbook 原语工具挂载")
         return None
-    return build_workbook_toolset(
-        workspace_dir=workspace_dir,
-        after_export=after_export,
-    )
+    try:
+        return build_workbook_toolset(
+            workspace_dir=workspace_dir,
+            after_export=after_export,
+        )
+    except ImportError as exc:
+        logger.warning(f"[文件管理] workbook 原语工具依赖不可用，跳过挂载: {exc}")
+        return None
 
 
 def _build_workbook_summary_lookup(workbook_toolset):
