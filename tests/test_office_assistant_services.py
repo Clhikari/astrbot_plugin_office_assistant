@@ -2363,6 +2363,36 @@ async def test_request_hook_service_injects_workbook_core_and_detail_notices():
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_skips_workbook_guide_when_workbook_tools_are_unavailable():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请用 create_workbook 和 write_rows 生成 xlsx 报表，多 sheet，start_row=2",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("existing_tool")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == []
+    assert context.notices == []
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_falls_back_to_workbook_guide_when_workbook_lookup_disabled():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -2392,6 +2422,44 @@ async def test_request_hook_service_falls_back_to_workbook_guide_when_workbook_l
     assert context.section_names == [SECTION_STATIC_WORKBOOK_TOOLS]
     assert "create_workbook" in context.notices[0]
     assert "export_workbook" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_workbook_follow_up_when_workbook_tools_are_unavailable():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=lambda workbook_id: {
+            "workbook_id": workbook_id,
+            "status": "draft",
+            "sheet_names": ["Sheet1"],
+            "sheet_count": 1,
+            "latest_written_sheets": ["Sheet1"],
+            "next_allowed_actions": ["write_rows"],
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='继续补充 workbook_id="wb-11" 的数据',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("existing_tool")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == []
+    assert context.notices == []
 
 
 def test_prompt_context_service_orders_notice_sections_by_stability():

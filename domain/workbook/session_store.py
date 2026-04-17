@@ -125,10 +125,12 @@ class WorkbookSessionStore:
         self,
         request: ExportWorkbookRequest,
     ) -> tuple[WorkbookModel, Path]:
-        workbook, output_path = self.prepare_export_path(request)
-        export_workbook_to_xlsx(workbook, output_path)
-        exported_workbook = self.complete_export(workbook.workbook_id)
-        return exported_workbook, output_path
+        with self._lock:
+            workbook, output_path = self.prepare_export_path(request)
+            export_workbook_to_xlsx(workbook, output_path)
+            workbook.status = WorkbookStatus.EXPORTED
+            workbook.touch()
+            return workbook, output_path
 
     def complete_export(self, workbook_id: str) -> WorkbookModel:
         with self._lock:

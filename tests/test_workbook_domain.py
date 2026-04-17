@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 from openpyxl import load_workbook
@@ -13,6 +14,7 @@ from astrbot_plugin_office_assistant.domain.workbook.contracts import (
 from astrbot_plugin_office_assistant.domain.workbook.session_store import (
     WorkbookSessionStore,
 )
+import astrbot_plugin_office_assistant.domain.workbook.session_store as workbook_session_store_module
 
 
 def test_create_workbook_returns_draft_summary(workspace_root: Path):
@@ -159,6 +161,41 @@ def test_exporter_writes_values_and_header_style(workspace_root: Path):
     assert sheet["A2"].font.bold is False
 
 
+def test_exporter_applies_worksheet_options(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="options.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Sales",
+            rows=[
+                ["name", "amount"],
+                ["A", 123.5],
+            ],
+        )
+    )
+    worksheet = store.require_workbook(workbook.workbook_id).get_sheet("Sales")
+    assert worksheet is not None
+    worksheet.options.freeze_panes = "B2"
+    worksheet.options.column_widths = {"A": 20.0, "B": 15.5}
+    worksheet.options.autofilter = True
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(
+            workbook_id=workbook.workbook_id,
+            output_name="options-output.xlsx",
+        )
+    )
+
+    loaded = load_workbook(output_path)
+    sheet = loaded["Sales"]
+
+    assert sheet.freeze_panes == "B2"
+    assert sheet.column_dimensions["A"].width == pytest.approx(20.0)
+    assert sheet.column_dimensions["B"].width == pytest.approx(15.5)
+    assert sheet.auto_filter.ref == "A1:B2"
+
+
 def test_exported_workbook_disallows_more_writes_or_reexport(workspace_root: Path):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
@@ -189,6 +226,68 @@ def test_exported_workbook_disallows_more_writes_or_reexport(workspace_root: Pat
     summary = store.build_prompt_summary(workbook.workbook_id)
     assert summary["status"] == "exported"
     assert summary["next_allowed_actions"] == []
+
+
+def test_export_workbook_blocks_concurrent_writes_until_export_finishes(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1"], ["v1"]],
+        )
+    )
+
+    export_started = Event()
+    release_export = Event()
+    write_finished = Event()
+    write_error: list[Exception] = []
+
+    def fake_export(workbook_model, output_path):
+        export_started.set()
+        assert not write_finished.is_set()
+        release_export.wait(timeout=5)
+        output_path.write_text("xlsx", encoding="utf-8")
+        return output_path
+
+    def run_export():
+        store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
+
+    def run_write():
+        try:
+            store.write_rows(
+                WriteRowsRequest(
+                    workbook_id=workbook.workbook_id,
+                    sheet="Data",
+                    rows=[["v2"]],
+                    start_row=3,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - asserted via captured error
+            write_error.append(exc)
+        finally:
+            write_finished.set()
+
+    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+
+    export_thread = Thread(target=run_export)
+    write_thread = Thread(target=run_write)
+
+    export_thread.start()
+    assert export_started.wait(timeout=5)
+    write_thread.start()
+
+    assert not write_finished.wait(timeout=0.2)
+
+    release_export.set()
+    export_thread.join(timeout=5)
+    write_thread.join(timeout=5)
+
+    assert len(write_error) == 1
+    assert "status is draft" in str(write_error[0])
 
 
 def test_build_workbook_summary_includes_sheet_names(workspace_root: Path):

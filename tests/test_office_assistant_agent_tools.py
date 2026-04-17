@@ -19,6 +19,7 @@ from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
     build_workbook_toolset,
 )
+from astrbot_plugin_office_assistant.agent_tools.workbook_tools import WriteRowsTool
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
@@ -31,6 +32,12 @@ from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
 )
 from astrbot_plugin_office_assistant.domain.document.session_store import (
     DocumentSessionStore,
+)
+from astrbot_plugin_office_assistant.domain.workbook.contracts import (
+    CreateWorkbookRequest,
+)
+from astrbot_plugin_office_assistant.domain.workbook.session_store import (
+    WorkbookSessionStore,
 )
 from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
     export_document_via_pipeline,
@@ -152,6 +159,51 @@ def test_build_workbook_toolset_uses_shared_store_and_default_workspace():
         / "workbooks"
     )
     assert stores[0].workspace_dir == expected_workspace
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_returns_targeted_retry_message_for_validation_errors(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["=SUM(A1:A2)"]],
+        )
+    )
+
+    assert result["success"] is False
+    assert "only fix invalid fields" in result["message"]
+    assert "Original error" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_returns_neutral_message_for_state_errors(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    workbook.status = "exported"
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+        )
+    )
+
+    assert result["success"] is False
+    assert result["message"].startswith("write_rows failed:")
+    assert "only fix invalid fields" not in result["message"]
 
 
 @pytest.mark.asyncio

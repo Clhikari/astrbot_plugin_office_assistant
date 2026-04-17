@@ -26,6 +26,9 @@ from .upload_types import UploadInfo
 
 
 class RequestHookService:
+    _WORKBOOK_TOOL_NAMES = frozenset(
+        {"create_workbook", "write_rows", "export_workbook"}
+    )
     _DOCUMENT_ID_TOKEN_RE = r"(?<![A-Za-z0-9_])document_id(?![A-Za-z0-9_])"
     _DOCUMENT_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _DOCUMENT_ID_DOC_PREFIX_RE = re.compile(
@@ -156,7 +159,13 @@ class RequestHookService:
             return context
 
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
-        if self._is_workbook_follow_up(request_text=request_text):
+        exposed_tool_names = self._get_exposed_tool_names(context.request.func_tool)
+        workbook_tools_available = self._has_workbook_tools_available(
+            exposed_tool_names=exposed_tool_names
+        )
+        if workbook_tools_available and self._is_workbook_follow_up(
+            request_text=request_text
+        ):
             section = self._build_workbook_follow_up_section(request_text=request_text)
             if section is not None:
                 self._append_notice_section(context, section)
@@ -200,15 +209,23 @@ class RequestHookService:
                 context,
                 self.prompt_context_service.build_document_tool_detail_section(),
             )
-        if should_inject_workbook_core and self._consume_session_notice_once(
+        if (
+            workbook_tools_available
+            and should_inject_workbook_core
+            and self._consume_session_notice_once(
             context.event, self._WORKBOOK_CORE_NOTICE_KEY
+            )
         ):
             self._append_notice_section(
                 context,
                 self.prompt_context_service.build_workbook_tool_guide_section(),
             )
-        if should_inject_workbook_detail and self._consume_session_notice_once(
+        if (
+            workbook_tools_available
+            and should_inject_workbook_detail
+            and self._consume_session_notice_once(
             context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
+            )
         ):
             self._append_notice_section(
                 context,
@@ -225,6 +242,17 @@ class RequestHookService:
         if match:
             return match.group("instruction").strip()
         return stripped_prompt
+
+    @classmethod
+    def _get_exposed_tool_names(cls, func_tool) -> set[str]:
+        names = getattr(func_tool, "names", None)
+        if not callable(names):
+            return set()
+        return {str(name) for name in names() if name}
+
+    @classmethod
+    def _has_workbook_tools_available(cls, *, exposed_tool_names: set[str]) -> bool:
+        return bool(cls._WORKBOOK_TOOL_NAMES.intersection(exposed_tool_names))
 
     @classmethod
     def _should_inject_document_tool_guide(cls, *, request_text: str) -> bool:
