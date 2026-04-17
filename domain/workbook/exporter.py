@@ -21,6 +21,7 @@ def export_workbook_to_xlsx(workbook: WorkbookModel, output_path: Path) -> Path:
         for worksheet_model in workbook.worksheets:
             worksheet = workbook_writer.create_sheet(title=worksheet_model.name)
             _write_worksheet_rows(worksheet, worksheet_model.rows)
+            _apply_worksheet_options(worksheet, worksheet_model)
     else:
         default_sheet.title = "Sheet1"
 
@@ -37,6 +38,21 @@ def _write_worksheet_rows(worksheet, rows: list[list[object]]) -> None:
             if row_index == 1:
                 cell.font = HEADER_FONT
                 cell.fill = HEADER_FILL
+
+
+def _apply_worksheet_options(worksheet, worksheet_model) -> None:
+    options = getattr(worksheet_model, "options", None)
+    if options is None:
+        return
+
+    if options.freeze_panes:
+        worksheet.freeze_panes = options.freeze_panes
+
+    for column_letter, width in options.column_widths.items():
+        worksheet.column_dimensions[column_letter].width = width
+
+    if options.autofilter and worksheet_model.rows:
+        worksheet.auto_filter.ref = worksheet.dimensions
 
 
 __all__ = ["export_workbook_to_xlsx"]

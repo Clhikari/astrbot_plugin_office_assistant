@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from pydantic import ValidationError
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
@@ -132,7 +133,7 @@ class WriteRowsTool(WorkbookToolBase):
                 start_row=int(kwargs.get("start_row") or 1),
             )
             workbook = self.store.write_rows(request)
-        except Exception as exc:
+        except ValidationError as exc:
             return _dump_result(
                 ToolResult(
                     success=False,
@@ -140,6 +141,13 @@ class WriteRowsTool(WorkbookToolBase):
                         "write_rows failed. Retry write_rows with the same workbook_id "
                         f"and only fix invalid fields. Original error: {exc}"
                     ),
+                )
+            )
+        except Exception as exc:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=f"write_rows failed: {exc}",
                 )
             )
         return _dump_result(
