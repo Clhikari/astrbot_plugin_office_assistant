@@ -38,7 +38,6 @@ def create_server(
         ),
     )
     store = DocumentSessionStore(workspace_dir=workspace_dir)
-    workbook_store = WorkbookSessionStore(workspace_dir=workspace_dir)
     attach_render_backend_config(store, render_backend_config)
     attach_document_style_defaults(store, default_document_style)
     register_document_tools(

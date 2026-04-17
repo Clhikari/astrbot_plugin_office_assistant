@@ -47,6 +47,7 @@ from astrbot_plugin_office_assistant.services import (
 )
 from astrbot_plugin_office_assistant.services.runtime_builder import (
     _build_document_summary_lookup,
+    _build_workbook_toolset,
     _build_workbook_summary_lookup,
 )
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
@@ -2065,6 +2066,27 @@ def test_runtime_builder_uses_workbook_summary_lookup_when_available():
 
     assert lookup is build_prompt_summary
     assert lookup("wb-1") == {"status": "draft"}
+
+
+def test_runtime_builder_skips_workbook_toolset_when_builder_raises_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.services.runtime_builder.build_workbook_toolset",
+        MagicMock(side_effect=ModuleNotFoundError("missing workbook dependency")),
+    )
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.runtime_builder.logger.warning"
+    ) as mock_warning:
+        toolset = _build_workbook_toolset(
+            workspace_dir=Path.cwd(),
+            after_export=AsyncMock(),
+        )
+
+    assert toolset is None
+    mock_warning.assert_called_once()
+    assert "workbook 原语工具依赖不可用" in mock_warning.call_args.args[0]
 
 
 @pytest.mark.asyncio
