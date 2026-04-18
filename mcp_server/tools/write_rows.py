@@ -1,6 +1,7 @@
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import ValidationError
 
 from ...domain.workbook.session_store import WorkbookSessionStore
 from ...domain.workbook.contracts import (
@@ -22,13 +23,27 @@ def register_write_rows_tool(server: FastMCP, store: WorkbookSessionStore) -> No
         rows: list[list[Any]],
         start_row: int = 1,
     ) -> ToolResult:
-        request = WriteRowsRequest(
-            workbook_id=workbook_id,
-            sheet=sheet,
-            rows=rows,
-            start_row=start_row,
-        )
-        workbook = store.write_rows(request)
+        try:
+            request = WriteRowsRequest(
+                workbook_id=workbook_id,
+                sheet=sheet,
+                rows=rows,
+                start_row=start_row,
+            )
+            workbook = store.write_rows(request)
+        except ValidationError as exc:
+            return ToolResult(
+                success=False,
+                message=(
+                    "write_rows failed. Retry write_rows with the same workbook_id "
+                    f"and only fix invalid fields. Original error: {exc}"
+                ),
+            )
+        except (KeyError, ValueError) as exc:
+            return ToolResult(
+                success=False,
+                message=f"write_rows failed: {exc}",
+            )
         return ToolResult(
             success=True,
             message="Rows written.",
