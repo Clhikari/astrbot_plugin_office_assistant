@@ -15,6 +15,7 @@ WorkbookCellValue = str | int | float | bool | None
 
 class WorkbookStatus(str, Enum):
     DRAFT = "draft"
+    EXPORTING = "exporting"
     EXPORTED = "exported"
 
 
