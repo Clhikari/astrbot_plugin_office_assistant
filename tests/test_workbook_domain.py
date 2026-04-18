@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from astrbot_plugin_office_assistant.domain.workbook.contracts import (
     CreateWorkbookRequest,
     ExportWorkbookRequest,
+    MAX_WORKBOOK_ROW_INDEX,
     WriteRowsRequest,
     build_workbook_summary,
 )
@@ -156,6 +157,26 @@ def test_write_rows_rejects_formula_cells():
             sheet="Data",
             rows=[["=SUM(A1:A2)"]],
             start_row=1,
+        )
+
+
+def test_write_rows_rejects_start_row_beyond_limit():
+    with pytest.raises(ValidationError, match="less than or equal to"):
+        WriteRowsRequest(
+            workbook_id="wb-1",
+            sheet="Data",
+            rows=[["value"]],
+            start_row=MAX_WORKBOOK_ROW_INDEX + 1,
+        )
+
+
+def test_write_rows_rejects_final_row_beyond_limit():
+    with pytest.raises(ValidationError, match="final written row must not exceed"):
+        WriteRowsRequest(
+            workbook_id="wb-1",
+            sheet="Data",
+            rows=[["value"], ["overflow"]],
+            start_row=MAX_WORKBOOK_ROW_INDEX,
         )
 
 

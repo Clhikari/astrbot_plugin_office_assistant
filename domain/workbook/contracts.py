@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .models import WorkbookCellValue, WorkbookModel
 
 DEFAULT_XLSX_FILENAME = "workbook.xlsx"
+MAX_WORKBOOK_ROW_INDEX = 100_000
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 SHEET_NAME_FORBIDDEN_CHARS = set("[]:*?/\\")
 
@@ -72,7 +73,7 @@ class WriteRowsRequest(BaseModel):
     workbook_id: str
     sheet: str
     rows: list[list[WorkbookCellValue]] = Field(min_length=1)
-    start_row: int = Field(default=1, ge=1)
+    start_row: int = Field(default=1, ge=1, le=MAX_WORKBOOK_ROW_INDEX)
 
     @field_validator("workbook_id")
     @classmethod
@@ -104,6 +105,15 @@ class WriteRowsRequest(BaseModel):
         if not normalized_rows:
             raise ValueError("rows must contain at least one row")
         return normalized_rows
+
+    @model_validator(mode="after")
+    def validate_row_window(self) -> WriteRowsRequest:
+        final_row = self.start_row + len(self.rows) - 1
+        if final_row > MAX_WORKBOOK_ROW_INDEX:
+            raise ValueError(
+                f"final written row must not exceed {MAX_WORKBOOK_ROW_INDEX}"
+            )
+        return self
 
 
 class ExportWorkbookRequest(BaseModel):

@@ -1,6 +1,8 @@
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
@@ -23,6 +25,26 @@ from ..internal_hooks import (
 )
 from .prompt_context_service import PromptContextService, PromptSection
 from .upload_types import UploadInfo
+
+
+@dataclass(frozen=True, slots=True)
+class _IdentifierDescriptor:
+    token_name: str
+    group_name: str
+    follow_up_re: re.Pattern[str]
+    explicit_capture_re: re.Pattern[str]
+    bare_capture_re: re.Pattern[str]
+    bare_validator_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FollowUpNoticeStrategy:
+    identifier: _IdentifierDescriptor
+    lookup_attr_name: str
+    section_builder_name: str
+    missing_section_builder_name: str
+    payload_builder_name: str
+    log_label: str
 
 
 def _build_identifier_token_pattern(token_name: str) -> str:
@@ -163,6 +185,38 @@ class RequestHookService:
         "workbook_id",
         "workbook_id",
     )
+    _DOCUMENT_IDENTIFIER = _IdentifierDescriptor(
+        token_name="document_id",
+        group_name="document_id",
+        follow_up_re=_DOCUMENT_ID_FOLLOW_UP_RE,
+        explicit_capture_re=_DOCUMENT_ID_EXPLICIT_CAPTURE_RE,
+        bare_capture_re=_DOCUMENT_ID_BARE_CAPTURE_RE,
+        bare_validator_name="_looks_like_bare_document_id",
+    )
+    _WORKBOOK_IDENTIFIER = _IdentifierDescriptor(
+        token_name="workbook_id",
+        group_name="workbook_id",
+        follow_up_re=_WORKBOOK_ID_FOLLOW_UP_RE,
+        explicit_capture_re=_WORKBOOK_ID_EXPLICIT_CAPTURE_RE,
+        bare_capture_re=_WORKBOOK_ID_BARE_CAPTURE_RE,
+        bare_validator_name="_looks_like_bare_workbook_id",
+    )
+    _DOCUMENT_FOLLOW_UP_STRATEGY = _FollowUpNoticeStrategy(
+        identifier=_DOCUMENT_IDENTIFIER,
+        lookup_attr_name="_lookup_document_summary",
+        section_builder_name="build_document_follow_up_section",
+        missing_section_builder_name="build_document_follow_up_missing_section",
+        payload_builder_name="_build_document_follow_up_payload",
+        log_label="文档",
+    )
+    _WORKBOOK_FOLLOW_UP_STRATEGY = _FollowUpNoticeStrategy(
+        identifier=_WORKBOOK_IDENTIFIER,
+        lookup_attr_name="_lookup_workbook_summary",
+        section_builder_name="build_workbook_follow_up_section",
+        missing_section_builder_name="build_workbook_follow_up_missing_section",
+        payload_builder_name="_build_workbook_follow_up_payload",
+        log_label="工作簿",
+    )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
     _DOCUMENT_DETAIL_NOTICE_KEY = "document_detail_guide"
     _WORKBOOK_CORE_NOTICE_KEY = "workbook_core_guide"
@@ -194,7 +248,7 @@ class RequestHookService:
             allow_external_input_files=allow_external_input_files
         )
         self._notice_hooks = [
-            self.append_document_tool_guide_notice,
+            self.append_office_tool_guide_notice,
             self.append_uploaded_file_notices,
         ]
         self._tool_exposure_hooks = [
@@ -220,7 +274,7 @@ class RequestHookService:
     ) -> NoticeBuildContext:
         return await run_notice_hooks(self._notice_hooks, context)
 
-    async def append_document_tool_guide_notice(
+    async def append_office_tool_guide_notice(
         self,
         context: NoticeBuildContext,
     ) -> NoticeBuildContext:
@@ -246,6 +300,12 @@ class RequestHookService:
             exposed_tool_names=exposed_tool_names,
         )
         return context
+
+    async def append_document_tool_guide_notice(
+        self,
+        context: NoticeBuildContext,
+    ) -> NoticeBuildContext:
+        return await self.append_office_tool_guide_notice(context)
 
     @classmethod
     def _extract_prompt_text(cls, prompt: str) -> str:
@@ -283,46 +343,50 @@ class RequestHookService:
         request_text: str,
         exposed_tool_names: set[str],
     ) -> bool:
-        if self._append_workbook_follow_up_notice(
-            context,
-            request_text=request_text,
-            exposed_tool_names=exposed_tool_names,
-        ):
-            return True
-        return self._append_document_follow_up_notice(
-            context,
-            request_text=request_text,
+        follow_up_rules = (
+            (
+                self._WORKBOOK_FOLLOW_UP_STRATEGY,
+                self._has_workbook_tools_available,
+            ),
+            (
+                self._DOCUMENT_FOLLOW_UP_STRATEGY,
+                None,
+            ),
         )
+        for strategy, availability_checker in follow_up_rules:
+            if self._append_follow_up_notice(
+                context,
+                request_text=request_text,
+                exposed_tool_names=exposed_tool_names,
+                strategy=strategy,
+                availability_checker=availability_checker,
+            ):
+                return True
+        return False
 
-    def _append_workbook_follow_up_notice(
+    def _append_follow_up_notice(
         self,
         context: NoticeBuildContext,
         *,
         request_text: str,
         exposed_tool_names: set[str],
+        strategy: _FollowUpNoticeStrategy,
+        availability_checker: Callable[..., bool] | None,
     ) -> bool:
-        if not self._has_workbook_tools_available(exposed_tool_names=exposed_tool_names):
+        if availability_checker is not None and not availability_checker(
+            exposed_tool_names=exposed_tool_names
+        ):
             return False
-        if not self._is_workbook_follow_up(request_text=request_text):
-            return False
-
-        section = self._build_workbook_follow_up_section(request_text=request_text)
-        if section is None:
-            return False
-
-        self._append_notice_section(context, section)
-        return True
-
-    def _append_document_follow_up_notice(
-        self,
-        context: NoticeBuildContext,
-        *,
-        request_text: str,
-    ) -> bool:
-        if not self._is_document_follow_up(request_text=request_text):
+        if not self._is_follow_up_request(
+            request_text=request_text,
+            descriptor=strategy.identifier,
+        ):
             return False
 
-        section = self._build_document_follow_up_section(request_text=request_text)
+        section = self._build_follow_up_section(
+            request_text=request_text,
+            strategy=strategy,
+        )
         if section is None:
             return False
 
@@ -435,34 +499,58 @@ class RequestHookService:
 
     @classmethod
     def _is_document_follow_up(cls, *, request_text: str) -> bool:
-        if not request_text:
-            return False
-        return bool(cls._DOCUMENT_ID_FOLLOW_UP_RE.search(request_text))
+        return cls._is_follow_up_request(
+            request_text=request_text,
+            descriptor=cls._DOCUMENT_IDENTIFIER,
+        )
 
     @classmethod
     def _is_workbook_follow_up(cls, *, request_text: str) -> bool:
         if not request_text:
             return False
-        return bool(cls._WORKBOOK_ID_FOLLOW_UP_RE.search(request_text))
+        return cls._is_follow_up_request(
+            request_text=request_text,
+            descriptor=cls._WORKBOOK_IDENTIFIER,
+        )
+
+    @classmethod
+    def _is_follow_up_request(
+        cls,
+        *,
+        request_text: str,
+        descriptor: _IdentifierDescriptor,
+    ) -> bool:
+        if not request_text:
+            return False
+        return bool(descriptor.follow_up_re.search(request_text))
 
     @classmethod
     def _extract_document_id(cls, *, request_text: str) -> str:
-        return _extract_identifier_from_text(
+        return cls._extract_identifier(
             request_text=request_text,
-            explicit_capture_re=cls._DOCUMENT_ID_EXPLICIT_CAPTURE_RE,
-            bare_capture_re=cls._DOCUMENT_ID_BARE_CAPTURE_RE,
-            group_name="document_id",
-            is_valid_bare_id=cls._looks_like_bare_document_id,
+            descriptor=cls._DOCUMENT_IDENTIFIER,
         )
 
     @classmethod
     def _extract_workbook_id(cls, *, request_text: str) -> str:
+        return cls._extract_identifier(
+            request_text=request_text,
+            descriptor=cls._WORKBOOK_IDENTIFIER,
+        )
+
+    @classmethod
+    def _extract_identifier(
+        cls,
+        *,
+        request_text: str,
+        descriptor: _IdentifierDescriptor,
+    ) -> str:
         return _extract_identifier_from_text(
             request_text=request_text,
-            explicit_capture_re=cls._WORKBOOK_ID_EXPLICIT_CAPTURE_RE,
-            bare_capture_re=cls._WORKBOOK_ID_BARE_CAPTURE_RE,
-            group_name="workbook_id",
-            is_valid_bare_id=cls._looks_like_bare_workbook_id,
+            explicit_capture_re=descriptor.explicit_capture_re,
+            bare_capture_re=descriptor.bare_capture_re,
+            group_name=descriptor.group_name,
+            is_valid_bare_id=getattr(cls, descriptor.bare_validator_name),
         )
 
     @classmethod
@@ -488,28 +576,9 @@ class RequestHookService:
         *,
         request_text: str,
     ) -> PromptSection | None:
-        document_id = self._extract_document_id(request_text=request_text)
-        if not document_id:
-            return None
-        if self._lookup_document_summary is None:
-            return None
-        try:
-            summary = self._lookup_document_summary(document_id)
-        except KeyError:
-            summary = None
-        except Exception as exc:
-            logger.exception(
-                f"[文件管理] 查询文档会话摘要失败 document_id={document_id}: {exc}"
-            )
-            raise
-        if not isinstance(summary, dict):
-            return self.prompt_context_service.build_document_follow_up_missing_section(
-                document_id=document_id
-            )
-        return self.prompt_context_service.build_document_follow_up_section(
-            document_id=document_id,
-            status=str(summary.get("status") or ""),
-            block_count=int(summary.get("block_count") or 0),
+        return self._build_follow_up_section(
+            request_text=request_text,
+            strategy=self._DOCUMENT_FOLLOW_UP_STRATEGY,
         )
 
     def _build_workbook_follow_up_section(
@@ -517,36 +586,90 @@ class RequestHookService:
         *,
         request_text: str,
     ) -> PromptSection | None:
-        workbook_id = self._extract_workbook_id(request_text=request_text)
-        if not workbook_id:
+        return self._build_follow_up_section(
+            request_text=request_text,
+            strategy=self._WORKBOOK_FOLLOW_UP_STRATEGY,
+        )
+
+    def _build_follow_up_section(
+        self,
+        *,
+        request_text: str,
+        strategy: _FollowUpNoticeStrategy,
+    ) -> PromptSection | None:
+        identifier_value = self._extract_identifier(
+            request_text=request_text,
+            descriptor=strategy.identifier,
+        )
+        if not identifier_value:
             return None
-        if self._lookup_workbook_summary is None:
+
+        lookup_summary = getattr(self, strategy.lookup_attr_name)
+        if lookup_summary is None:
             return None
+
         try:
-            summary = self._lookup_workbook_summary(workbook_id)
+            summary = lookup_summary(identifier_value)
         except KeyError:
             summary = None
         except Exception as exc:
             logger.exception(
-                f"[文件管理] 查询工作簿会话摘要失败 workbook_id={workbook_id}: {exc}"
+                "[文件管理] 查询%s会话摘要失败 %s=%s: %s"
+                % (
+                    strategy.log_label,
+                    strategy.identifier.token_name,
+                    identifier_value,
+                    exc,
+                )
             )
             raise
+
         if not isinstance(summary, dict):
-            return self.prompt_context_service.build_workbook_follow_up_missing_section(
-                workbook_id=workbook_id
+            missing_builder = getattr(
+                self.prompt_context_service,
+                strategy.missing_section_builder_name,
             )
-        return self.prompt_context_service.build_workbook_follow_up_section(
-            workbook_id=workbook_id,
-            status=str(summary.get("status") or ""),
-            sheet_names=_normalize_string_list(summary.get("sheet_names")),
-            sheet_count=int(summary.get("sheet_count") or 0),
-            latest_written_sheets=_normalize_string_list(
+            return missing_builder(**{strategy.identifier.token_name: identifier_value})
+
+        section_builder = getattr(
+            self.prompt_context_service,
+            strategy.section_builder_name,
+        )
+        payload_builder = getattr(self, strategy.payload_builder_name)
+        return section_builder(
+            **payload_builder(identifier_value=identifier_value, summary=summary)
+        )
+
+    @staticmethod
+    def _build_document_follow_up_payload(
+        *,
+        identifier_value: str,
+        summary: dict[str, object],
+    ) -> dict[str, Any]:
+        return {
+            "document_id": identifier_value,
+            "status": str(summary.get("status") or ""),
+            "block_count": int(summary.get("block_count") or 0),
+        }
+
+    @staticmethod
+    def _build_workbook_follow_up_payload(
+        *,
+        identifier_value: str,
+        summary: dict[str, object],
+    ) -> dict[str, Any]:
+        return {
+            "workbook_id": identifier_value,
+            "status": str(summary.get("status") or ""),
+            "sheet_names": _normalize_string_list(summary.get("sheet_names")),
+            "sheet_count": int(summary.get("sheet_count") or 0),
+            "latest_written_sheets": _normalize_string_list(
                 summary.get("latest_written_sheets")
             ),
-            next_allowed_actions=_normalize_string_list(
+            "next_allowed_actions": _normalize_string_list(
                 summary.get("next_allowed_actions")
             ),
-        )
+        }
 
     @staticmethod
     def _append_notice_section(
