@@ -1220,6 +1220,45 @@ async def test_request_hook_service_builds_default_tool_hooks():
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_skips_explicit_restriction_for_unavailable_workbook_tool():
+    request = ProviderRequest(
+        prompt="请调用 create_workbook",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_file"),
+                _tool("create_document"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=_build_event(),
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name="create_workbook",
+    )
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_file" in tool_names
+    assert "create_document" in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "create_workbook" not in tool_names
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_merges_multiple_uploaded_files_into_one_notice():
     request = ProviderRequest(
         prompt="根据上传文件整理内容",

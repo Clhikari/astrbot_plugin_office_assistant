@@ -2728,6 +2728,8 @@ async def test_mcp_registers_only_document_tools_when_workbook_store_is_unavaila
         "finalize_document",
         "export_document",
     ]
+    assert "Excel" not in server.instructions
+    assert "create_workbook" not in server.instructions
 
 
 def test_mcp_create_server_constructs_workbook_store_once(
