@@ -84,6 +84,37 @@ def test_write_rows_creates_sheet_and_overwrites_range(workspace_root: Path):
     assert prompt_summary["latest_written_sheets"] == ["Summary"]
 
 
+def test_write_rows_reuses_sheet_with_case_insensitive_name(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Sales",
+            rows=[["name", "amount"]],
+            start_row=1,
+        )
+    )
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="sales",
+            rows=[["A", 10]],
+            start_row=2,
+        )
+    )
+
+    loaded = store.require_workbook(workbook.workbook_id)
+    assert len(loaded.worksheets) == 1
+    assert loaded.worksheets[0].name == "Sales"
+    assert loaded.worksheets[0].rows == [["name", "amount"], ["A", 10]]
+
+    prompt_summary = store.build_prompt_summary(workbook.workbook_id)
+    assert prompt_summary["sheet_names"] == ["Sales"]
+    assert prompt_summary["latest_written_sheets"] == ["Sales"]
+
+
 def test_write_rows_rejects_non_primitive_cell_values():
     with pytest.raises(ValidationError):
         WriteRowsRequest(
@@ -314,3 +345,32 @@ def test_build_workbook_summary_includes_sheet_names(workspace_root: Path):
     assert summary.sheet_count == 2
     assert summary.sheet_names == ["One", "Two"]
     assert summary.latest_written_sheets == ["One", "Two"]
+
+
+def test_case_insensitive_sheet_lookup_preserves_exported_sheet_name(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="book.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Sales",
+            rows=[["name"], ["A"]],
+        )
+    )
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="sales",
+            rows=[["B"]],
+            start_row=3,
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+
+    assert loaded.sheetnames == ["Sales"]
+    sheet = loaded["Sales"]
+    assert sheet["A3"].value == "B"

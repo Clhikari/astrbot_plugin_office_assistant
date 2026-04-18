@@ -2676,6 +2676,44 @@ async def test_mcp_registers_document_and_workbook_tools():
 
 
 @pytest.mark.asyncio
+async def test_mcp_write_rows_returns_structured_failure_for_unknown_workbook():
+    server = create_server()
+
+    _, payload = await server.call_tool(
+        "write_rows",
+        {
+            "workbook_id": "wb-missing",
+            "sheet": "Data",
+            "rows": [["value"]],
+        },
+    )
+
+    assert payload["success"] is False
+    assert payload["message"].startswith("write_rows failed:")
+
+
+@pytest.mark.asyncio
+async def test_mcp_write_rows_returns_structured_failure_for_validation_errors():
+    server = create_server()
+    _, created_payload = await server.call_tool(
+        "create_workbook",
+        {"filename": "validation.xlsx"},
+    )
+
+    _, payload = await server.call_tool(
+        "write_rows",
+        {
+            "workbook_id": created_payload["workbook"]["workbook_id"],
+            "sheet": "Data",
+            "rows": [["=SUM(A1:A2)"]],
+        },
+    )
+
+    assert payload["success"] is False
+    assert "only fix invalid fields" in payload["message"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_registers_only_document_tools_when_workbook_store_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -58,9 +58,14 @@ class WorkbookModel(BaseModel):
     def touch(self) -> None:
         self.metadata.updated_at = _utc_now()
 
+    @staticmethod
+    def _normalize_sheet_key(sheet_name: str) -> str:
+        return sheet_name.strip().casefold()
+
     def get_sheet(self, sheet_name: str) -> WorksheetModel | None:
+        target_key = self._normalize_sheet_key(sheet_name)
         for worksheet in self.worksheets:
-            if worksheet.name == sheet_name:
+            if self._normalize_sheet_key(worksheet.name) == target_key:
                 return worksheet
         return None
 
@@ -77,8 +82,11 @@ class WorkbookModel(BaseModel):
         return worksheet
 
     def remember_written_sheet(self, sheet_name: str) -> None:
+        target_key = self._normalize_sheet_key(sheet_name)
         self.latest_written_sheets = [
-            existing for existing in self.latest_written_sheets if existing != sheet_name
+            existing
+            for existing in self.latest_written_sheets
+            if self._normalize_sheet_key(existing) != target_key
         ]
         self.latest_written_sheets.append(sheet_name)
         self.latest_written_sheets = self.latest_written_sheets[-3:]
