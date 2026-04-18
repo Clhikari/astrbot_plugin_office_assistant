@@ -170,19 +170,23 @@ class ExportWorkbookResult(ToolResult):
     file_path: str = ""
 
 
+def _build_workbook_summary_payload(workbook_model: WorkbookModel) -> dict[str, object]:
+    return {
+        "workbook_id": workbook_model.workbook_id,
+        "session_id": workbook_model.session_id,
+        "title": workbook_model.metadata.title,
+        "format": workbook_model.format,
+        "status": workbook_model.status.value,
+        "sheet_names": [worksheet.name for worksheet in workbook_model.worksheets],
+        "sheet_count": len(workbook_model.worksheets),
+        "latest_written_sheets": list(workbook_model.latest_written_sheets),
+        "output_path": workbook_model.output_path,
+        "preferred_filename": workbook_model.metadata.preferred_filename,
+    }
+
+
 def build_workbook_summary(workbook_model: WorkbookModel) -> WorkbookSummary:
-    return WorkbookSummary(
-        workbook_id=workbook_model.workbook_id,
-        session_id=workbook_model.session_id,
-        title=workbook_model.metadata.title,
-        format=workbook_model.format,
-        status=workbook_model.status.value,
-        sheet_names=[worksheet.name for worksheet in workbook_model.worksheets],
-        sheet_count=len(workbook_model.worksheets),
-        latest_written_sheets=list(workbook_model.latest_written_sheets),
-        output_path=workbook_model.output_path,
-        preferred_filename=workbook_model.metadata.preferred_filename,
-    )
+    return WorkbookSummary(**_build_workbook_summary_payload(workbook_model))
 
 
 __all__ = [

@@ -1,6 +1,5 @@
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,82 +23,13 @@ from ..internal_hooks import (
     run_tool_exposure_hooks,
 )
 from .prompt_context_service import PromptContextService, PromptSection
+from .request_follow_up import (
+    FollowUpNoticeStrategy,
+    IdentifierDescriptor,
+    build_identifier_descriptor,
+    extract_identifier_from_text,
+)
 from .upload_types import UploadInfo
-
-
-@dataclass(frozen=True, slots=True)
-class _IdentifierDescriptor:
-    token_name: str
-    group_name: str
-    follow_up_re: re.Pattern[str]
-    explicit_capture_re: re.Pattern[str]
-    bare_capture_re: re.Pattern[str]
-    bare_validator_name: str
-
-
-@dataclass(frozen=True, slots=True)
-class _FollowUpNoticeStrategy:
-    identifier: _IdentifierDescriptor
-    lookup_attr_name: str
-    section_builder_name: str
-    missing_section_builder_name: str
-    payload_builder_name: str
-    log_label: str
-
-
-def _build_identifier_token_pattern(token_name: str) -> str:
-    return rf"(?<![A-Za-z0-9_]){re.escape(token_name)}(?![A-Za-z0-9_])"
-
-
-def _compile_identifier_token_regex(token_name: str) -> re.Pattern[str]:
-    return re.compile(_build_identifier_token_pattern(token_name), flags=re.IGNORECASE)
-
-
-def _compile_identifier_explicit_capture_regex(
-    token_name: str,
-    group_name: str,
-) -> re.Pattern[str]:
-    return re.compile(
-        _build_identifier_token_pattern(token_name)
-        + rf"(?:\s*[:=：]\s*|\s*(?:为|是)\s*|\s+is\s+)[`\"']?(?P<{group_name}>[A-Za-z0-9_-]+)[`\"']?",
-        flags=re.IGNORECASE,
-    )
-
-
-def _compile_identifier_bare_capture_regex(
-    token_name: str,
-    group_name: str,
-) -> re.Pattern[str]:
-    return re.compile(
-        _build_identifier_token_pattern(token_name)
-        + rf"\s+[`\"']?(?P<{group_name}>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
-        flags=re.IGNORECASE,
-    )
-
-
-def _extract_identifier_from_text(
-    *,
-    request_text: str,
-    explicit_capture_re: re.Pattern[str],
-    bare_capture_re: re.Pattern[str],
-    group_name: str,
-    is_valid_bare_id: Callable[[str], bool],
-) -> str:
-    if not request_text:
-        return ""
-
-    explicit_match = explicit_capture_re.search(request_text)
-    if explicit_match:
-        return str(explicit_match.group(group_name) or "").strip()
-
-    bare_match = bare_capture_re.search(request_text)
-    if not bare_match:
-        return ""
-
-    candidate = str(bare_match.group(group_name) or "").strip()
-    if is_valid_bare_id(candidate):
-        return candidate
-    return ""
 
 
 def _normalize_string_list(value: object) -> list[str]:
@@ -116,7 +46,6 @@ class RequestHookService:
     _WORKBOOK_TOOL_NAMES = frozenset(
         {"create_workbook", "write_rows", "export_workbook"}
     )
-    _DOCUMENT_ID_TOKEN_RE = _build_identifier_token_pattern("document_id")
     _DOCUMENT_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _DOCUMENT_ID_DOC_PREFIX_RE = re.compile(
         r"doc-[A-Za-z0-9_-]+",
@@ -137,16 +66,6 @@ class RequestHookService:
         r"(business_report|project_review|executive_brief|accent_color|document_style)",
         flags=re.IGNORECASE,
     )
-    _DOCUMENT_ID_FOLLOW_UP_RE = _compile_identifier_token_regex("document_id")
-    _DOCUMENT_ID_EXPLICIT_CAPTURE_RE = _compile_identifier_explicit_capture_regex(
-        "document_id",
-        "document_id",
-    )
-    _DOCUMENT_ID_BARE_CAPTURE_RE = _compile_identifier_bare_capture_regex(
-        "document_id",
-        "document_id",
-    )
-    _WORKBOOK_ID_TOKEN_RE = _build_identifier_token_pattern("workbook_id")
     _WORKBOOK_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _WORKBOOK_ID_PREFIX_RE = re.compile(
         r"(?:wb|workbook)-[A-Za-z0-9_-]+",
@@ -176,32 +95,15 @@ class RequestHookService:
         r"(create_workbook|write_rows|export_workbook|start_row|多\s*sheet)",
         flags=re.IGNORECASE,
     )
-    _WORKBOOK_ID_FOLLOW_UP_RE = _compile_identifier_token_regex("workbook_id")
-    _WORKBOOK_ID_EXPLICIT_CAPTURE_RE = _compile_identifier_explicit_capture_regex(
-        "workbook_id",
-        "workbook_id",
-    )
-    _WORKBOOK_ID_BARE_CAPTURE_RE = _compile_identifier_bare_capture_regex(
-        "workbook_id",
-        "workbook_id",
-    )
-    _DOCUMENT_IDENTIFIER = _IdentifierDescriptor(
+    _DOCUMENT_IDENTIFIER = build_identifier_descriptor(
         token_name="document_id",
-        group_name="document_id",
-        follow_up_re=_DOCUMENT_ID_FOLLOW_UP_RE,
-        explicit_capture_re=_DOCUMENT_ID_EXPLICIT_CAPTURE_RE,
-        bare_capture_re=_DOCUMENT_ID_BARE_CAPTURE_RE,
         bare_validator_name="_looks_like_bare_document_id",
     )
-    _WORKBOOK_IDENTIFIER = _IdentifierDescriptor(
+    _WORKBOOK_IDENTIFIER = build_identifier_descriptor(
         token_name="workbook_id",
-        group_name="workbook_id",
-        follow_up_re=_WORKBOOK_ID_FOLLOW_UP_RE,
-        explicit_capture_re=_WORKBOOK_ID_EXPLICIT_CAPTURE_RE,
-        bare_capture_re=_WORKBOOK_ID_BARE_CAPTURE_RE,
         bare_validator_name="_looks_like_bare_workbook_id",
     )
-    _DOCUMENT_FOLLOW_UP_STRATEGY = _FollowUpNoticeStrategy(
+    _DOCUMENT_FOLLOW_UP_STRATEGY = FollowUpNoticeStrategy(
         identifier=_DOCUMENT_IDENTIFIER,
         lookup_attr_name="_lookup_document_summary",
         section_builder_name="build_document_follow_up_section",
@@ -209,7 +111,7 @@ class RequestHookService:
         payload_builder_name="_build_document_follow_up_payload",
         log_label="文档",
     )
-    _WORKBOOK_FOLLOW_UP_STRATEGY = _FollowUpNoticeStrategy(
+    _WORKBOOK_FOLLOW_UP_STRATEGY = FollowUpNoticeStrategy(
         identifier=_WORKBOOK_IDENTIFIER,
         lookup_attr_name="_lookup_workbook_summary",
         section_builder_name="build_workbook_follow_up_section",
@@ -375,7 +277,7 @@ class RequestHookService:
         *,
         request_text: str,
         exposed_tool_names: set[str],
-        strategy: _FollowUpNoticeStrategy,
+        strategy: FollowUpNoticeStrategy,
         availability_checker: Callable[..., bool] | None,
     ) -> bool:
         if availability_checker is not None and not availability_checker(
@@ -484,7 +386,7 @@ class RequestHookService:
             return False
         if cls._WORKBOOK_TOOL_CALL_HINT_RE.search(request_text):
             return True
-        if cls._WORKBOOK_ID_FOLLOW_UP_RE.search(request_text):
+        if cls._WORKBOOK_IDENTIFIER.follow_up_re.search(request_text):
             return True
         if not cls._WORKBOOK_SUBJECT_HINT_RE.search(request_text):
             return False
@@ -523,7 +425,7 @@ class RequestHookService:
         cls,
         *,
         request_text: str,
-        descriptor: _IdentifierDescriptor,
+        descriptor: IdentifierDescriptor,
     ) -> bool:
         if not request_text:
             return False
@@ -548,9 +450,9 @@ class RequestHookService:
         cls,
         *,
         request_text: str,
-        descriptor: _IdentifierDescriptor,
+        descriptor: IdentifierDescriptor,
     ) -> str:
-        return _extract_identifier_from_text(
+        return extract_identifier_from_text(
             request_text=request_text,
             explicit_capture_re=descriptor.explicit_capture_re,
             bare_capture_re=descriptor.bare_capture_re,
@@ -600,7 +502,7 @@ class RequestHookService:
         self,
         *,
         request_text: str,
-        strategy: _FollowUpNoticeStrategy,
+        strategy: FollowUpNoticeStrategy,
     ) -> PromptSection | None:
         identifier_value = self._extract_identifier(
             request_text=request_text,
