@@ -35,6 +35,7 @@ from astrbot_plugin_office_assistant.domain.document.session_store import (
 )
 from astrbot_plugin_office_assistant.domain.workbook.contracts import (
     CreateWorkbookRequest,
+    MAX_WORKBOOK_ROW_INDEX,
 )
 from astrbot_plugin_office_assistant.domain.workbook.session_store import (
     WorkbookSessionStore,
@@ -204,6 +205,29 @@ async def test_write_rows_tool_preserves_invalid_zero_start_row(
     assert result["success"] is False
     assert "only fix invalid fields" in result["message"]
     assert "greater than or equal to 1" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_rejects_oversized_start_row(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+            start_row=MAX_WORKBOOK_ROW_INDEX + 1,
+        )
+    )
+
+    assert result["success"] is False
+    assert "only fix invalid fields" in result["message"]
+    assert "less than or equal to" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -2734,6 +2758,29 @@ async def test_mcp_write_rows_returns_structured_failure_for_validation_errors()
 
     assert payload["success"] is False
     assert "only fix invalid fields" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_write_rows_rejects_oversized_row_window():
+    server = create_server()
+    _, created_payload = await server.call_tool(
+        "create_workbook",
+        {"filename": "validation.xlsx"},
+    )
+
+    _, payload = await server.call_tool(
+        "write_rows",
+        {
+            "workbook_id": created_payload["workbook"]["workbook_id"],
+            "sheet": "Data",
+            "rows": [["value"], ["overflow"]],
+            "start_row": MAX_WORKBOOK_ROW_INDEX,
+        },
+    )
+
+    assert payload["success"] is False
+    assert "only fix invalid fields" in payload["message"]
+    assert "final written row must not exceed" in payload["message"]
 
 
 @pytest.mark.asyncio
