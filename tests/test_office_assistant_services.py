@@ -2616,6 +2616,44 @@ async def test_request_hook_service_skips_workbook_follow_up_when_workbook_tools
     assert context.notices == []
 
 
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_workbook_follow_up_for_partial_workbook_toolset():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=lambda workbook_id: {
+            "workbook_id": workbook_id,
+            "status": "draft",
+            "sheet_names": ["Sheet1"],
+            "sheet_count": 1,
+            "latest_written_sheets": ["Sheet1"],
+            "next_allowed_actions": ["write_rows"],
+        },
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='继续补充 workbook_id="wb-11" 的数据',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name="export_workbook",
+            notices=[],
+        )
+    )
+
+    assert context.section_names == []
+    assert context.notices == []
+
+
 def test_prompt_context_service_orders_notice_sections_by_stability():
     service = PromptContextService(allow_external_input_files=False)
 

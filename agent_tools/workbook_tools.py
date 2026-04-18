@@ -75,8 +75,13 @@ class CreateWorkbookTool(WorkbookToolBase):
                 filename=str(kwargs.get("filename") or "workbook.xlsx"),
             )
             workbook = self.store.create_workbook(request)
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
+        except (ValidationError, ValueError, KeyError, OSError) as exc:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=f"create_workbook failed: {exc}",
+                )
+            )
         return _dump_result(
             ToolResult(
                 success=True,
@@ -144,7 +149,7 @@ class WriteRowsTool(WorkbookToolBase):
                     ),
                 )
             )
-        except Exception as exc:
+        except (ValueError, KeyError, OSError) as exc:
             return _dump_result(
                 ToolResult(
                     success=False,
@@ -199,8 +204,13 @@ class ExportWorkbookTool(WorkbookToolBase):
                 self.store.export_workbook,
                 request,
             )
-        except Exception as exc:
-            return _dump_result(ToolResult(success=False, message=str(exc)))
+        except (ValidationError, ValueError, KeyError, OSError) as exc:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=f"export_workbook failed: {exc}",
+                )
+            )
 
         callback_message = ""
         delivery_handled = False

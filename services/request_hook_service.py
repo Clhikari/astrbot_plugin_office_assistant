@@ -343,10 +343,15 @@ class RequestHookService:
         request_text: str,
         exposed_tool_names: set[str],
     ) -> bool:
+        workbook_availability_checker = (
+            self._has_workbook_tools_available
+            if context.explicit_tool_name is None
+            else self._has_full_workbook_toolset_available
+        )
         follow_up_rules = (
             (
                 self._WORKBOOK_FOLLOW_UP_STRATEGY,
-                self._has_workbook_tools_available,
+                workbook_availability_checker,
             ),
             (
                 self._DOCUMENT_FOLLOW_UP_STRATEGY,

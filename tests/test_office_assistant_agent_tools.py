@@ -19,7 +19,11 @@ from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
     build_workbook_toolset,
 )
-from astrbot_plugin_office_assistant.agent_tools.workbook_tools import WriteRowsTool
+from astrbot_plugin_office_assistant.agent_tools.workbook_tools import (
+    CreateWorkbookTool,
+    ExportWorkbookTool,
+    WriteRowsTool,
+)
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
@@ -182,6 +186,34 @@ async def test_write_rows_tool_returns_targeted_retry_message_for_validation_err
 
 
 @pytest.mark.asyncio
+async def test_create_workbook_tool_wraps_expected_store_errors(
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    tool = CreateWorkbookTool(store=store)
+    monkeypatch.setattr(store, "create_workbook", MagicMock(side_effect=OSError("disk full")))
+
+    result = json.loads(await tool.call(None, filename="rows.xlsx"))
+
+    assert result["success"] is False
+    assert result["message"] == "create_workbook failed: disk full"
+
+
+@pytest.mark.asyncio
+async def test_create_workbook_tool_reraises_unexpected_store_errors(
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    tool = CreateWorkbookTool(store=store)
+    monkeypatch.setattr(store, "create_workbook", MagicMock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await tool.call(None, filename="rows.xlsx")
+
+
+@pytest.mark.asyncio
 async def test_write_rows_tool_preserves_invalid_zero_start_row(
     workspace_root: Path,
 ):
@@ -248,6 +280,63 @@ async def test_write_rows_tool_returns_neutral_message_for_state_errors(
     assert result["success"] is False
     assert result["message"].startswith("write_rows failed:")
     assert "only fix invalid fields" not in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_reraises_unexpected_store_errors(
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    tool = WriteRowsTool(store=store)
+    monkeypatch.setattr(store, "write_rows", MagicMock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+        )
+
+
+@pytest.mark.asyncio
+async def test_export_workbook_tool_wraps_expected_validation_errors(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    tool = ExportWorkbookTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            output_name="C:/temp/final.xlsx",
+        )
+    )
+
+    assert result["success"] is False
+    assert result["message"].startswith("export_workbook failed:")
+    assert "must not be an absolute path" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_export_workbook_tool_reraises_unexpected_store_errors(
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    tool = ExportWorkbookTool(store=store)
+    monkeypatch.setattr(store, "export_workbook", MagicMock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+        )
 
 
 @pytest.mark.asyncio
