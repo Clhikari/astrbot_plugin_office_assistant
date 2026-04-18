@@ -184,6 +184,29 @@ async def test_write_rows_tool_returns_targeted_retry_message_for_validation_err
 
 
 @pytest.mark.asyncio
+async def test_write_rows_tool_preserves_invalid_zero_start_row(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+            start_row=0,
+        )
+    )
+
+    assert result["success"] is False
+    assert "only fix invalid fields" in result["message"]
+    assert "greater than or equal to 1" in result["message"]
+
+
+@pytest.mark.asyncio
 async def test_write_rows_tool_returns_neutral_message_for_state_errors(
     workspace_root: Path,
 ):

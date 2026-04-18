@@ -126,11 +126,12 @@ class WriteRowsTool(WorkbookToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs: Any
     ) -> ToolExecResult:
         try:
+            raw_start_row = kwargs.get("start_row")
             request = WriteRowsRequest(
                 workbook_id=str(kwargs.get("workbook_id") or ""),
                 sheet=str(kwargs.get("sheet") or ""),
                 rows=list(kwargs.get("rows") or []),
-                start_row=int(kwargs.get("start_row") or 1),
+                start_row=1 if raw_start_row is None else raw_start_row,
             )
             workbook = self.store.write_rows(request)
         except ValidationError as exc:

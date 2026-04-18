@@ -159,11 +159,19 @@ def test_write_rows_rejects_formula_cells():
         )
 
 
-def test_export_request_rejects_absolute_output_name():
+@pytest.mark.parametrize(
+    "output_name",
+    [
+        "C:/temp/final.xlsx",
+        "/tmp/final.xlsx",
+        "~/final.xlsx",
+    ],
+)
+def test_export_request_rejects_absolute_output_name(output_name: str):
     with pytest.raises(ValidationError, match="must not be an absolute path"):
         ExportWorkbookRequest(
             workbook_id="wb-1",
-            output_name="C:/temp/final.xlsx",
+            output_name=output_name,
         )
 
 
