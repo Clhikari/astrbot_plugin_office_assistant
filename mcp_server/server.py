@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
+from astrbot.api import logger
 from mcp.server.fastmcp import FastMCP
 
 from ..domain.document.hooks import AfterExportHook, BeforeExportHook
@@ -15,10 +17,19 @@ from ..domain.document.session_store import (
 )
 from .tools import register_document_tools, register_workbook_tools
 
-try:
-    from ..domain.workbook.session_store import WorkbookSessionStore
-except Exception:  # pragma: no cover - workbook domain may be provided by another worker.
-    WorkbookSessionStore = None  # type: ignore[assignment]
+
+def _load_workbook_session_store():
+    try:
+        workbook_module = importlib.import_module(
+            "astrbot_plugin_office_assistant.domain.workbook.session_store"
+        )
+    except (ImportError, ModuleNotFoundError) as exc:  # pragma: no cover
+        logger.warning(
+            "[office-assistant] workbook support disabled during MCP server startup: %s",
+            exc,
+        )
+        return None
+    return workbook_module.WorkbookSessionStore
 
 
 def create_server(
@@ -29,7 +40,8 @@ def create_server(
     render_backend_config: DocumentRenderBackendConfig | None = None,
     default_document_style: dict[str, object] | None = None,
 ) -> FastMCP:
-    workbook_supported = WorkbookSessionStore is not None
+    workbook_session_store_cls = _load_workbook_session_store()
+    workbook_supported = workbook_session_store_cls is not None
     instructions = (
         "Stateful Office builder for structured Word generation. "
         "Use create_document/add_blocks/finalize_document/export_document for Word."
@@ -52,7 +64,7 @@ def create_server(
         after_export_hooks=after_export_hooks,
     )
     if workbook_supported:
-        workbook_store = WorkbookSessionStore(workspace_dir=workspace_dir)
+        workbook_store = workbook_session_store_cls(workspace_dir=workspace_dir)
         register_workbook_tools(server, workbook_store)
     return server
 

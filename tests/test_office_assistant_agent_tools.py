@@ -2825,7 +2825,7 @@ async def test_mcp_write_rows_rejects_oversized_row_window():
 async def test_mcp_registers_only_document_tools_when_workbook_store_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(mcp_server_module, "WorkbookSessionStore", None)
+    monkeypatch.setattr(mcp_server_module, "_load_workbook_session_store", lambda: None)
 
     server = create_server()
     tools = await server.list_tools()
@@ -2840,6 +2840,44 @@ async def test_mcp_registers_only_document_tools_when_workbook_store_is_unavaila
     assert "create_workbook" not in server.instructions
 
 
+def test_mcp_workbook_loader_logs_import_error_and_disables_support(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def _raise_import_error(_module_name: str):
+        raise ModuleNotFoundError("missing workbook deps")
+
+    monkeypatch.setattr(
+        mcp_server_module.importlib,
+        "import_module",
+        _raise_import_error,
+    )
+
+    with patch.object(mcp_server_module.logger, "warning") as warning_mock:
+        result = mcp_server_module._load_workbook_session_store()
+
+    assert result is None
+    warning_mock.assert_called_once()
+
+
+def test_mcp_workbook_loader_reraises_non_import_errors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def _raise_runtime_error(_module_name: str):
+        raise NameError("boom")
+
+    monkeypatch.setattr(
+        mcp_server_module.importlib,
+        "import_module",
+        _raise_runtime_error,
+    )
+
+    with patch.object(mcp_server_module.logger, "warning") as warning_mock:
+        with pytest.raises(NameError, match="boom"):
+            mcp_server_module._load_workbook_session_store()
+
+    warning_mock.assert_not_called()
+
+
 def test_mcp_create_server_constructs_workbook_store_once(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2851,7 +2889,9 @@ def test_mcp_create_server_constructs_workbook_store_once(
 
     register_mock = MagicMock()
     monkeypatch.setattr(
-        mcp_server_module, "WorkbookSessionStore", StubWorkbookSessionStore
+        mcp_server_module,
+        "_load_workbook_session_store",
+        lambda: StubWorkbookSessionStore,
     )
     monkeypatch.setattr(mcp_server_module, "register_workbook_tools", register_mock)
 

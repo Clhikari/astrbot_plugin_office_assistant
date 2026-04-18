@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from mcp.server.fastmcp import FastMCP
 
 from ...domain.document.hooks import AfterExportHook, BeforeExportHook
@@ -5,11 +9,8 @@ from ...domain.document.session_store import DocumentSessionStore
 from ...tools.mcp_adapter import register_document_tools_from_registry
 from ...tools.mcp_adapter import register_workbook_tools_from_registry
 
-
-try:
+if TYPE_CHECKING:
     from ...domain.workbook.session_store import WorkbookSessionStore
-except Exception:  # pragma: no cover - workbook domain may be provided by another worker.
-    WorkbookSessionStore = object  # type: ignore[assignment]
 
 
 def register_document_tools(
