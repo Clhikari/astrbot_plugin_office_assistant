@@ -14,6 +14,7 @@ from .contracts import (
     CreateWorkbookRequest,
     ExportWorkbookRequest,
     WriteRowsRequest,
+    _build_workbook_summary_payload,
     _normalize_xlsx_filename,
 )
 from .exporter import export_workbook_to_xlsx
@@ -223,20 +224,25 @@ class WorkbookSessionStore:
             return self._build_prompt_summary_locked(workbook)
 
     def _build_prompt_summary_locked(self, workbook: WorkbookModel) -> dict[str, object]:
+        summary_payload = _build_workbook_summary_payload(workbook)
         next_allowed_actions: list[str]
         if workbook.status == WorkbookStatus.DRAFT:
             next_allowed_actions = ["write_rows", "export_workbook"]
         else:
             next_allowed_actions = []
-        return {
-            "workbook_id": workbook.workbook_id,
-            "title": workbook.metadata.title,
-            "status": workbook.status.value,
-            "sheet_names": [worksheet.name for worksheet in workbook.worksheets],
-            "sheet_count": len(workbook.worksheets),
-            "latest_written_sheets": list(workbook.latest_written_sheets),
-            "next_allowed_actions": next_allowed_actions,
+        prompt_summary = {
+            key: summary_payload[key]
+            for key in (
+                "workbook_id",
+                "title",
+                "status",
+                "sheet_names",
+                "sheet_count",
+                "latest_written_sheets",
+            )
         }
+        prompt_summary["next_allowed_actions"] = next_allowed_actions
+        return prompt_summary
 
 
 __all__ = [

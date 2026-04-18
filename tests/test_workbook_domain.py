@@ -519,6 +519,41 @@ def test_build_workbook_summary_includes_sheet_names(workspace_root: Path):
     assert summary.latest_written_sheets == ["One", "Two"]
 
 
+def test_prompt_summary_reuses_shared_workbook_summary_fields(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(
+        CreateWorkbookRequest(
+            session_id="pytest-session",
+            title="季度汇总",
+            filename="book.xlsx",
+        )
+    )
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="总表",
+            rows=[["列1"], ["值1"]],
+        )
+    )
+
+    workbook_summary = build_workbook_summary(
+        store.require_workbook(workbook.workbook_id)
+    ).model_dump()
+    prompt_summary = store.build_prompt_summary(workbook.workbook_id)
+
+    shared_keys = (
+        "workbook_id",
+        "title",
+        "status",
+        "sheet_names",
+        "sheet_count",
+        "latest_written_sheets",
+    )
+    assert {key: prompt_summary[key] for key in shared_keys} == {
+        key: workbook_summary[key] for key in shared_keys
+    }
+
+
 def test_case_insensitive_sheet_lookup_preserves_exported_sheet_name(workspace_root: Path):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="book.xlsx"))
