@@ -2345,7 +2345,13 @@ async def test_request_hook_service_injects_workbook_core_and_detail_notices():
             request=ProviderRequest(
                 prompt="请用 create_workbook 和 write_rows 生成 xlsx 报表，多 sheet，start_row=2",
                 system_prompt="base",
-                func_tool=ToolSet([_tool("create_workbook")]),
+                func_tool=ToolSet(
+                    [
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                    ]
+                ),
             ),
             should_expose=True,
             can_process_upload=True,
@@ -2410,7 +2416,13 @@ async def test_request_hook_service_falls_back_to_workbook_guide_when_workbook_l
             request=ProviderRequest(
                 prompt='请返回 workbook_id 并导出 workbook_id="wb-11" 的 xlsx',
                 system_prompt="base",
-                func_tool=ToolSet([_tool("export_workbook")]),
+                func_tool=ToolSet(
+                    [
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                    ]
+                ),
             ),
             should_expose=True,
             can_process_upload=True,
@@ -2422,6 +2434,37 @@ async def test_request_hook_service_falls_back_to_workbook_guide_when_workbook_l
     assert context.section_names == [SECTION_STATIC_WORKBOOK_TOOLS]
     assert "create_workbook" in context.notices[0]
     assert "export_workbook" in context.notices[0]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_workbook_guide_for_partial_workbook_toolset():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+        lookup_workbook_summary=None,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt='请返回 workbook_id 并导出 workbook_id="wb-11" 的 xlsx',
+                system_prompt="base",
+                func_tool=ToolSet([_tool("export_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == []
+    assert context.notices == []
 
 
 @pytest.mark.asyncio

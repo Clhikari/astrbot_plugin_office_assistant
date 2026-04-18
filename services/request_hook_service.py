@@ -160,10 +160,15 @@ class RequestHookService:
 
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
         exposed_tool_names = self._get_exposed_tool_names(context.request.func_tool)
-        workbook_tools_available = self._has_workbook_tools_available(
+        workbook_follow_up_available = self._has_workbook_tools_available(
             exposed_tool_names=exposed_tool_names
         )
-        if workbook_tools_available and self._is_workbook_follow_up(
+        workbook_workflow_guide_available = (
+            self._has_full_workbook_toolset_available(
+                exposed_tool_names=exposed_tool_names
+            )
+        )
+        if workbook_follow_up_available and self._is_workbook_follow_up(
             request_text=request_text
         ):
             section = self._build_workbook_follow_up_section(request_text=request_text)
@@ -210,7 +215,7 @@ class RequestHookService:
                 self.prompt_context_service.build_document_tool_detail_section(),
             )
         if (
-            workbook_tools_available
+            workbook_workflow_guide_available
             and should_inject_workbook_core
             and self._consume_session_notice_once(
             context.event, self._WORKBOOK_CORE_NOTICE_KEY
@@ -221,7 +226,7 @@ class RequestHookService:
                 self.prompt_context_service.build_workbook_tool_guide_section(),
             )
         if (
-            workbook_tools_available
+            workbook_workflow_guide_available
             and should_inject_workbook_detail
             and self._consume_session_notice_once(
             context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
@@ -253,6 +258,14 @@ class RequestHookService:
     @classmethod
     def _has_workbook_tools_available(cls, *, exposed_tool_names: set[str]) -> bool:
         return bool(cls._WORKBOOK_TOOL_NAMES.intersection(exposed_tool_names))
+
+    @classmethod
+    def _has_full_workbook_toolset_available(
+        cls,
+        *,
+        exposed_tool_names: set[str],
+    ) -> bool:
+        return cls._WORKBOOK_TOOL_NAMES.issubset(exposed_tool_names)
 
     @classmethod
     def _should_inject_document_tool_guide(cls, *, request_text: str) -> bool:
