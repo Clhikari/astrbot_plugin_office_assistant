@@ -2438,6 +2438,78 @@ async def test_request_hook_service_skips_workbook_guide_when_workbook_tools_are
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_skips_workbook_guide_for_reading_xlsx_requests():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取这个 xlsx 文件并告诉我内容",
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == []
+    assert context.notices == []
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_workbook_guide_for_xlsx_to_pdf_conversion_requests():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请把这个 xlsx 导出成 PDF",
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == []
+    assert context.notices == []
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_falls_back_to_workbook_guide_when_workbook_lookup_disabled():
     service = RequestHookService(
         auto_block_execution_tools=True,
