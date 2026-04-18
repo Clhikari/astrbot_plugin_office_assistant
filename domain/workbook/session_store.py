@@ -58,6 +58,7 @@ class WorkbookSessionStore:
         expired_ids = [
             workbook_id
             for workbook_id, workbook in self._workbooks.items()
+            if workbook.status != WorkbookStatus.EXPORTING
             if workbook.metadata.updated_at + self._ttl < now
         ]
         for workbook_id in expired_ids:
@@ -72,7 +73,11 @@ class WorkbookSessionStore:
             return
 
         oldest_workbooks = sorted(
-            self._workbooks.items(),
+            (
+                item
+                for item in self._workbooks.items()
+                if item[1].status != WorkbookStatus.EXPORTING
+            ),
             key=lambda item: item[1].metadata.updated_at,
         )
         for workbook_id, _ in oldest_workbooks[:excess]:
@@ -144,38 +149,59 @@ class WorkbookSessionStore:
             workbook.remember_written_sheet(worksheet.name)
             return workbook
 
+    def _prepare_export_path_locked(
+        self,
+        request: ExportWorkbookRequest,
+    ) -> tuple[WorkbookModel, Path]:
+        workbook = self.require_workbook(request.workbook_id)
+        if workbook.status != WorkbookStatus.DRAFT:
+            raise ValueError(
+                "export_workbook is only allowed while the workbook status is draft"
+            )
+        preferred_name = request.output_name or workbook.metadata.preferred_filename
+        if "/" in preferred_name or "\\" in preferred_name:
+            raise ValueError("output_path cannot escape the workbook workspace")
+        file_name = _normalize_xlsx_filename(preferred_name)
+
+        workspace_dir = self.workspace_dir.resolve()
+        output_dir = workspace_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = (output_dir / file_name).resolve()
+        if not _is_within_workspace(output_path, workspace_dir):
+            raise ValueError("output_path cannot escape the workbook workspace")
+        workbook.output_path = str(output_path)
+        workbook.touch()
+        return workbook, output_path
+
+    def _reset_failed_export_locked(self, workbook_id: str) -> None:
+        workbook = self.require_workbook(workbook_id)
+        workbook.status = WorkbookStatus.DRAFT
+        workbook.output_path = ""
+        workbook.touch()
+
     def prepare_export_path(
         self,
         request: ExportWorkbookRequest,
     ) -> tuple[WorkbookModel, Path]:
         with self._lock:
-            workbook = self.require_workbook(request.workbook_id)
-            if workbook.status != WorkbookStatus.DRAFT:
-                raise ValueError(
-                    "export_workbook is only allowed while the workbook status is draft"
-                )
-            preferred_name = request.output_name or workbook.metadata.preferred_filename
-            if "/" in preferred_name or "\\" in preferred_name:
-                raise ValueError("output_path cannot escape the workbook workspace")
-            file_name = _normalize_xlsx_filename(preferred_name)
-
-            workspace_dir = self.workspace_dir.resolve()
-            output_dir = workspace_dir
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = (output_dir / file_name).resolve()
-            if not _is_within_workspace(output_path, workspace_dir):
-                raise ValueError("output_path cannot escape the workbook workspace")
-            workbook.output_path = str(output_path)
-            workbook.touch()
-            return workbook, output_path
+            return self._prepare_export_path_locked(request)
 
     def export_workbook(
         self,
         request: ExportWorkbookRequest,
     ) -> tuple[WorkbookModel, Path]:
         with self._lock:
-            workbook, output_path = self.prepare_export_path(request)
+            workbook, output_path = self._prepare_export_path_locked(request)
+            workbook.status = WorkbookStatus.EXPORTING
+            workbook.touch()
+        try:
             export_workbook_to_xlsx(workbook, output_path)
+        except Exception:
+            with self._lock:
+                self._reset_failed_export_locked(request.workbook_id)
+            raise
+        with self._lock:
+            workbook = self.require_workbook(request.workbook_id)
             workbook.status = WorkbookStatus.EXPORTED
             workbook.touch()
             self._compact_workbook_after_export_locked(workbook)

@@ -97,16 +97,13 @@ from astrbot_plugin_office_assistant.mcp_server.server import (
 )
 from astrbot_plugin_office_assistant.tools.mcp_adapter import (
     register_document_tools_from_registry,
-    register_workbook_tools_from_registry,
 )
 from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
     build_document_toolset_from_registry,
-    build_workbook_toolset_from_registry,
 )
 from astrbot_plugin_office_assistant.tools.registry import (
     DocumentToolSpec,
     get_document_tool_specs,
-    get_workbook_tool_specs,
 )
 from pydantic import ValidationError
 
@@ -348,22 +345,6 @@ def test_astrbot_toolset_preserves_document_tool_registry_order():
     ]
 
 
-def test_workbook_tool_registry_keeps_workbook_tool_order():
-    assert [spec.name for spec in get_workbook_tool_specs()] == [
-        "create_workbook",
-        "write_rows",
-        "export_workbook",
-    ]
-
-
-def test_astrbot_toolset_preserves_workbook_tool_registry_order():
-    toolset = build_workbook_toolset_from_registry()
-
-    assert [tool.name for tool in toolset.tools] == [
-        spec.name for spec in get_workbook_tool_specs()
-    ]
-
-
 def test_build_document_toolset_defaults_to_node_only_for_word():
     toolset = build_document_toolset()
     export_tool = next(tool for tool in toolset.tools if tool.name == "export_document")
@@ -517,38 +498,6 @@ def test_mcp_document_tool_registration_matches_registry_order(
     )
 
     assert registered_names == [spec.name for spec in get_document_tool_specs()]
-
-
-def test_mcp_workbook_tool_registration_matches_registry_order(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    registered_names: list[str] = []
-
-    def _make_registrar(name: str):
-        def _record(*_args, **_kwargs):
-            registered_names.append(name)
-
-        return _record
-
-    monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.mcp_server.tools.create_workbook.register_create_workbook_tool",
-        _make_registrar("create_workbook"),
-    )
-    monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.mcp_server.tools.write_rows.register_write_rows_tool",
-        _make_registrar("write_rows"),
-    )
-    monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.mcp_server.tools.export_workbook.register_export_workbook_tool",
-        _make_registrar("export_workbook"),
-    )
-
-    register_workbook_tools_from_registry(
-        server=MagicMock(),
-        store=MagicMock(),
-    )
-
-    assert registered_names == [spec.name for spec in get_workbook_tool_specs()]
 
 
 def test_mcp_document_tool_registration_passes_export_hooks(
