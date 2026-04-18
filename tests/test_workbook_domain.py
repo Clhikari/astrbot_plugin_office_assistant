@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Thread
 
@@ -41,6 +42,29 @@ def test_create_workbook_returns_draft_summary(workspace_root: Path):
         "latest_written_sheets": [],
         "next_allowed_actions": ["write_rows", "export_workbook"],
     }
+
+
+def test_workbook_session_store_evicts_oldest_workbooks_when_capped():
+    store = WorkbookSessionStore(max_workbooks=2)
+    first = store.create_workbook(CreateWorkbookRequest(title="first"))
+    second = store.create_workbook(CreateWorkbookRequest(title="second"))
+    third = store.create_workbook(CreateWorkbookRequest(title="third"))
+
+    assert store.get_workbook(first.workbook_id) is None
+    assert store.get_workbook(second.workbook_id) is not None
+    assert store.get_workbook(third.workbook_id) is not None
+
+
+def test_workbook_session_store_evicts_expired_workbooks_by_ttl():
+    store = WorkbookSessionStore(ttl=timedelta(seconds=1))
+    expired = store.create_workbook(CreateWorkbookRequest(title="expired"))
+    fresh = store.create_workbook(CreateWorkbookRequest(title="fresh"))
+
+    expired.metadata.updated_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    fresh.metadata.updated_at = datetime.now(timezone.utc)
+
+    assert store.get_workbook(expired.workbook_id) is None
+    assert store.get_workbook(fresh.workbook_id) is not None
 
 
 def test_write_rows_creates_sheet_and_overwrites_range(workspace_root: Path):
@@ -257,6 +281,29 @@ def test_exported_workbook_disallows_more_writes_or_reexport(workspace_root: Pat
     summary = store.build_prompt_summary(workbook.workbook_id)
     assert summary["status"] == "exported"
     assert summary["next_allowed_actions"] == []
+
+
+def test_exported_workbook_compacts_rows_but_keeps_summary(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="compact.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1"], ["v1"]],
+        )
+    )
+
+    store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
+
+    exported_workbook = store.require_workbook(workbook.workbook_id)
+    assert exported_workbook.worksheets[0].name == "Data"
+    assert exported_workbook.worksheets[0].rows == []
+
+    summary = store.build_prompt_summary(workbook.workbook_id)
+    assert summary["status"] == "exported"
+    assert summary["sheet_names"] == ["Data"]
+    assert summary["sheet_count"] == 1
 
 
 def test_export_workbook_blocks_concurrent_writes_until_export_finishes(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 
@@ -34,12 +35,57 @@ def _is_within_workspace(path: Path, workspace_dir: Path) -> bool:
 
 
 class WorkbookSessionStore:
-    def __init__(self, workspace_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        workspace_dir: Path | None = None,
+        *,
+        max_workbooks: int | None = 256,
+        ttl: timedelta | None = None,
+    ) -> None:
         self._lock = RLock()
         self._workbooks: dict[str, WorkbookModel] = {}
         self._next_workbook_id = 1
         self.workspace_dir = workspace_dir or _default_workspace_dir()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self._max_workbooks = max_workbooks
+        self._ttl = ttl
+
+    def _evict_expired_locked(self) -> None:
+        if self._ttl is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        expired_ids = [
+            workbook_id
+            for workbook_id, workbook in self._workbooks.items()
+            if workbook.metadata.updated_at + self._ttl < now
+        ]
+        for workbook_id in expired_ids:
+            self._workbooks.pop(workbook_id, None)
+
+    def _evict_excess_locked(self) -> None:
+        if self._max_workbooks is None:
+            return
+
+        excess = len(self._workbooks) - self._max_workbooks
+        if excess <= 0:
+            return
+
+        oldest_workbooks = sorted(
+            self._workbooks.items(),
+            key=lambda item: item[1].metadata.updated_at,
+        )
+        for workbook_id, _ in oldest_workbooks[:excess]:
+            self._workbooks.pop(workbook_id, None)
+
+    def _prune_locked(self) -> None:
+        self._evict_expired_locked()
+        self._evict_excess_locked()
+
+    @staticmethod
+    def _compact_workbook_after_export_locked(workbook: WorkbookModel) -> None:
+        for worksheet in workbook.worksheets:
+            worksheet.rows = []
 
     def _allocate_workbook_id_locked(self) -> str:
         workbook_id = f"wb-{self._next_workbook_id}"
@@ -60,10 +106,12 @@ class WorkbookSessionStore:
                 ),
             )
             self._workbooks[workbook_id] = workbook
+            self._prune_locked()
             return workbook
 
     def get_workbook(self, workbook_id: str) -> WorkbookModel | None:
         with self._lock:
+            self._evict_expired_locked()
             return self._workbooks.get(workbook_id)
 
     def require_workbook(self, workbook_id: str) -> WorkbookModel:
@@ -130,6 +178,8 @@ class WorkbookSessionStore:
             export_workbook_to_xlsx(workbook, output_path)
             workbook.status = WorkbookStatus.EXPORTED
             workbook.touch()
+            self._compact_workbook_after_export_locked(workbook)
+            self._prune_locked()
             return workbook, output_path
 
     def complete_export(self, workbook_id: str) -> WorkbookModel:
@@ -137,6 +187,8 @@ class WorkbookSessionStore:
             workbook = self.require_workbook(workbook_id)
             workbook.status = WorkbookStatus.EXPORTED
             workbook.touch()
+            self._compact_workbook_after_export_locked(workbook)
+            self._prune_locked()
             return workbook
 
     def build_prompt_summary(self, workbook_id: str) -> dict[str, object]:

@@ -25,11 +25,76 @@ from .prompt_context_service import PromptContextService, PromptSection
 from .upload_types import UploadInfo
 
 
+def _build_identifier_token_pattern(token_name: str) -> str:
+    return rf"(?<![A-Za-z0-9_]){re.escape(token_name)}(?![A-Za-z0-9_])"
+
+
+def _compile_identifier_token_regex(token_name: str) -> re.Pattern[str]:
+    return re.compile(_build_identifier_token_pattern(token_name), flags=re.IGNORECASE)
+
+
+def _compile_identifier_explicit_capture_regex(
+    token_name: str,
+    group_name: str,
+) -> re.Pattern[str]:
+    return re.compile(
+        _build_identifier_token_pattern(token_name)
+        + rf"(?:\s*[:=：]\s*|\s*(?:为|是)\s*|\s+is\s+)[`\"']?(?P<{group_name}>[A-Za-z0-9_-]+)[`\"']?",
+        flags=re.IGNORECASE,
+    )
+
+
+def _compile_identifier_bare_capture_regex(
+    token_name: str,
+    group_name: str,
+) -> re.Pattern[str]:
+    return re.compile(
+        _build_identifier_token_pattern(token_name)
+        + rf"\s+[`\"']?(?P<{group_name}>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
+        flags=re.IGNORECASE,
+    )
+
+
+def _extract_identifier_from_text(
+    *,
+    request_text: str,
+    explicit_capture_re: re.Pattern[str],
+    bare_capture_re: re.Pattern[str],
+    group_name: str,
+    is_valid_bare_id: Callable[[str], bool],
+) -> str:
+    if not request_text:
+        return ""
+
+    explicit_match = explicit_capture_re.search(request_text)
+    if explicit_match:
+        return str(explicit_match.group(group_name) or "").strip()
+
+    bare_match = bare_capture_re.search(request_text)
+    if not bare_match:
+        return ""
+
+    candidate = str(bare_match.group(group_name) or "").strip()
+    if is_valid_bare_id(candidate):
+        return candidate
+    return ""
+
+
+def _normalize_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [
+        normalized_value
+        for item in value
+        if item is not None and (normalized_value := str(item).strip())
+    ]
+
+
 class RequestHookService:
     _WORKBOOK_TOOL_NAMES = frozenset(
         {"create_workbook", "write_rows", "export_workbook"}
     )
-    _DOCUMENT_ID_TOKEN_RE = r"(?<![A-Za-z0-9_])document_id(?![A-Za-z0-9_])"
+    _DOCUMENT_ID_TOKEN_RE = _build_identifier_token_pattern("document_id")
     _DOCUMENT_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _DOCUMENT_ID_DOC_PREFIX_RE = re.compile(
         r"doc-[A-Za-z0-9_-]+",
@@ -50,49 +115,53 @@ class RequestHookService:
         r"(business_report|project_review|executive_brief|accent_color|document_style)",
         flags=re.IGNORECASE,
     )
-    _DOCUMENT_ID_FOLLOW_UP_RE = re.compile(
-        _DOCUMENT_ID_TOKEN_RE,
-        flags=re.IGNORECASE,
+    _DOCUMENT_ID_FOLLOW_UP_RE = _compile_identifier_token_regex("document_id")
+    _DOCUMENT_ID_EXPLICIT_CAPTURE_RE = _compile_identifier_explicit_capture_regex(
+        "document_id",
+        "document_id",
     )
-    _DOCUMENT_ID_EXPLICIT_CAPTURE_RE = re.compile(
-        _DOCUMENT_ID_TOKEN_RE
-        + r"(?:\s*[:=：]\s*|\s*(?:为|是)\s*|\s+is\s+)[`\"']?(?P<document_id>[A-Za-z0-9_-]+)[`\"']?",
-        flags=re.IGNORECASE,
+    _DOCUMENT_ID_BARE_CAPTURE_RE = _compile_identifier_bare_capture_regex(
+        "document_id",
+        "document_id",
     )
-    _DOCUMENT_ID_BARE_CAPTURE_RE = re.compile(
-        _DOCUMENT_ID_TOKEN_RE
-        + r"\s+[`\"']?(?P<document_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_ID_TOKEN_RE = r"(?<![A-Za-z0-9_])workbook_id(?![A-Za-z0-9_])"
+    _WORKBOOK_ID_TOKEN_RE = _build_identifier_token_pattern("workbook_id")
     _WORKBOOK_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _WORKBOOK_ID_PREFIX_RE = re.compile(
         r"(?:wb|workbook)-[A-Za-z0-9_-]+",
         flags=re.IGNORECASE,
     )
-    _WORKBOOK_WORKFLOW_HINT_RE = re.compile(
-        r"(create_workbook|write_rows|export_workbook|"
-        r"\bexcel\b|\bxlsx\b|报表|汇总表|多\s*sheet|工作簿|"
-        r"生成\s*(?:excel|xlsx|报表|汇总表)|整理成\s*(?:excel|xlsx|报表|汇总表))",
+    _WORKBOOK_TOOL_CALL_HINT_RE = re.compile(
+        r"(create_workbook|write_rows|export_workbook)",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_SUBJECT_HINT_RE = re.compile(
+        r"(\bexcel\b|\bxlsx\b|报表|汇总表|工作簿|多\s*sheet)",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_GENERATION_HINT_RE = re.compile(
+        r"(生成|创建|新建|制作|整理成|整理为|写入|填入|输出|导出(?:成|为)?|返回|做(?:成|个|一份)?)",
+        flags=re.IGNORECASE,
+    )
+    _WORKBOOK_NON_GENERATION_HINT_RE = re.compile(
+        r"(读取|阅读|查看|打开|解析|提取|分析|总结|"
+        r"导出(?:成|为)\s*pdf|"
+        r"(?:转换|转成|转为|转到).*(?:pdf|word|docx|ppt|pptx)|"
+        r"(?:pdf|word|docx|ppt|pptx).*(?:转换|转成|转为|转到)|"
+        r"\bread\b|\bopen\b|\bparse\b|\bextract\b|\banaly[sz]e\b|\bconvert\b)",
         flags=re.IGNORECASE,
     )
     _WORKBOOK_DETAIL_HINT_RE = re.compile(
         r"(create_workbook|write_rows|export_workbook|start_row|多\s*sheet)",
         flags=re.IGNORECASE,
     )
-    _WORKBOOK_ID_FOLLOW_UP_RE = re.compile(
-        _WORKBOOK_ID_TOKEN_RE,
-        flags=re.IGNORECASE,
+    _WORKBOOK_ID_FOLLOW_UP_RE = _compile_identifier_token_regex("workbook_id")
+    _WORKBOOK_ID_EXPLICIT_CAPTURE_RE = _compile_identifier_explicit_capture_regex(
+        "workbook_id",
+        "workbook_id",
     )
-    _WORKBOOK_ID_EXPLICIT_CAPTURE_RE = re.compile(
-        _WORKBOOK_ID_TOKEN_RE
-        + r"(?:\s*[:=：]\s*|\s*(?:为|是)\s*|\s+is\s+)[`\"']?(?P<workbook_id>[A-Za-z0-9_-]+)[`\"']?",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_ID_BARE_CAPTURE_RE = re.compile(
-        _WORKBOOK_ID_TOKEN_RE
-        + r"\s+[`\"']?(?P<workbook_id>[A-Za-z0-9_-]*[\d_-][A-Za-z0-9_-]*)[`\"']?",
-        flags=re.IGNORECASE,
+    _WORKBOOK_ID_BARE_CAPTURE_RE = _compile_identifier_bare_capture_regex(
+        "workbook_id",
+        "workbook_id",
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
     _DOCUMENT_DETAIL_NOTICE_KEY = "document_detail_guide"
@@ -160,82 +229,22 @@ class RequestHookService:
 
         request_text = self._extract_prompt_text(str(context.request.prompt or ""))
         exposed_tool_names = self._get_exposed_tool_names(context.request.func_tool)
-        workbook_follow_up_available = self._has_workbook_tools_available(
-            exposed_tool_names=exposed_tool_names
-        )
-        workbook_workflow_guide_available = (
-            self._has_full_workbook_toolset_available(
-                exposed_tool_names=exposed_tool_names
-            )
-        )
-        if workbook_follow_up_available and self._is_workbook_follow_up(
-            request_text=request_text
-        ):
-            section = self._build_workbook_follow_up_section(request_text=request_text)
-            if section is not None:
-                self._append_notice_section(context, section)
-                return context
-        if self._is_document_follow_up(request_text=request_text):
-            section = self._build_document_follow_up_section(request_text=request_text)
-            if section is not None:
-                self._append_notice_section(context, section)
-                return context
-        should_inject_core = self._should_inject_document_tool_guide(
-            request_text=request_text
-        )
-        should_inject_detail = self._should_inject_document_tool_detail(
-            request_text=request_text
-        )
-        should_inject_workbook_core = self._should_inject_workbook_tool_guide(
-            request_text=request_text
-        )
-        should_inject_workbook_detail = self._should_inject_workbook_tool_detail(
-            request_text=request_text
-        )
-        if (
-            not should_inject_core
-            and not should_inject_detail
-            and not should_inject_workbook_core
-            and not should_inject_workbook_detail
+        if self._append_follow_up_notice_if_needed(
+            context,
+            request_text=request_text,
+            exposed_tool_names=exposed_tool_names,
         ):
             return context
 
-        if should_inject_core and self._consume_session_notice_once(
-            context.event, self._DOCUMENT_CORE_NOTICE_KEY
-        ):
-            self._append_notice_section(
-                context,
-                self.prompt_context_service.build_document_tool_guide_section(),
-            )
-        if should_inject_detail and self._consume_session_notice_once(
-            context.event, self._DOCUMENT_DETAIL_NOTICE_KEY
-        ):
-            self._append_notice_section(
-                context,
-                self.prompt_context_service.build_document_tool_detail_section(),
-            )
-        if (
-            workbook_workflow_guide_available
-            and should_inject_workbook_core
-            and self._consume_session_notice_once(
-            context.event, self._WORKBOOK_CORE_NOTICE_KEY
-            )
-        ):
-            self._append_notice_section(
-                context,
-                self.prompt_context_service.build_workbook_tool_guide_section(),
-            )
-        if (
-            workbook_workflow_guide_available
-            and should_inject_workbook_detail
-            and self._consume_session_notice_once(
-            context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
-            )
-        ):
-            self._append_notice_section(
-                context,
-                self.prompt_context_service.build_workbook_tool_detail_section(),
-            )
+        self._append_document_tool_guides(
+            context,
+            request_text=request_text,
+        )
+        self._append_workbook_tool_guides(
+            context,
+            request_text=request_text,
+            exposed_tool_names=exposed_tool_names,
+        )
         return context
 
     @classmethod
@@ -267,6 +276,123 @@ class RequestHookService:
     ) -> bool:
         return cls._WORKBOOK_TOOL_NAMES.issubset(exposed_tool_names)
 
+    def _append_follow_up_notice_if_needed(
+        self,
+        context: NoticeBuildContext,
+        *,
+        request_text: str,
+        exposed_tool_names: set[str],
+    ) -> bool:
+        if self._append_workbook_follow_up_notice(
+            context,
+            request_text=request_text,
+            exposed_tool_names=exposed_tool_names,
+        ):
+            return True
+        return self._append_document_follow_up_notice(
+            context,
+            request_text=request_text,
+        )
+
+    def _append_workbook_follow_up_notice(
+        self,
+        context: NoticeBuildContext,
+        *,
+        request_text: str,
+        exposed_tool_names: set[str],
+    ) -> bool:
+        if not self._has_workbook_tools_available(exposed_tool_names=exposed_tool_names):
+            return False
+        if not self._is_workbook_follow_up(request_text=request_text):
+            return False
+
+        section = self._build_workbook_follow_up_section(request_text=request_text)
+        if section is None:
+            return False
+
+        self._append_notice_section(context, section)
+        return True
+
+    def _append_document_follow_up_notice(
+        self,
+        context: NoticeBuildContext,
+        *,
+        request_text: str,
+    ) -> bool:
+        if not self._is_document_follow_up(request_text=request_text):
+            return False
+
+        section = self._build_document_follow_up_section(request_text=request_text)
+        if section is None:
+            return False
+
+        self._append_notice_section(context, section)
+        return True
+
+    def _append_document_tool_guides(
+        self,
+        context: NoticeBuildContext,
+        *,
+        request_text: str,
+    ) -> None:
+        should_inject_core = self._should_inject_document_tool_guide(
+            request_text=request_text
+        )
+        should_inject_detail = self._should_inject_document_tool_detail(
+            request_text=request_text
+        )
+
+        if should_inject_core and self._consume_session_notice_once(
+            context.event, self._DOCUMENT_CORE_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_document_tool_guide_section(),
+            )
+        if should_inject_detail and self._consume_session_notice_once(
+            context.event, self._DOCUMENT_DETAIL_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_document_tool_detail_section(),
+            )
+
+    def _append_workbook_tool_guides(
+        self,
+        context: NoticeBuildContext,
+        *,
+        request_text: str,
+        exposed_tool_names: set[str],
+    ) -> None:
+        if not self._has_full_workbook_toolset_available(
+            exposed_tool_names=exposed_tool_names
+        ):
+            return
+
+        should_inject_core = self._should_inject_workbook_tool_guide(
+            request_text=request_text
+        )
+        should_inject_detail = self._should_inject_workbook_tool_detail(
+            request_text=request_text
+        )
+        if not should_inject_core and not should_inject_detail:
+            return
+
+        if should_inject_core and self._consume_session_notice_once(
+            context.event, self._WORKBOOK_CORE_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_workbook_tool_guide_section(),
+            )
+        if should_inject_detail and self._consume_session_notice_once(
+            context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_workbook_tool_detail_section(),
+            )
+
     @classmethod
     def _should_inject_document_tool_guide(cls, *, request_text: str) -> bool:
         if not request_text:
@@ -287,7 +413,15 @@ class RequestHookService:
     def _should_inject_workbook_tool_guide(cls, *, request_text: str) -> bool:
         if not request_text:
             return False
-        return bool(cls._WORKBOOK_WORKFLOW_HINT_RE.search(request_text))
+        if cls._WORKBOOK_TOOL_CALL_HINT_RE.search(request_text):
+            return True
+        if cls._WORKBOOK_ID_FOLLOW_UP_RE.search(request_text):
+            return True
+        if not cls._WORKBOOK_SUBJECT_HINT_RE.search(request_text):
+            return False
+        if not cls._WORKBOOK_GENERATION_HINT_RE.search(request_text):
+            return False
+        return not cls._WORKBOOK_NON_GENERATION_HINT_RE.search(request_text)
 
     @classmethod
     def _should_inject_workbook_tool_detail(
@@ -313,33 +447,23 @@ class RequestHookService:
 
     @classmethod
     def _extract_document_id(cls, *, request_text: str) -> str:
-        if not request_text:
-            return ""
-        explicit_match = cls._DOCUMENT_ID_EXPLICIT_CAPTURE_RE.search(request_text)
-        if explicit_match:
-            return str(explicit_match.group("document_id") or "").strip()
-
-        bare_match = cls._DOCUMENT_ID_BARE_CAPTURE_RE.search(request_text)
-        if bare_match:
-            candidate = str(bare_match.group("document_id") or "").strip()
-            if cls._looks_like_bare_document_id(candidate):
-                return candidate
-        return ""
+        return _extract_identifier_from_text(
+            request_text=request_text,
+            explicit_capture_re=cls._DOCUMENT_ID_EXPLICIT_CAPTURE_RE,
+            bare_capture_re=cls._DOCUMENT_ID_BARE_CAPTURE_RE,
+            group_name="document_id",
+            is_valid_bare_id=cls._looks_like_bare_document_id,
+        )
 
     @classmethod
     def _extract_workbook_id(cls, *, request_text: str) -> str:
-        if not request_text:
-            return ""
-        explicit_match = cls._WORKBOOK_ID_EXPLICIT_CAPTURE_RE.search(request_text)
-        if explicit_match:
-            return str(explicit_match.group("workbook_id") or "").strip()
-
-        bare_match = cls._WORKBOOK_ID_BARE_CAPTURE_RE.search(request_text)
-        if bare_match:
-            candidate = str(bare_match.group("workbook_id") or "").strip()
-            if cls._looks_like_bare_workbook_id(candidate):
-                return candidate
-        return ""
+        return _extract_identifier_from_text(
+            request_text=request_text,
+            explicit_capture_re=cls._WORKBOOK_ID_EXPLICIT_CAPTURE_RE,
+            bare_capture_re=cls._WORKBOOK_ID_BARE_CAPTURE_RE,
+            group_name="workbook_id",
+            is_valid_bare_id=cls._looks_like_bare_workbook_id,
+        )
 
     @classmethod
     def _looks_like_bare_document_id(cls, candidate: str) -> bool:
@@ -411,47 +535,17 @@ class RequestHookService:
             return self.prompt_context_service.build_workbook_follow_up_missing_section(
                 workbook_id=workbook_id
             )
-
-        raw_sheet_names = summary.get("sheet_names")
-        sheet_names = (
-            [
-                normalized_name
-                for name in raw_sheet_names
-                if name is not None
-                and (normalized_name := str(name).strip())
-            ]
-            if isinstance(raw_sheet_names, list)
-            else []
-        )
-        raw_latest_sheets = summary.get("latest_written_sheets")
-        latest_written_sheets = (
-            [
-                normalized_name
-                for name in raw_latest_sheets
-                if name is not None
-                and (normalized_name := str(name).strip())
-            ]
-            if isinstance(raw_latest_sheets, list)
-            else []
-        )
-        raw_next_actions = summary.get("next_allowed_actions")
-        next_allowed_actions = (
-            [
-                normalized_action
-                for action in raw_next_actions
-                if action is not None
-                and (normalized_action := str(action).strip())
-            ]
-            if isinstance(raw_next_actions, list)
-            else []
-        )
         return self.prompt_context_service.build_workbook_follow_up_section(
             workbook_id=workbook_id,
             status=str(summary.get("status") or ""),
-            sheet_names=sheet_names,
+            sheet_names=_normalize_string_list(summary.get("sheet_names")),
             sheet_count=int(summary.get("sheet_count") or 0),
-            latest_written_sheets=latest_written_sheets,
-            next_allowed_actions=next_allowed_actions,
+            latest_written_sheets=_normalize_string_list(
+                summary.get("latest_written_sheets")
+            ),
+            next_allowed_actions=_normalize_string_list(
+                summary.get("next_allowed_actions")
+            ),
         )
 
     @staticmethod
