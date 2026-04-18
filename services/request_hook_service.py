@@ -596,7 +596,16 @@ class RequestHookService:
             and context.request.func_tool
             and context.explicit_tool_name
         ):
-            for tool_name in FILE_TOOLS:
+            exposed_file_tool_names = self._get_exposed_tool_names(
+                context.request.func_tool
+            ).intersection(FILE_TOOLS)
+            if context.explicit_tool_name not in exposed_file_tool_names:
+                logger.info(
+                    "[文件管理] 检测到用户显式指定工具 %s，但该工具当前未暴露，跳过工具收窄",
+                    context.explicit_tool_name,
+                )
+                return context
+            for tool_name in exposed_file_tool_names:
                 if tool_name != context.explicit_tool_name:
                     context.request.func_tool.remove_tool(tool_name)
             logger.info(

@@ -29,13 +29,18 @@ def create_server(
     render_backend_config: DocumentRenderBackendConfig | None = None,
     default_document_style: dict[str, object] | None = None,
 ) -> FastMCP:
+    workbook_supported = WorkbookSessionStore is not None
+    instructions = (
+        "Stateful Office builder for structured Word generation. "
+        "Use create_document/add_blocks/finalize_document/export_document for Word."
+    )
+    if workbook_supported:
+        instructions += (
+            " Use create_workbook/write_rows/export_workbook for Excel."
+        )
     server = FastMCP(
         name="astrbot-office-assistant",
-        instructions=(
-            "Stateful Office builder for structured Word and Excel generation. "
-            "Use create_document/add_blocks/finalize_document/export_document for Word, "
-            "and use create_workbook/write_rows/export_workbook for Excel."
-        ),
+        instructions=instructions,
     )
     store = DocumentSessionStore(workspace_dir=workspace_dir)
     attach_render_backend_config(store, render_backend_config)
@@ -46,7 +51,7 @@ def create_server(
         before_export_hooks=before_export_hooks,
         after_export_hooks=after_export_hooks,
     )
-    if WorkbookSessionStore is not None:
+    if workbook_supported:
         workbook_store = WorkbookSessionStore(workspace_dir=workspace_dir)
         register_workbook_tools(server, workbook_store)
     return server
