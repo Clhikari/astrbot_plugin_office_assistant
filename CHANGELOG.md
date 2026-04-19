@@ -4,6 +4,19 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [v1.6.3-beta] - 2026-04-19
+
+### Added
+
+- 新增会话式 Excel 工作簿流程，支持 `create_workbook -> write_rows -> export_workbook` 分步创建报表，适合多 sheet、分批写入后再导出 `.xlsx`。
+- 新增 `workbook_id` 续写能力，上一轮创建的工作簿可以在后续对话里继续补写和导出。
+- 新增面向 Excel 报表场景的工作簿会话管理，支持在对话里连续维护同一份报表，而不是每次重新生成整份文件。
+
+### Changed
+
+- Excel 相关提示会更严格地区分“新建报表”“继续写入”“读取现有文件”“转换为其他格式”这几类请求，减少误用工具。
+- workbook 导出现在支持在工作区内使用相对子目录组织输出，例如 `reports/q1/final-report.xlsx`。
+
 ## [v1.6.2] - 2026-04-16
 
 ### Added
