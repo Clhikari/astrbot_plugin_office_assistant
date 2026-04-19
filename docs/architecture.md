@@ -28,6 +28,7 @@ flowchart TB
     APS["access_policy_service.py"]
     LLM["llm_request_policy.py"]
     RHS["request_hook_service.py"]
+    RFU["request_follow_up.py<br/>request_hook_notice_helpers.py"]
     PCS["prompt_context_service.py"]
     UPS["upload_prompt_service.py"]
     PS["prompts/static, prompts/scenes"]
@@ -39,6 +40,7 @@ flowchart TB
   RPS --> APS
   RPS --> LLM
   LLM --> RHS
+  RHS --> RFU
   RHS --> PCS
   RHS --> UPS
   PS --> PCS
@@ -58,12 +60,13 @@ flowchart TB
   CS --> FILES
 
   subgraph L4["Capability Exposure And Shared Tool Registry"]
-    AG["agent_tools"]
+    AG["agent_tools<br/>document_tools.py<br/>workbook_tools.py"]
     AA["tools/astrbot_adapter.py"]
     REG["tools/registry.py"]
     MA["tools/mcp_adapter.py"]
-    MCP["mcp_server"]
+    MCP["mcp_server<br/>document tools<br/>workbook tools"]
     WC["Word Workflow Contract<br/>create_document<br/>add_blocks<br/>finalize_document<br/>export_document"]
+    WB["Workbook Workflow Contract<br/>create_workbook<br/>write_rows<br/>export_workbook"]
   end
 
   PRB --> AG
@@ -71,6 +74,7 @@ flowchart TB
   AG --> AA --> REG
   MCP --> MA --> REG
   REG --> WC
+  REG --> WB
 
   subgraph DD["Document Domain"]
     DC["document_core"]
@@ -88,8 +92,21 @@ flowchart TB
   DS --> EP
   RCFG --> EP
 
+  subgraph WD["Workbook Domain"]
+    WS["domain/workbook/session_store.py"]
+    WCT["domain/workbook/contracts.py<br/>tool_contracts.py"]
+    WM["domain/workbook/models.py"]
+    WE["domain/workbook/exporter.py"]
+  end
+
+  WB --> WS
+  WB --> WCT
+  REG --> WS
+  WS --> WM
+  WS --> WE
+
   subgraph FP2["File Processing Services"]
-    WSS["workspace_service.py"]
+    WSS["workspace_service.py<br/>workspace + spreadsheet text extraction"]
     FRS["file_read_service.py"]
     WRS["word_read_service.py"]
     FTS["file_tool_service.py"]
@@ -141,4 +158,5 @@ flowchart TB
 
   FI -. shows Node renderer status .-> WRJ
   RHS -. injects workflow guidance .-> WC
+  RHS -. injects workbook guide and follow-up notice .-> WB
 ```
