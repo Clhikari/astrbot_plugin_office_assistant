@@ -464,6 +464,78 @@ def test_export_workbook_allows_other_workbook_operations_while_writing_file(
     assert other_summary["next_allowed_actions"] == ["write_rows", "export_workbook"]
 
 
+def test_create_workbook_keeps_new_draft_when_store_is_capped_by_exporting_workbook(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root, max_workbooks=1)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1"], ["v1"]],
+        )
+    )
+
+    export_started = Event()
+    release_export = Event()
+    create_finished = Event()
+    create_error: list[Exception] = []
+    created_workbook_ids: list[str] = []
+
+    def fake_export(workbook_model, output_path):
+        export_started.set()
+        release_export.wait(timeout=5)
+        output_path.write_text("xlsx", encoding="utf-8")
+        return output_path
+
+    def run_export():
+        store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
+
+    def run_create_and_write():
+        try:
+            other = store.create_workbook(CreateWorkbookRequest(filename="other.xlsx"))
+            created_workbook_ids.append(other.workbook_id)
+            store.write_rows(
+                WriteRowsRequest(
+                    workbook_id=other.workbook_id,
+                    sheet="Data",
+                    rows=[["value"]],
+                )
+            )
+        except Exception as exc:  # pragma: no cover - asserted via captured error
+            create_error.append(exc)
+        finally:
+            create_finished.set()
+
+    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+
+    export_thread = Thread(target=run_export)
+    create_thread = Thread(target=run_create_and_write)
+
+    export_thread.start()
+    assert export_started.wait(timeout=5)
+
+    create_thread.start()
+    assert create_finished.wait(timeout=0.2)
+
+    assert create_error == []
+    assert created_workbook_ids == ["wb-2"]
+    created_summary = store.build_prompt_summary(created_workbook_ids[0])
+    assert created_summary["status"] == "draft"
+    assert created_summary["next_allowed_actions"] == ["write_rows", "export_workbook"]
+
+    release_export.set()
+    export_thread.join(timeout=5)
+    create_thread.join(timeout=5)
+
+    assert store.get_workbook(workbook.workbook_id) is None
+    assert store.get_workbook(created_workbook_ids[0]) is not None
+    created_summary = store.build_prompt_summary(created_workbook_ids[0])
+    assert created_summary["status"] == "draft"
+    assert created_summary["next_allowed_actions"] == ["write_rows", "export_workbook"]
+
+
 def test_export_workbook_resets_status_after_export_failure(
     workspace_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
