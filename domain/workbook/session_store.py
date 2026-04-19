@@ -16,6 +16,7 @@ from .contracts import (
     WriteRowsRequest,
     _build_workbook_summary_payload,
     _normalize_xlsx_filename,
+    _normalize_xlsx_output_path,
 )
 from .exporter import export_workbook_to_xlsx
 from .models import WorkbookMetadata, WorkbookModel, WorkbookStatus, WorksheetModel
@@ -173,9 +174,7 @@ class WorkbookSessionStore:
                 "export_workbook is only allowed while the workbook status is draft"
             )
         preferred_name = request.output_name or workbook.metadata.preferred_filename
-        if "/" in preferred_name or "\\" in preferred_name:
-            raise ValueError("output_path cannot escape the workbook workspace")
-        file_name = _normalize_xlsx_filename(preferred_name)
+        file_name = _normalize_xlsx_output_path(preferred_name)
 
         workspace_dir = self.workspace_dir.resolve()
         output_dir = workspace_dir
@@ -192,6 +191,7 @@ class WorkbookSessionStore:
         workbook.status = WorkbookStatus.DRAFT
         workbook.output_path = ""
         workbook.touch()
+        self._prune_locked(protected_workbook_ids={workbook_id})
 
     def prepare_export_path(
         self,
