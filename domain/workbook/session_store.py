@@ -65,7 +65,11 @@ class WorkbookSessionStore:
         for workbook_id in expired_ids:
             self._workbooks.pop(workbook_id, None)
 
-    def _evict_excess_locked(self) -> None:
+    def _evict_excess_locked(
+        self,
+        *,
+        protected_workbook_ids: set[str] | None = None,
+    ) -> None:
         if self._max_workbooks is None:
             return
 
@@ -73,20 +77,29 @@ class WorkbookSessionStore:
         if excess <= 0:
             return
 
+        protected_ids = protected_workbook_ids or set()
         oldest_workbooks = sorted(
             (
                 item
                 for item in self._workbooks.items()
                 if item[1].status != WorkbookStatus.EXPORTING
+                if item[0] not in protected_ids
             ),
-            key=lambda item: item[1].metadata.updated_at,
+            key=lambda item: (
+                0 if item[1].status == WorkbookStatus.EXPORTED else 1,
+                item[1].metadata.updated_at,
+            ),
         )
         for workbook_id, _ in oldest_workbooks[:excess]:
             self._workbooks.pop(workbook_id, None)
 
-    def _prune_locked(self) -> None:
+    def _prune_locked(
+        self,
+        *,
+        protected_workbook_ids: set[str] | None = None,
+    ) -> None:
         self._evict_expired_locked()
-        self._evict_excess_locked()
+        self._evict_excess_locked(protected_workbook_ids=protected_workbook_ids)
 
     @staticmethod
     def _compact_workbook_after_export_locked(workbook: WorkbookModel) -> None:
@@ -112,7 +125,7 @@ class WorkbookSessionStore:
                 ),
             )
             self._workbooks[workbook_id] = workbook
-            self._prune_locked()
+            self._prune_locked(protected_workbook_ids={workbook_id})
             return workbook
 
     def get_workbook(self, workbook_id: str) -> WorkbookModel | None:
