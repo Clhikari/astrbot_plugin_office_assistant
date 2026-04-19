@@ -2,13 +2,19 @@ name: Publish GitHub Release
 
 on:
   push:
+    branches:
+      - "master"
     tags:
       - "v*"
+    paths:
+      - "CHANGELOG.md"
+      - "metadata.yaml"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
     inputs:
       tag:
-        description: "已存在的版本 tag，例如 v1.6.2"
-        required: true
+        description: "可选版本 tag；为空时读取 CHANGELOG 顶部版本"
+        required: false
         type: string
 
 permissions:
@@ -29,6 +35,7 @@ jobs:
         shell: python
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           import os
@@ -36,20 +43,39 @@ jobs:
           from pathlib import Path
 
           changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
-          requested_tag = (os.getenv("INPUT_TAG") or os.getenv("GITHUB_REF_NAME") or "").strip()
-          if not requested_tag:
-              raise SystemExit("Missing tag name.")
-
-          pattern = re.compile(
-              rf"^## \[{re.escape(requested_tag)}\] - (?P<date>[^\n]+)\n(?P<body>.*?)(?=^## \[|\Z)",
+          release_section_pattern = re.compile(
+              r"^## \[(?P<tag>v[^\]]+)\] - (?P<date>[^\n]+)\n(?P<body>.*?)(?=^## \[|\Z)",
               re.MULTILINE | re.DOTALL,
           )
-          match = pattern.search(changelog)
-          if not match:
-              raise SystemExit(f"Could not find changelog section for {requested_tag}.")
+          requested_tag = (os.getenv("INPUT_TAG") or "").strip()
+
+          if requested_tag:
+              match = next(
+                  (section for section in release_section_pattern.finditer(changelog) if section.group("tag") == requested_tag),
+                  None,
+              )
+              if not match:
+                  raise SystemExit(f"Could not find changelog section for {requested_tag}.")
+          else:
+              ref_type = (os.getenv("GITHUB_REF_TYPE") or "").strip()
+              ref_name = (os.getenv("GITHUB_REF_NAME") or "").strip()
+              if ref_type == "tag" and ref_name.startswith("v"):
+                  requested_tag = ref_name
+                  match = next(
+                      (section for section in release_section_pattern.finditer(changelog) if section.group("tag") == requested_tag),
+                      None,
+                  )
+                  if not match:
+                      raise SystemExit(f"Could not find changelog section for {requested_tag}.")
+              else:
+                  match = release_section_pattern.search(changelog)
+                  if not match:
+                      raise SystemExit("Could not find any changelog section.")
+                  requested_tag = match.group("tag")
 
           release_body = match.group("body").strip()
           release_name = requested_tag
+          is_prerelease = "true" if "-beta" in requested_tag.lower() else "false"
 
           heading_map = {
               "Added": "新增",
@@ -80,6 +106,7 @@ jobs:
           with output_path.open("a", encoding="utf-8") as fh:
               fh.write(f"tag={requested_tag}\n")
               fh.write(f"name={release_name}\n")
+              fh.write(f"prerelease={is_prerelease}\n")
               fh.write("body<<__BODY__\n")
               fh.write(release_body + "\n")
               fh.write("__BODY__\n")
@@ -88,8 +115,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.notes.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.notes.outputs.name }}
           body: ${{ steps.notes.outputs.body }}
           generate_release_notes: false
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.notes.outputs.prerelease }}
