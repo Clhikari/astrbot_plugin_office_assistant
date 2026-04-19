@@ -208,6 +208,39 @@ def test_export_rejects_output_path_outside_workspace(workspace_root: Path):
         store.export_workbook(escaped_request)
 
 
+def test_prepare_export_path_keeps_workbook_exports_inside_workspace(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
+
+    _, output_path = store.prepare_export_path(
+        ExportWorkbookRequest(
+            workbook_id=workbook.workbook_id,
+            output_name="reports/q1/final-report",
+        )
+    )
+
+    assert output_path == (workspace_root / "reports" / "q1" / "final-report.xlsx").resolve()
+
+    _, windows_style_output_path = store.prepare_export_path(
+        ExportWorkbookRequest(
+            workbook_id=workbook.workbook_id,
+            output_name=r"reports\windows\final-report",
+        )
+    )
+
+    assert (
+        windows_style_output_path
+        == (workspace_root / "reports" / "windows" / "final-report.xlsx").resolve()
+    )
+
+    escaped_request = ExportWorkbookRequest.model_construct(
+        workbook_id=workbook.workbook_id,
+        output_name="../outside/final-report.xlsx",
+    )
+    with pytest.raises(ValueError, match="escape the workbook workspace"):
+        store.prepare_export_path(escaped_request)
+
+
 def test_exporter_writes_values_and_header_style(workspace_root: Path):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="styled.xlsx"))
@@ -480,6 +513,7 @@ def test_create_workbook_keeps_new_draft_when_store_is_capped_by_exporting_workb
     export_started = Event()
     release_export = Event()
     create_finished = Event()
+    export_error: list[Exception] = []
     create_error: list[Exception] = []
     created_workbook_ids: list[str] = []
 
@@ -563,6 +597,79 @@ def test_export_workbook_resets_status_after_export_failure(
 
     loaded = store.require_workbook(workbook.workbook_id)
     assert loaded.output_path == ""
+
+
+def test_failed_export_prunes_store_back_to_cap(
+    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root, max_workbooks=1)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1"], ["v1"]],
+        )
+    )
+
+    export_started = Event()
+    release_export = Event()
+    create_finished = Event()
+    export_error: list[Exception] = []
+    create_error: list[Exception] = []
+    created_workbook_ids: list[str] = []
+
+    def fake_export(_workbook_model, _output_path):
+        export_started.set()
+        release_export.wait(timeout=5)
+        raise RuntimeError("disk full")
+
+    def run_export():
+        try:
+            store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
+        except Exception as exc:  # pragma: no cover - asserted via captured error
+            export_error.append(exc)
+
+    def run_create_and_write():
+        try:
+            other = store.create_workbook(CreateWorkbookRequest(filename="other.xlsx"))
+            created_workbook_ids.append(other.workbook_id)
+            store.write_rows(
+                WriteRowsRequest(
+                    workbook_id=other.workbook_id,
+                    sheet="Data",
+                    rows=[["value"]],
+                )
+            )
+        except Exception as exc:  # pragma: no cover - asserted via captured error
+            create_error.append(exc)
+        finally:
+            create_finished.set()
+
+    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+
+    export_thread = Thread(target=run_export)
+    create_thread = Thread(target=run_create_and_write)
+
+    export_thread.start()
+    assert export_started.wait(timeout=5)
+
+    create_thread.start()
+    assert create_finished.wait(timeout=0.2)
+    assert create_error == []
+    assert created_workbook_ids == ["wb-2"]
+    assert store.get_workbook(created_workbook_ids[0]) is not None
+
+    release_export.set()
+    export_thread.join(timeout=5)
+    create_thread.join(timeout=5)
+
+    assert len(export_error) == 1
+    assert "disk full" in str(export_error[0])
+    failed_summary = store.build_prompt_summary(workbook.workbook_id)
+    assert failed_summary["status"] == "draft"
+    assert failed_summary["next_allowed_actions"] == ["write_rows", "export_workbook"]
+    assert store.get_workbook(created_workbook_ids[0]) is None
 
 
 def test_build_workbook_summary_includes_sheet_names(workspace_root: Path):

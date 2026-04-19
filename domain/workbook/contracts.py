@@ -41,6 +41,19 @@ def _normalize_xlsx_filename(
     return candidate
 
 
+def _normalize_xlsx_output_path(
+    value: str,
+    default: str = DEFAULT_XLSX_FILENAME,
+) -> str:
+    parts = _split_path_parts(value)
+    if not parts:
+        return default
+    normalized_leaf = _normalize_xlsx_filename(parts[-1], default=default)
+    if len(parts) == 1:
+        return normalized_leaf
+    return "/".join([*parts[:-1], normalized_leaf])
+
+
 def _normalize_sheet_name(value: str) -> str:
     candidate = value.strip()
     if not candidate:
@@ -138,7 +151,7 @@ class ExportWorkbookRequest(BaseModel):
             return ""
         if _looks_like_absolute_path(candidate):
             raise ValueError("output_name must not be an absolute path")
-        return _normalize_xlsx_filename(candidate)
+        return _normalize_xlsx_output_path(candidate)
 
 
 class WorkbookSummary(BaseModel):

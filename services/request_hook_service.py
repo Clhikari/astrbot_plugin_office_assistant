@@ -29,6 +29,11 @@ from .request_follow_up import (
     build_identifier_descriptor,
     extract_identifier_from_text,
 )
+from .request_hook_notice_helpers import (
+    FollowUpNoticeHelper,
+    FollowUpNoticeRule,
+    WorkbookGuideMatcher,
+)
 from .upload_types import UploadInfo
 
 
@@ -69,30 +74,6 @@ class RequestHookService:
     _WORKBOOK_ID_HEX_RE = re.compile(r"[0-9a-f]{32}", flags=re.IGNORECASE)
     _WORKBOOK_ID_PREFIX_RE = re.compile(
         r"(?:wb|workbook)-[A-Za-z0-9_-]+",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_TOOL_CALL_HINT_RE = re.compile(
-        r"(create_workbook|write_rows|export_workbook)",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_SUBJECT_HINT_RE = re.compile(
-        r"(\bexcel\b|\bxlsx\b|报表|汇总表|工作簿|多\s*sheet)",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_GENERATION_HINT_RE = re.compile(
-        r"(生成|创建|新建|制作|整理成|整理为|写入|填入|输出|导出(?:成|为)?|返回|做(?:成|个|一份)?)",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_NON_GENERATION_HINT_RE = re.compile(
-        r"(读取|阅读|查看|打开|解析|提取|分析|总结|"
-        r"导出(?:成|为)\s*pdf|"
-        r"(?:转换|转成|转为|转到).*(?:pdf|word|docx|ppt|pptx)|"
-        r"(?:pdf|word|docx|ppt|pptx).*(?:转换|转成|转为|转到)|"
-        r"\bread\b|\bopen\b|\bparse\b|\bextract\b|\banaly[sz]e\b|\bconvert\b)",
-        flags=re.IGNORECASE,
-    )
-    _WORKBOOK_DETAIL_HINT_RE = re.compile(
-        r"(create_workbook|write_rows|export_workbook|start_row|多\s*sheet)",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_IDENTIFIER = build_identifier_descriptor(
@@ -148,6 +129,11 @@ class RequestHookService:
         self._lookup_workbook_summary = lookup_workbook_summary
         self.prompt_context_service = prompt_context_service or PromptContextService(
             allow_external_input_files=allow_external_input_files
+        )
+        self._follow_up_notice_helper = FollowUpNoticeHelper(
+            is_follow_up_request=self._is_follow_up_request,
+            build_follow_up_section=self._build_follow_up_section,
+            append_notice_section=self._append_notice_section,
         )
         self._notice_hooks = [
             self.append_office_tool_guide_notice,
@@ -251,54 +237,20 @@ class RequestHookService:
             else self._has_full_workbook_toolset_available
         )
         follow_up_rules = (
-            (
-                self._WORKBOOK_FOLLOW_UP_STRATEGY,
-                workbook_availability_checker,
+            FollowUpNoticeRule(
+                strategy=self._WORKBOOK_FOLLOW_UP_STRATEGY,
+                availability_checker=lambda names: workbook_availability_checker(
+                    exposed_tool_names=names
+                ),
             ),
-            (
-                self._DOCUMENT_FOLLOW_UP_STRATEGY,
-                None,
-            ),
+            FollowUpNoticeRule(strategy=self._DOCUMENT_FOLLOW_UP_STRATEGY),
         )
-        for strategy, availability_checker in follow_up_rules:
-            if self._append_follow_up_notice(
-                context,
-                request_text=request_text,
-                exposed_tool_names=exposed_tool_names,
-                strategy=strategy,
-                availability_checker=availability_checker,
-            ):
-                return True
-        return False
-
-    def _append_follow_up_notice(
-        self,
-        context: NoticeBuildContext,
-        *,
-        request_text: str,
-        exposed_tool_names: set[str],
-        strategy: FollowUpNoticeStrategy,
-        availability_checker: Callable[..., bool] | None,
-    ) -> bool:
-        if availability_checker is not None and not availability_checker(
-            exposed_tool_names=exposed_tool_names
-        ):
-            return False
-        if not self._is_follow_up_request(
+        return self._follow_up_notice_helper.append_first_matching_notice(
+            context,
             request_text=request_text,
-            descriptor=strategy.identifier,
-        ):
-            return False
-
-        section = self._build_follow_up_section(
-            request_text=request_text,
-            strategy=strategy,
+            exposed_tool_names=exposed_tool_names,
+            rules=follow_up_rules,
         )
-        if section is None:
-            return False
-
-        self._append_notice_section(context, section)
-        return True
 
     def _append_document_tool_guides(
         self,
@@ -340,12 +292,12 @@ class RequestHookService:
         ):
             return
 
-        should_inject_core = self._should_inject_workbook_tool_guide(
-            request_text=request_text
+        workbook_guide_decision = WorkbookGuideMatcher.detect(
+            request_text=request_text,
+            workbook_follow_up_re=self._WORKBOOK_IDENTIFIER.follow_up_re,
         )
-        should_inject_detail = self._should_inject_workbook_tool_detail(
-            request_text=request_text
-        )
+        should_inject_core = workbook_guide_decision.inject_core
+        should_inject_detail = workbook_guide_decision.inject_detail
         if not should_inject_core and not should_inject_detail:
             return
 
@@ -379,30 +331,6 @@ class RequestHookService:
         if not request_text:
             return False
         return bool(cls._DOCUMENT_DETAIL_HINT_RE.search(request_text))
-
-    @classmethod
-    def _should_inject_workbook_tool_guide(cls, *, request_text: str) -> bool:
-        if not request_text:
-            return False
-        if cls._WORKBOOK_TOOL_CALL_HINT_RE.search(request_text):
-            return True
-        if cls._WORKBOOK_IDENTIFIER.follow_up_re.search(request_text):
-            return True
-        if not cls._WORKBOOK_SUBJECT_HINT_RE.search(request_text):
-            return False
-        if not cls._WORKBOOK_GENERATION_HINT_RE.search(request_text):
-            return False
-        return not cls._WORKBOOK_NON_GENERATION_HINT_RE.search(request_text)
-
-    @classmethod
-    def _should_inject_workbook_tool_detail(
-        cls,
-        *,
-        request_text: str,
-    ) -> bool:
-        if not request_text:
-            return False
-        return bool(cls._WORKBOOK_DETAIL_HINT_RE.search(request_text))
 
     @classmethod
     def _is_document_follow_up(cls, *, request_text: str) -> bool:
