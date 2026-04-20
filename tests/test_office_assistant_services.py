@@ -5192,6 +5192,110 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
+    workspace_dir = _make_workspace("execute-excel-script-input-copy")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        openpyxl = pytest.importorskip("openpyxl")
+        source_path = workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(source_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+
+        result = await service.execute_excel_script(
+            event,
+            script=(
+                "workbook = load_workbook(input_files[0])\n"
+                "worksheet = workbook.active\n"
+                "worksheet['A1'] = '已修改'\n"
+                "workbook.save(input_files[0])\n"
+                "result_text = worksheet['A1'].value\n"
+            ),
+            input_files=[source_path.name],
+        )
+        reloaded = openpyxl.load_workbook(source_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "已修改"
+    assert reloaded.active["A1"].value == "原始"
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_separate():
+    workspace_dir = _make_workspace("execute-excel-script-same-name-inputs")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        openpyxl = pytest.importorskip("openpyxl")
+        first_dir = workspace_dir / "north"
+        second_dir = workspace_dir / "south"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        first_path = first_dir / "sales.xlsx"
+        second_path = second_dir / "sales.xlsx"
+
+        first_workbook = openpyxl.Workbook()
+        first_workbook.active["A1"] = "north"
+        first_workbook.save(first_path)
+
+        second_workbook = openpyxl.Workbook()
+        second_workbook.active["A1"] = "south"
+        second_workbook.save(second_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+
+        result = await service.execute_excel_script(
+            event,
+            script=(
+                "values = []\n"
+                "for path in input_files:\n"
+                "    workbook = load_workbook(path)\n"
+                "    values.append(workbook.active['A1'].value)\n"
+                "result_text = '|'.join(values)\n"
+            ),
+            input_files=["north/sales.xlsx", "south/sales.xlsx"],
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "north|south"
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_rejects_text_and_file_together():
     workspace_dir = _make_workspace("execute-excel-script-conflict")
     executor = ThreadPoolExecutor(max_workers=1)
@@ -5261,6 +5365,94 @@ async def test_file_tool_service_execute_excel_script_returns_traceback_on_failu
     assert payload["error"] == "boom"
     assert "ValueError: boom" in payload["traceback"]
     assert payload["script"] == "raise ValueError('boom')"
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_handles_invalid_result_json():
+    workspace_dir = _make_workspace("execute-excel-script-invalid-result-json")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+
+        def _invalid_result_runner(*, result_path: Path, **_kwargs) -> str:
+            return (
+                "from pathlib import Path\n"
+                f"Path({str(result_path.resolve())!r}).write_text('not json', encoding='utf-8')\n"
+            )
+
+        with patch.object(
+            service._excel_script_service,
+            "_build_runner_script",
+            side_effect=_invalid_result_runner,
+        ):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "Excel 脚本结果解析失败"
+    assert "not json" not in payload["traceback"]
+    assert payload["script"] == "result_text = 'ok'"
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_handles_result_read_error(
+    monkeypatch,
+):
+    workspace_dir = _make_workspace("execute-excel-script-result-read-error")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        original_read_text = Path.read_text
+
+        def _broken_read_text(self, *args, **kwargs):
+            if self.name == "result.json":
+                raise OSError("read failed")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _broken_read_text)
+        result = await service.execute_excel_script(
+            event,
+            script="result_text = 'ok'",
+        )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "Excel 脚本结果解析失败"
+    assert "read failed" in payload["traceback"]
+    assert payload["script"] == "result_text = 'ok'"
 
 
 @pytest.mark.asyncio

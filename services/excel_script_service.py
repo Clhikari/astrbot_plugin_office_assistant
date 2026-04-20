@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -298,12 +299,21 @@ class ExcelScriptService:
             dir=str(workspace_root),
         ) as temp_dir:
             temp_root = Path(temp_dir)
+            copied_input_files: list[Path] = []
+            inputs_root = temp_root / "_inputs"
+            inputs_root.mkdir()
+            for index, original_path in enumerate(input_files):
+                copied_parent = inputs_root / str(index)
+                copied_parent.mkdir()
+                copied_path = copied_parent / original_path.name
+                shutil.copy2(original_path, copied_path)
+                copied_input_files.append(copied_path)
             runner_path = temp_root / "runner.py"
             result_path = temp_root / "result.json"
             runner_path.write_text(
                 self._build_runner_script(
                     script=script,
-                    input_files=input_files,
+                    input_files=copied_input_files,
                     output_path=output_path,
                     result_path=result_path,
                 ),
@@ -335,7 +345,16 @@ class ExcelScriptService:
                     script=script,
                 )
 
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            try:
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本结果解析失败",
+                    traceback=str(exc),
+                    script=script,
+                )
             if not payload.get("success"):
                 return ScriptProcessResult(
                     success=False,
