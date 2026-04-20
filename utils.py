@@ -112,6 +112,12 @@ class ExtractedWordContent:
     image_count: int = 0
 
 
+@dataclass(slots=True)
+class ExtractedExcelSheet:
+    name: str
+    text: str
+
+
 def format_extracted_word_content(
     content: ExtractedWordContent | None,
     *,
@@ -449,15 +455,26 @@ def _extract_doc_text_win32com(file_path: Path) -> str | None:
 
 def extract_excel_text(file_path: Path) -> str | None:
     """提取 Excel 表格文本（支持 .xlsx 和 .xls）"""
+    extracted_sheets = extract_excel_sheets(file_path)
+    if not extracted_sheets:
+        return None
+    lines: list[str] = []
+    for sheet in extracted_sheets:
+        if sheet.text:
+            lines.append(sheet.text)
+    return "\n".join(lines) if lines else None
+
+
+def extract_excel_sheets(file_path: Path) -> list[ExtractedExcelSheet] | None:
+    """提取 Excel 工作簿中每个 Sheet 的文本内容。"""
     suffix = file_path.suffix.lower()
 
-    # 旧格式 .xls 优先用 xlrd（跨平台），其次 win32com（Windows）
     if suffix == ".xls":
-        result = _extract_xls_text_xlrd(file_path)
-        if result is not None:
-            return result
+        extracted_sheets = _extract_xls_sheets_xlrd(file_path)
+        if extracted_sheets is not None:
+            return extracted_sheets
         if _WIN32COM_AVAILABLE:
-            return _extract_xls_text_win32com(file_path)
+            return _extract_xls_sheets_win32com(file_path)
         if not _IS_WINDOWS:
             logger.warning("读取 .xls 文件需要 xlrd，请安装: pip install xlrd")
         else:
@@ -466,16 +483,23 @@ def extract_excel_text(file_path: Path) -> str | None:
             )
         return None
 
-    # 新格式 .xlsx 使用 openpyxl
     try:
         from openpyxl import load_workbook
 
-        wb = load_workbook(file_path, read_only=True, data_only=True)
-        lines = []
-        for ws in wb.worksheets:
-            for row in ws.iter_rows(values_only=True):
-                lines.append("\t".join("" if v is None else str(v) for v in row))
-        return "\n".join(lines)
+        workbook = load_workbook(file_path, read_only=True, data_only=True)
+        extracted_sheets: list[ExtractedExcelSheet] = []
+        for worksheet in workbook.worksheets:
+            lines = [
+                "\t".join("" if value is None else str(value) for value in row)
+                for row in worksheet.iter_rows(values_only=True)
+            ]
+            extracted_sheets.append(
+                ExtractedExcelSheet(
+                    name=worksheet.title,
+                    text="\n".join(lines),
+                )
+            )
+        return extracted_sheets
     except ImportError:
         return None
     except Exception as e:
@@ -485,16 +509,46 @@ def extract_excel_text(file_path: Path) -> str | None:
 
 def _extract_xls_text_xlrd(file_path: Path) -> str | None:
     """使用 xlrd 提取 .xls 文件文本（跨平台）"""
+    extracted_sheets = _extract_xls_sheets_xlrd(file_path)
+    if not extracted_sheets:
+        return None
+    lines: list[str] = []
+    for sheet in extracted_sheets:
+        if sheet.text:
+            lines.append(sheet.text)
+    return "\n".join(lines) if lines else None
+
+
+def _extract_xls_text_win32com(file_path: Path) -> str | None:
+    """使用 win32com 提取 .xls 文件文本（仅 Windows）"""
+    extracted_sheets = _extract_xls_sheets_win32com(file_path)
+    if not extracted_sheets:
+        return None
+    lines: list[str] = []
+    for sheet in extracted_sheets:
+        if sheet.text:
+            lines.append(sheet.text)
+    return "\n".join(lines) if lines else None
+
+
+def _extract_xls_sheets_xlrd(file_path: Path) -> list[ExtractedExcelSheet] | None:
     try:
         import xlrd
 
-        wb = xlrd.open_workbook(str(file_path))
-        lines = []
-        for sheet in wb.sheets():
+        workbook = xlrd.open_workbook(str(file_path))
+        extracted_sheets: list[ExtractedExcelSheet] = []
+        for sheet in workbook.sheets():
+            lines = []
             for row_idx in range(sheet.nrows):
                 row_values = [str(cell.value) for cell in sheet.row(row_idx)]
                 lines.append("\t".join(row_values))
-        return "\n".join(lines) if lines else None
+            extracted_sheets.append(
+                ExtractedExcelSheet(
+                    name=sheet.name,
+                    text="\n".join(lines),
+                )
+            )
+        return extracted_sheets
     except ImportError:
         return None
     except Exception as e:
@@ -502,15 +556,17 @@ def _extract_xls_text_xlrd(file_path: Path) -> str | None:
         return None
 
 
-def _extract_xls_text_win32com(file_path: Path) -> str | None:
-    """使用 win32com 提取 .xls 文件文本（仅 Windows）"""
+def _extract_xls_sheets_win32com(
+    file_path: Path,
+) -> list[ExtractedExcelSheet] | None:
     try:
         with com_application("Excel.Application") as app:
-            wb = app.Workbooks.Open(str(file_path.resolve()))
+            workbook = app.Workbooks.Open(str(file_path.resolve()))
             try:
-                lines = []
-                for ws in wb.Worksheets:
-                    used_range = ws.UsedRange
+                extracted_sheets: list[ExtractedExcelSheet] = []
+                for worksheet in workbook.Worksheets:
+                    used_range = worksheet.UsedRange
+                    lines = []
                     if used_range:
                         for row in used_range.Rows:
                             row_values = [
@@ -518,10 +574,16 @@ def _extract_xls_text_win32com(file_path: Path) -> str | None:
                                 for cell in row.Cells
                             ]
                             lines.append("\t".join(row_values))
-                return "\n".join(lines) if lines else None
+                    extracted_sheets.append(
+                        ExtractedExcelSheet(
+                            name=str(worksheet.Name),
+                            text="\n".join(lines),
+                        )
+                    )
+                return extracted_sheets
             finally:
                 with suppress(Exception):
-                    wb.Close(SaveChanges=False)
+                    workbook.Close(SaveChanges=False)
     except Exception as e:
         logger.warning(f".xls 文本提取失败: {e}", exc_info=True)
         return None

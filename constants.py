@@ -84,6 +84,7 @@ DOCUMENT_BLOCK_SPACING_MAX = 72.0
 #         document tool 名称定义在 agent_tools/document_tools.py 的 name 字段。
 FILE_TOOLS = (
     "read_file",
+    "read_workbook",
     "create_office_file",
     "create_document",
     "add_blocks",
@@ -92,6 +93,7 @@ FILE_TOOLS = (
     "create_workbook",
     "write_rows",
     "export_workbook",
+    "execute_excel_script",
     "convert_to_pdf",
     "convert_from_pdf",
 )

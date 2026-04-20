@@ -11,6 +11,7 @@ from ..constants import (
 from .file_delivery_service import FileDeliveryService
 from .file_read_service import FileReadService
 from .generated_file_delivery_service import GeneratedFileDeliveryService
+from .excel_script_service import ExcelScriptService
 from .office_generate_service import OfficeGenerateService
 from .pdf_convert_service import PdfConvertService
 from .word_read_service import WordReadService
@@ -58,14 +59,17 @@ class FileToolService:
         check_permission=None,
         group_feature_disabled_error=None,
         file_read_service=None,
+        excel_script_service=None,
         office_generate_service=None,
         pdf_convert_service=None,
     ) -> None:
-        if (
+        needs_permission_callbacks = (
             file_read_service is None
             or office_generate_service is None
             or pdf_convert_service is None
-        ) and (
+            or (excel_script_service is None and workspace_service is not None)
+        )
+        if needs_permission_callbacks and (
             is_group_feature_enabled is None
             or check_permission is None
             or group_feature_disabled_error is None
@@ -114,6 +118,16 @@ class FileToolService:
             check_permission=check_permission,
             group_feature_disabled_error=group_feature_disabled_error,
         )
+        self._excel_script_service = excel_script_service
+        if self._excel_script_service is None and workspace_service is not None:
+            self._excel_script_service = ExcelScriptService(
+                workspace_service=workspace_service,
+                file_delivery_service=generated_output_delivery_service,
+                allow_external_input_files=allow_external_input_files,
+                is_group_feature_enabled=is_group_feature_enabled,
+                check_permission=check_permission,
+                group_feature_disabled_error=group_feature_disabled_error,
+            )
         self._office_generate_service = (
             office_generate_service
             or OfficeGenerateService(
@@ -153,6 +167,49 @@ class FileToolService:
         filename: str = "",
     ) -> str | None:
         return await self._file_read_service.read_file(event, filename)
+
+    async def iter_read_workbook_tool_results(
+        self,
+        event: AstrMessageEvent,
+        filename: str = "",
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
+        async for result in self._file_read_service.iter_read_workbook_tool_results(
+            event,
+            filename,
+        ):
+            yield result
+
+    async def read_workbook(
+        self,
+        event,
+        filename: str = "",
+    ) -> str | None:
+        return await self._file_read_service.read_workbook(event, filename)
+
+    async def execute_excel_script(
+        self,
+        event,
+        *,
+        script: str,
+        input_files: list[str] | None = None,
+        output_name: str | None = None,
+    ) -> str:
+        if self._excel_script_service is None:
+            self._raise_missing_dependencies(
+                "excel_script_service",
+                [
+                    "workspace_service",
+                    "is_group_feature_enabled",
+                    "check_permission",
+                    "group_feature_disabled_error",
+                ],
+            )
+        return await self._excel_script_service.execute_excel_script(
+            event,
+            script=script,
+            input_files=input_files,
+            output_name=output_name,
+        )
 
     async def create_office_file(
         self,

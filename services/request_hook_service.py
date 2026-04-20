@@ -23,6 +23,7 @@ from ..internal_hooks import (
     run_tool_exposure_hooks,
 )
 from .prompt_context_service import PromptContextService, PromptSection
+from .excel_intent_router import ExcelIntentRouter
 from .request_follow_up import (
     FollowUpNoticeStrategy,
     IdentifierDescriptor,
@@ -32,7 +33,6 @@ from .request_follow_up import (
 from .request_hook_notice_helpers import (
     FollowUpNoticeHelper,
     FollowUpNoticeRule,
-    WorkbookGuideMatcher,
 )
 from .upload_types import UploadInfo
 
@@ -102,6 +102,9 @@ class RequestHookService:
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
     _DOCUMENT_DETAIL_NOTICE_KEY = "document_detail_guide"
+    _EXCEL_ROUTING_NOTICE_KEY = "excel_routing_guide"
+    _EXCEL_READ_NOTICE_KEY = "excel_read_guide"
+    _EXCEL_SCRIPT_NOTICE_KEY = "excel_script_guide"
     _WORKBOOK_CORE_NOTICE_KEY = "workbook_core_guide"
     _WORKBOOK_DETAIL_NOTICE_KEY = "workbook_detail_guide"
 
@@ -182,7 +185,7 @@ class RequestHookService:
             context,
             request_text=request_text,
         )
-        self._append_workbook_tool_guides(
+        self._append_excel_tool_guides(
             context,
             request_text=request_text,
             exposed_tool_names=exposed_tool_names,
@@ -280,35 +283,56 @@ class RequestHookService:
                 self.prompt_context_service.build_document_tool_detail_section(),
             )
 
-    def _append_workbook_tool_guides(
+    def _append_excel_tool_guides(
         self,
         context: NoticeBuildContext,
         *,
         request_text: str,
         exposed_tool_names: set[str],
     ) -> None:
-        if not self._has_full_workbook_toolset_available(
-            exposed_tool_names=exposed_tool_names
-        ):
-            return
-
-        workbook_guide_decision = WorkbookGuideMatcher.detect(
+        excel_route = ExcelIntentRouter.decide(
             request_text=request_text,
-            workbook_follow_up_re=self._WORKBOOK_IDENTIFIER.follow_up_re,
+            upload_infos=self._get_cached_upload_infos(context.event),
+            explicit_tool_name=context.explicit_tool_name,
+            exposed_tool_names=exposed_tool_names,
         )
-        should_inject_core = workbook_guide_decision.inject_core
-        should_inject_detail = workbook_guide_decision.inject_detail
-        if not should_inject_core and not should_inject_detail:
+        if excel_route is None or not excel_route.should_inject_guide:
             return
 
-        if should_inject_core and self._consume_session_notice_once(
-            context.event, self._WORKBOOK_CORE_NOTICE_KEY
+        if self._consume_session_notice_once(
+            context.event, self._EXCEL_ROUTING_NOTICE_KEY
         ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_excel_routing_section(),
+            )
+
+        if excel_route.route == "read_existing":
+            if self._consume_session_notice_once(
+                context.event, self._EXCEL_READ_NOTICE_KEY
+            ):
+                self._append_notice_section(
+                    context,
+                    self.prompt_context_service.build_excel_read_section(),
+                )
+            return
+
+        if excel_route.requires_script:
+            if self._consume_session_notice_once(
+                context.event, self._EXCEL_SCRIPT_NOTICE_KEY
+            ):
+                self._append_notice_section(
+                    context,
+                    self.prompt_context_service.build_excel_script_section(),
+                )
+            return
+
+        if self._consume_session_notice_once(context.event, self._WORKBOOK_CORE_NOTICE_KEY):
             self._append_notice_section(
                 context,
                 self.prompt_context_service.build_workbook_tool_guide_section(),
             )
-        if should_inject_detail and self._consume_session_notice_once(
+        if excel_route.should_inject_detail and self._consume_session_notice_once(
             context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
         ):
             self._append_notice_section(

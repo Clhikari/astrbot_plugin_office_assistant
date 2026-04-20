@@ -182,6 +182,31 @@ class FileOperationPlugin(Star):
         ):
             yield result
 
+    @llm_tool(name="read_workbook")
+    async def read_workbook(
+        self,
+        event: AstrMessageEvent,
+        filename: str = "",
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
+        """读取已有 Excel 工作簿内容。
+
+        适用场景：
+        - 读取 `.xlsx` / `.xls`
+        - 查看 Sheet 内容、统计、汇总、解释
+
+        注意：
+        - 这是 Excel 专用读取入口
+        - 不创建 workbook session，不导出新文件
+
+        Args:
+            filename(string): 要读取的 Excel 文件名。
+        """
+        async for result in self._runtime.file_tool_service.iter_read_workbook_tool_results(
+            event,
+            filename,
+        ):
+            yield result
+
     @llm_tool(name="create_office_file")
     async def create_office_file(
         self,
@@ -212,6 +237,32 @@ class FileOperationPlugin(Star):
             filename=filename,
             content=content,
             file_type=file_type,
+        )
+
+    @llm_tool(name="execute_excel_script")
+    async def execute_excel_script(
+        self,
+        event: AstrMessageEvent,
+        script: str = "",
+        input_files: list[str] | None = None,
+        output_name: str = "",
+    ) -> str:
+        """执行 Excel 脚本以生成或修改工作簿。
+
+        适用场景：
+        - 新建包含公式、图表、条件格式、数据验证的复杂 Excel
+        - 修改已有 `.xlsx` / `.xls`
+
+        Args:
+            script(string): 要执行的 Python 脚本。
+            input_files(array): 作为输入的 Excel 文件列表。
+            output_name(string): 需要返回文件时的输出文件名。
+        """
+        return await self._runtime.file_tool_service.execute_excel_script(
+            event,
+            script=script,
+            input_files=input_files,
+            output_name=output_name or None,
         )
 
     @llm_tool(name="convert_to_pdf")
