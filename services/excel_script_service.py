@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import shutil
 import subprocess
@@ -16,6 +15,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..constants import EXCEL_SUFFIXES
+from .runtime_config import resolve_computer_runtime_mode
 
 try:
     from astrbot.core.computer.computer_client import (
@@ -371,54 +371,7 @@ class ExcelScriptService:
         )
 
     def _resolve_runtime_mode(self, event: AstrMessageEvent) -> str:
-        if self._astrbot_context is None:
-            return "local"
-        get_config = getattr(self._astrbot_context, "get_config", None)
-        if not callable(get_config):
-            return "local"
-        session_id = str(getattr(event, "unified_msg_origin", "") or "")
-        config = self._get_session_config(get_config, session_id)
-        if not isinstance(config, dict):
-            return "local"
-        provider_settings = config.get("provider_settings", {})
-        if not isinstance(provider_settings, dict):
-            return "local"
-        runtime = provider_settings.get("computer_use_runtime", "local")
-        if isinstance(runtime, str) and runtime.strip():
-            return runtime.strip().lower()
-        return "local"
-
-    @staticmethod
-    def _get_session_config(get_config, session_id: str):
-        try:
-            signature = inspect.signature(get_config)
-        except (TypeError, ValueError):
-            try:
-                return get_config(session_id)
-            except TypeError:
-                try:
-                    return get_config(umo=session_id)
-                except TypeError:
-                    return get_config()
-
-        parameters = tuple(signature.parameters.values())
-        if any(
-            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
-        ) or "umo" in signature.parameters:
-            return get_config(umo=session_id)
-
-        if any(
-            parameter.kind
-            in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.VAR_POSITIONAL,
-            )
-            for parameter in parameters
-        ):
-            return get_config(session_id)
-
-        return get_config()
+        return resolve_computer_runtime_mode(self._astrbot_context, event)
 
     async def _acquire_sandbox_booter(
         self,
