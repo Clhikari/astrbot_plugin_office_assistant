@@ -88,7 +88,7 @@ class ExcelIntentRouter:
     )
     _OUTPUT_FILENAME_SUFFIX_RE = re.compile(
         r"^(?:\s*(?:作为|当作)\s*输出(?:文件)?|"
-        r"\s*(?:是|为)\s*输出(?:文件)?|\s*用于导出)",
+        r"\s*(?:是|为)\s*输出(?:文件)?)",
         flags=re.IGNORECASE,
     )
 

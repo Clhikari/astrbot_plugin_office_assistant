@@ -3153,6 +3153,19 @@ def test_excel_intent_router_keeps_output_worded_existing_filename():
     assert decision.matched_files == ("report.xlsx",)
 
 
+def test_excel_intent_router_keeps_export_purpose_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 用于导出并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
 def test_excel_intent_router_prefers_read_for_update_record_query():
     decision = ExcelIntentRouter.decide(
         request_text="请读取 report.xlsx 更新记录并总结",
@@ -3206,6 +3219,40 @@ def test_excel_intent_router_keeps_write_into_existing_filename():
     assert decision is not None
     assert decision.route == "read_existing"
     assert decision.matched_files == ("report.xlsx",)
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_phrase():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取 report.xlsx 用于导出并总结",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+    ]
+    assert "read_workbook" in context.notices[1]
+    assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
 
 
 @pytest.mark.asyncio
