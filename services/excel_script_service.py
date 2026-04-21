@@ -428,7 +428,14 @@ class ExcelScriptService:
         capabilities = getattr(booter, "capabilities", None)
         if capabilities is not None:
             required_capabilities = {"python", "filesystem"}
-            missing = sorted(required_capabilities.difference(capabilities))
+            if isinstance(capabilities, dict):
+                missing = sorted(
+                    capability
+                    for capability in required_capabilities
+                    if not capabilities.get(capability)
+                )
+            else:
+                missing = sorted(required_capabilities.difference(capabilities))
             if missing:
                 missing_text = ", ".join(missing)
                 return (

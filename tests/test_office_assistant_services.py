@@ -394,6 +394,22 @@ def test_get_session_config_accepts_positional_with_var_keyword():
     assert calls == [("session-1", {})]
 
 
+def test_get_session_config_reraises_internal_typeerror_when_signature_unavailable():
+    calls: list[str] = []
+
+    def _get_config(session_id):
+        calls.append(session_id)
+        raise TypeError("backend exploded")
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
+        side_effect=ValueError("signature unavailable"),
+    ), pytest.raises(TypeError, match="backend exploded"):
+        get_session_config(_get_config, "session-1")
+
+    assert calls == ["session-1"]
+
+
 def test_excel_script_service_join_sandbox_path_uses_windows_path_semantics():
     joined = ExcelScriptService._join_sandbox_path(
         "C:\\sandbox",
@@ -5822,6 +5838,53 @@ async def test_file_tool_service_execute_excel_script_rejects_sandbox_missing_ca
     assert second["success"] is False
     assert second["retry_count"] == 0
     assert second["retry_exhausted"] is True
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_sandbox_disabled_capability_flags():
+    workspace_dir = _make_workspace("execute-excel-script-disabled-capability-flags")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            astrbot_context=_build_astrbot_context(runtime="sandbox"),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(
+                return_value=MagicMock(
+                    capabilities={"python": True, "filesystem": False}
+                )
+            ),
+        ):
+            result = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result["success"] is False
+    assert "当前 sandbox profile 缺少必要能力：filesystem" in result["error"]
+    assert result["retry_count"] == 0
+    assert result["retry_exhausted"] is True
     runner.assert_not_awaited()
 
 

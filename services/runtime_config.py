@@ -5,16 +5,25 @@ from astrbot.api.event import AstrMessageEvent
 SUPPORTED_COMPUTER_RUNTIME_MODES = frozenset({"local", "sandbox", "none"})
 
 
+def _is_call_shape_type_error(exc: TypeError) -> bool:
+    traceback_obj = exc.__traceback__
+    return traceback_obj is not None and traceback_obj.tb_next is None
+
+
 def get_session_config(get_config, session_id: str):
     try:
         signature = inspect.signature(get_config)
     except (TypeError, ValueError):
         try:
             return get_config(session_id)
-        except TypeError:
+        except TypeError as exc:
+            if not _is_call_shape_type_error(exc):
+                raise
             try:
                 return get_config(umo=session_id)
-            except TypeError:
+            except TypeError as exc:
+                if not _is_call_shape_type_error(exc):
+                    raise
                 return get_config()
 
     parameters = tuple(signature.parameters.values())
