@@ -3181,8 +3181,35 @@ def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
     assert decision.should_inject_guide is True
 
 
+def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and update formulas",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_keeps_write_into_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请把数据写入 report.xlsx 并统计",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "create_workbook", "write_rows", "export_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
 @pytest.mark.asyncio
-async def test_request_hook_service_treats_output_xlsx_name_as_new_workbook_request():
+async def test_request_hook_service_treats_explicit_output_xlsx_name_as_new_workbook_request():
     service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [],
@@ -3196,7 +3223,7 @@ async def test_request_hook_service_treats_output_xlsx_name_as_new_workbook_requ
         NoticeBuildContext(
             event=_build_event(),
             request=ProviderRequest(
-                prompt="请生成 sales.xlsx 并汇总 Q1 销售数据",
+                prompt="请生成一个 Excel，保存为 sales.xlsx，并汇总 Q1 销售数据",
                 system_prompt="base",
                 func_tool=ToolSet(
                     [
