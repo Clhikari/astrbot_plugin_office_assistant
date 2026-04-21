@@ -2,6 +2,8 @@ import inspect
 
 from astrbot.api.event import AstrMessageEvent
 
+SUPPORTED_COMPUTER_RUNTIME_MODES = frozenset({"local", "sandbox", "none"})
+
 
 def get_session_config(get_config, session_id: str):
     try:

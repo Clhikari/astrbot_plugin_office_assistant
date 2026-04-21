@@ -1629,6 +1629,30 @@ async def test_request_hook_service_hides_execute_excel_script_for_legacy_none_r
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_unsupported_runtime():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbx"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_keeps_execute_excel_script_when_runtime_lookup_fails():
     class _BrokenConfigContext:
         @staticmethod
@@ -3098,6 +3122,19 @@ def test_excel_intent_router_ignores_output_filename_when_upload_present():
     assert decision is not None
     assert decision.route == "read_existing"
     assert decision.matched_files == ("input.xlsx",)
+
+
+def test_excel_intent_router_keeps_output_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请输出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
 
 
 def test_excel_intent_router_prefers_read_for_update_record_query():
@@ -5416,7 +5453,7 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
         (lambda _event: True, lambda _event: False, "错误：权限不足"),
     ],
 )
-async def test_file_tool_service_execute_excel_script_validation_errors_do_not_consume_retry_budget(
+async def test_file_tool_service_execute_excel_script_system_errors_stop_retry_without_consuming_budget(
     is_group_feature_enabled,
     check_permission,
     expected_error,
@@ -5449,11 +5486,11 @@ async def test_file_tool_service_execute_excel_script_validation_errors_do_not_c
     assert first["success"] is False
     assert first["error"] == expected_error
     assert first["retry_count"] == 0
-    assert first["retry_exhausted"] is False
+    assert first["retry_exhausted"] is True
     assert second["success"] is False
     assert second["error"] == expected_error
     assert second["retry_count"] == 0
-    assert second["retry_exhausted"] is False
+    assert second["retry_exhausted"] is True
     assert runner.call_count == 0
 
 
@@ -5509,7 +5546,7 @@ async def test_file_tool_service_execute_excel_script_rejects_none_runtime():
     assert payload["success"] is False
     assert "computer runtime 为 none" in payload["error"]
     assert payload["retry_count"] == 0
-    assert payload["retry_exhausted"] is False
+    assert payload["retry_exhausted"] is True
     runner.assert_not_awaited()
     mocked_get_booter.assert_not_awaited()
 
@@ -5542,7 +5579,38 @@ async def test_file_tool_service_execute_excel_script_rejects_legacy_none_runtim
     assert payload["success"] is False
     assert "computer runtime 为 none" in payload["error"]
     assert payload["retry_count"] == 0
-    assert payload["retry_exhausted"] is False
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_unsupported_runtime():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-unsupported-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="sandbx"),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "不支持的 computer runtime 配置：sandbx" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
     runner.assert_not_awaited()
     mocked_get_booter.assert_not_awaited()
 
@@ -5579,7 +5647,7 @@ async def test_file_tool_service_execute_excel_script_returns_structured_error_w
     assert payload["error"] == "错误：读取当前会话 computer runtime 失败"
     assert "config backend unavailable" in payload["traceback"]
     assert payload["retry_count"] == 0
-    assert payload["retry_exhausted"] is False
+    assert payload["retry_exhausted"] is True
     runner.assert_not_awaited()
     mocked_get_booter.assert_not_awaited()
 
@@ -5750,10 +5818,10 @@ async def test_file_tool_service_execute_excel_script_rejects_sandbox_missing_ca
     assert first["success"] is False
     assert "当前 sandbox profile 缺少必要能力：filesystem" in first["error"]
     assert first["retry_count"] == 0
-    assert first["retry_exhausted"] is False
+    assert first["retry_exhausted"] is True
     assert second["success"] is False
     assert second["retry_count"] == 0
-    assert second["retry_exhausted"] is False
+    assert second["retry_exhausted"] is True
     runner.assert_not_awaited()
 
 
@@ -5814,7 +5882,7 @@ async def test_file_tool_service_execute_excel_script_handles_sandbox_exec_excep
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_upload_failure_does_not_consume_retry_budget():
+async def test_file_tool_service_execute_excel_script_upload_failure_stops_retry_without_consuming_budget():
     class _UploadFailureSandboxBooter(_FakeSandboxBooter):
         async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
             _ = path
@@ -5867,11 +5935,11 @@ async def test_file_tool_service_execute_excel_script_upload_failure_does_not_co
     assert first["success"] is False
     assert first["error"] == "Excel 输入文件上传失败"
     assert first["retry_count"] == 0
-    assert first["retry_exhausted"] is False
+    assert first["retry_exhausted"] is True
     assert second["success"] is False
     assert second["error"] == "Excel 输入文件上传失败"
     assert second["retry_count"] == 0
-    assert second["retry_exhausted"] is False
+    assert second["retry_exhausted"] is True
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,10 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..constants import EXCEL_SUFFIXES
-from .runtime_config import resolve_computer_runtime_mode
+from .runtime_config import (
+    SUPPORTED_COMPUTER_RUNTIME_MODES,
+    resolve_computer_runtime_mode,
+)
 
 try:
     from astrbot.core.computer.computer_client import (
@@ -178,6 +181,7 @@ class ExcelScriptService:
         script: str,
         error: str,
         traceback_text: str = "",
+        retry_exhausted: bool = False,
     ) -> str:
         failure_count = self._get_failure_count(event)
         return self._build_error_result(
@@ -185,7 +189,7 @@ class ExcelScriptService:
             error=error,
             traceback_text=traceback_text,
             retry_count=self._retry_used_count(failure_count),
-            retry_exhausted=False,
+            retry_exhausted=retry_exhausted,
         )
 
     async def execute_excel_script(
@@ -216,6 +220,7 @@ class ExcelScriptService:
                 event,
                 script=normalized_script,
                 error=self._group_feature_disabled_error(),
+                retry_exhausted=True,
             )
 
         if not self._check_permission(event):
@@ -223,6 +228,7 @@ class ExcelScriptService:
                 event,
                 script=normalized_script,
                 error="错误：权限不足",
+                retry_exhausted=True,
             )
 
         resolved_input_files: list[Path] = []
@@ -287,6 +293,17 @@ class ExcelScriptService:
                 script=normalized_script,
                 error="错误：读取当前会话 computer runtime 失败",
                 traceback_text=str(exc),
+                retry_exhausted=True,
+            )
+        if runtime_mode not in SUPPORTED_COMPUTER_RUNTIME_MODES:
+            return self._build_non_retry_result(
+                event,
+                script=normalized_script,
+                error=(
+                    f"错误：不支持的 computer runtime 配置：{runtime_mode}，"
+                    "请使用 local、sandbox 或 none"
+                ),
+                retry_exhausted=True,
             )
         if runtime_mode == "none":
             return self._build_non_retry_result(
@@ -296,6 +313,7 @@ class ExcelScriptService:
                     "错误：当前 computer runtime 为 none，无法执行 Excel 脚本，"
                     "请启用 local 或 sandbox，或改走原语路径"
                 ),
+                retry_exhausted=True,
             )
 
         booter = None
@@ -309,6 +327,7 @@ class ExcelScriptService:
                     event,
                     script=normalized_script,
                     error=booter_error or "错误：Excel sandbox 不可用",
+                    retry_exhausted=True,
                 )
 
         process_result = await self._run_script_process(
@@ -320,16 +339,19 @@ class ExcelScriptService:
         )
 
         if not process_result.success:
-            build_error_result = (
-                self._build_failure_result
-                if getattr(process_result, "retryable", True)
-                else self._build_non_retry_result
-            )
-            return build_error_result(
+            if getattr(process_result, "retryable", True):
+                return self._build_failure_result(
+                    event,
+                    script=process_result.script or normalized_script,
+                    error=process_result.error or "脚本执行失败",
+                    traceback_text=process_result.traceback or "",
+                )
+            return self._build_non_retry_result(
                 event,
                 script=process_result.script or normalized_script,
                 error=process_result.error or "脚本执行失败",
                 traceback_text=process_result.traceback or "",
+                retry_exhausted=True,
             )
 
         if process_result.mode == "text":
@@ -546,6 +568,18 @@ class ExcelScriptService:
                 script=script,
                 input_files=input_files,
                 output_path=output_path,
+            )
+        if runtime_mode != "local":
+            return ScriptProcessResult(
+                success=False,
+                mode="error",
+                error=(
+                    f"错误：不支持的 computer runtime 配置：{runtime_mode}，"
+                    "请使用 local、sandbox 或 none"
+                ),
+                traceback="",
+                script=script,
+                retryable=False,
             )
         return await asyncio.to_thread(
             self._run_local_script_process,

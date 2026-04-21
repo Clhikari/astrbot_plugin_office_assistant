@@ -35,7 +35,10 @@ from .request_hook_notice_helpers import (
     FollowUpNoticeRule,
 )
 from .upload_types import UploadInfo
-from .runtime_config import resolve_computer_runtime_mode
+from .runtime_config import (
+    SUPPORTED_COMPUTER_RUNTIME_MODES,
+    resolve_computer_runtime_mode,
+)
 
 
 def _normalize_string_list(value: object) -> list[str]:
@@ -683,10 +686,16 @@ class RequestHookService:
                 f"[文件管理] 读取 Excel runtime 配置失败，跳过 execute_excel_script 显隐控制: {exc}"
             )
             return context
-        if runtime_mode != "none":
+        if runtime_mode in {"local", "sandbox"}:
             return context
         context.request.func_tool.remove_tool("execute_excel_script")
-        logger.info("[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script")
+        if runtime_mode == "none":
+            logger.info("[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script")
+            return context
+        if runtime_mode not in SUPPORTED_COMPUTER_RUNTIME_MODES:
+            logger.warning(
+                f"[文件管理] 当前 computer runtime 配置不受支持：{runtime_mode}，已隐藏 execute_excel_script"
+            )
         return context
 
     async def apply_explicit_file_tool_restriction(

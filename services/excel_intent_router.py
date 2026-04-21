@@ -79,7 +79,7 @@ class ExcelIntentRouter:
     )
     _FILENAME_RE = re.compile(r"([^\s'\"`]+?\.(?:xlsx|xls))", flags=re.IGNORECASE)
     _OUTPUT_FILENAME_PREFIX_RE = re.compile(
-        r"(文件名(?:叫|为)?|命名(?:为)?|保存(?:为|到)?|另存为|输出(?:成|为|到)?|"
+        r"(文件名(?:叫|为)?|命名(?:为)?|保存(?:为|到)|另存为|输出(?:成|为|到)|"
         r"导出(?:成|为)|生成|创建|新建|写入|写到|存为)$",
         flags=re.IGNORECASE,
     )
