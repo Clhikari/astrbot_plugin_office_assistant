@@ -417,9 +417,7 @@ class ExcelScriptService:
 
     @classmethod
     def _join_sandbox_path(cls, workspace_root: str, relative_path: PurePosixPath) -> str:
-        if len(workspace_root) >= 2 and workspace_root[1] == ":":
-            return str(PureWindowsPath(workspace_root) / relative_path.as_posix())
-        if "\\" in workspace_root:
+        if (len(workspace_root) >= 2 and workspace_root[1] == ":") or "\\" in workspace_root:
             return str(PureWindowsPath(workspace_root) / relative_path.as_posix())
         return str(PurePosixPath(workspace_root or cls._SANDBOX_WORKSPACE_ROOT) / relative_path)
 

@@ -2870,6 +2870,48 @@ async def test_request_hook_service_prefers_excel_read_notice_for_update_record_
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_prefers_excel_script_notice_for_update_data_query():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "report.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请更新 report.xlsx 中的数据并保存",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
+    ]
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
+    assert "execute_excel_script" in context.notices[1]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_skips_workbook_guide_for_xlsx_to_pdf_conversion_requests():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -3069,6 +3111,20 @@ def test_excel_intent_router_prefers_read_for_update_record_query():
     assert decision is not None
     assert decision.route == "read_existing"
     assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="请更新 report.xlsx 中的数据并保存",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
     assert decision.should_inject_guide is True
 
 

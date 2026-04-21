@@ -51,6 +51,7 @@ class ExcelIntentRouter:
         r"加公式|改样式|加样式|加图表|加条件格式|加数据验证|"
         r"(?:新增|增加|添加)\s*(?:一列|列|一行|行|sheet|工作表|公式|图表|条件格式|数据验证)|"
         r"更新\s*(?:这个|该|当前|现有|已有|原有|文件|工作簿|表格|sheet|xlsx|xls)|"
+        r"更新.{0,32}(?:数据|内容|单元格|公式|样式)|"
         r"\bmodify\b|\bedit\b|\brewrite\b)",
         flags=re.IGNORECASE,
     )
