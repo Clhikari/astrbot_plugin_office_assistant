@@ -355,6 +355,14 @@ class ExcelScriptService:
                     traceback=str(exc),
                     script=script,
                 )
+            if not isinstance(payload, dict):
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本结果解析失败",
+                    traceback=f"Unexpected JSON payload type: {type(payload).__name__}",
+                    script=script,
+                )
             if not payload.get("success"):
                 return ScriptProcessResult(
                     success=False,

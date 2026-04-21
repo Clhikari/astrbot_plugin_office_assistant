@@ -5413,6 +5413,61 @@ async def test_file_tool_service_execute_excel_script_handles_invalid_result_jso
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result_content", "traceback_fragment"),
+    [
+        ("[]", "list"),
+        ("null", "NoneType"),
+    ],
+)
+async def test_file_tool_service_execute_excel_script_handles_non_object_result_json(
+    result_content,
+    traceback_fragment,
+):
+    workspace_dir = _make_workspace("execute-excel-script-non-object-result-json")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+
+        def _non_object_result_runner(*, result_path: Path, **_kwargs) -> str:
+            return (
+                "from pathlib import Path\n"
+                f"Path({str(result_path.resolve())!r}).write_text({result_content!r}, encoding='utf-8')\n"
+            )
+
+        with patch.object(
+            service._excel_script_service,
+            "_build_runner_script",
+            side_effect=_non_object_result_runner,
+        ):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "Excel 脚本结果解析失败"
+    assert traceback_fragment in payload["traceback"]
+    assert payload["script"] == "result_text = 'ok'"
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_handles_result_read_error(
     monkeypatch,
 ):
