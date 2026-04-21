@@ -17,11 +17,6 @@ def get_session_config(get_config, session_id: str):
 
     parameters = tuple(signature.parameters.values())
     if any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
-    ) or "umo" in signature.parameters:
-        return get_config(umo=session_id)
-
-    if any(
         parameter.kind
         in (
             inspect.Parameter.POSITIONAL_ONLY,
@@ -31,6 +26,11 @@ def get_session_config(get_config, session_id: str):
         for parameter in parameters
     ):
         return get_config(session_id)
+
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    ) or "umo" in signature.parameters:
+        return get_config(umo=session_id)
 
     return get_config()
 

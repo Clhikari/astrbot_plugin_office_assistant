@@ -70,6 +70,9 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
     PromptContextService,
 )
+from astrbot_plugin_office_assistant.services.runtime_config import (
+    get_session_config,
+)
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
     ExtractedWordItem,
@@ -154,6 +157,32 @@ def _build_astrbot_context(*, runtime: str = "sandbox"):
         "provider_settings": {"computer_use_runtime": runtime}
     }
     return context
+
+
+def test_get_session_config_prefers_positional_before_umo_keyword():
+    calls: list[tuple[str, str | None]] = []
+
+    def _get_config(config, *, umo=None):
+        calls.append((config, umo))
+        return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    result = get_session_config(_get_config, "session-1")
+
+    assert result == {"provider_settings": {"computer_use_runtime": "sandbox"}}
+    assert calls == [("session-1", None)]
+
+
+def test_get_session_config_accepts_positional_with_var_keyword():
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def _get_config(session_id, **kwargs):
+        calls.append((session_id, kwargs))
+        return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    result = get_session_config(_get_config, "session-1")
+
+    assert result == {"provider_settings": {"computer_use_runtime": "sandbox"}}
+    assert calls == [("session-1", {})]
 
 
 class _FakeSandboxPython:
