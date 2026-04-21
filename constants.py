@@ -68,6 +68,12 @@ SUFFIX_TO_OFFICE_TYPE = {v: k for k, v in OFFICE_EXTENSIONS.items()} | {
     ".ppt": OfficeType.POWERPOINT,
 }
 
+EXCEL_SUFFIXES = frozenset(
+    suffix
+    for suffix, office_type in SUFFIX_TO_OFFICE_TYPE.items()
+    if office_type is OfficeType.EXCEL
+)
+
 # 所有可读取的 Office 格式（新旧）
 ALL_OFFICE_SUFFIXES = frozenset(SUFFIX_TO_OFFICE_TYPE.keys())
 

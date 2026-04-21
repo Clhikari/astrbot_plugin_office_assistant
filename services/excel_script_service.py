@@ -13,6 +13,8 @@ from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
+from ..constants import EXCEL_SUFFIXES
+
 
 @dataclass(frozen=True, slots=True)
 class ScriptProcessResult:
@@ -26,7 +28,7 @@ class ScriptProcessResult:
 
 
 class ExcelScriptService:
-    _EXCEL_SUFFIXES = frozenset({".xlsx", ".xls"})
+    _EXCEL_SUFFIXES = EXCEL_SUFFIXES
     _MAX_SCRIPT_RETRIES = 2
     _RETRY_COUNT_EVENT_KEY = "office_assistant_excel_script_retry_failures"
 
@@ -143,6 +145,23 @@ class ExcelScriptService:
             retry_exhausted=False,
         )
 
+    def _build_non_retry_result(
+        self,
+        event: AstrMessageEvent,
+        *,
+        script: str,
+        error: str,
+        traceback_text: str = "",
+    ) -> str:
+        failure_count = self._get_failure_count(event)
+        return self._build_error_result(
+            script=script,
+            error=error,
+            traceback_text=traceback_text,
+            retry_count=self._retry_used_count(failure_count),
+            retry_exhausted=False,
+        )
+
     async def execute_excel_script(
         self,
         event: AstrMessageEvent,
@@ -160,21 +179,21 @@ class ExcelScriptService:
                 failure_count=current_failure_count,
             )
         if not normalized_script:
-            return self._build_failure_result(
+            return self._build_non_retry_result(
                 event,
                 script=script or "",
                 error="缺少 script 参数",
             )
 
         if not self._is_group_feature_enabled(event):
-            return self._build_failure_result(
+            return self._build_non_retry_result(
                 event,
                 script=normalized_script,
                 error=self._group_feature_disabled_error(),
             )
 
         if not self._check_permission(event):
-            return self._build_failure_result(
+            return self._build_non_retry_result(
                 event,
                 script=normalized_script,
                 error="错误：权限不足",
@@ -193,13 +212,13 @@ class ExcelScriptService:
                 group_feature_disabled_error=self._group_feature_disabled_error,
             )
             if not ok:
-                return self._build_failure_result(
+                return self._build_non_retry_result(
                     event,
                     script=normalized_script,
                     error=err or "错误：未知错误",
                 )
             if resolved_path is None:
-                return self._build_failure_result(
+                return self._build_non_retry_result(
                     event,
                     script=normalized_script,
                     error="错误：输入文件路径解析失败",
@@ -219,13 +238,13 @@ class ExcelScriptService:
                 group_feature_disabled_error=self._group_feature_disabled_error,
             )
             if not ok:
-                return self._build_failure_result(
+                return self._build_non_retry_result(
                     event,
                     script=normalized_script,
                     error=err or "错误：未知错误",
                 )
             if resolved_path is None:
-                return self._build_failure_result(
+                return self._build_non_retry_result(
                     event,
                     script=normalized_script,
                     error="错误：输出文件路径解析失败",
@@ -326,6 +345,7 @@ class ExcelScriptService:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    shell=False,
                 )
             except subprocess.TimeoutExpired as exc:
                 return ScriptProcessResult(
@@ -380,11 +400,41 @@ class ExcelScriptService:
                     result_text=str(payload.get("result_text", "")),
                 )
             if mode == "file":
-                resolved_output_path = (
-                    Path(str(payload.get("output_path")))
-                    if payload.get("output_path")
-                    else output_path
-                )
+                output_path_value = payload.get("output_path")
+                if not isinstance(output_path_value, str) or not output_path_value.strip():
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但缺少 output_path",
+                        traceback="",
+                        script=script,
+                    )
+                if output_path is None:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但当前请求未提供 output_path",
+                        traceback="",
+                        script=script,
+                    )
+                resolved_output_path = Path(output_path_value).resolve(strict=False)
+                expected_output_path = output_path.resolve(strict=False)
+                if resolved_output_path != expected_output_path:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了无效的 output_path",
+                        traceback=f"Unexpected output_path: {output_path_value}",
+                        script=script,
+                    )
+                if not resolved_output_path.exists():
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但 output_path 不存在",
+                        traceback="",
+                        script=script,
+                    )
                 return ScriptProcessResult(
                     success=True,
                     mode="file",
