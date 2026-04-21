@@ -861,6 +861,7 @@ class ExcelScriptService:
                     cwd=str(workspace_root),
                     capture_output=True,
                     text=True,
+                    shell=False,
                     timeout=self._SCRIPT_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired as exc:
