@@ -723,7 +723,14 @@ class RequestHookService:
     ) -> ToolExposureContext:
         if not (context.should_expose and context.request.func_tool):
             return context
-        if self._resolve_excel_runtime_mode(context.event) != "none":
+        try:
+            runtime_mode = self._resolve_excel_runtime_mode(context.event)
+        except Exception as exc:
+            logger.warning(
+                f"[文件管理] 读取 Excel runtime 配置失败，跳过 execute_excel_script 显隐控制: {exc}"
+            )
+            return context
+        if runtime_mode != "none":
             return context
         context.request.func_tool.remove_tool("execute_excel_script")
         logger.info("[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script")

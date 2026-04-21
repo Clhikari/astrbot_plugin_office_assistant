@@ -1371,6 +1371,50 @@ async def test_request_hook_service_hides_execute_excel_script_for_none_runtime(
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_keeps_execute_excel_script_when_runtime_lookup_fails():
+    class _BrokenConfigContext:
+        @staticmethod
+        def get_config(*_args, **_kwargs):
+            raise RuntimeError("config backend unavailable")
+
+    request = ProviderRequest(
+        prompt="请生成一个带公式的 Excel 报表",
+        system_prompt="base",
+        func_tool=ToolSet(
+            [
+                _tool("read_workbook"),
+                _tool("execute_excel_script"),
+                _tool("astrbot_execute_shell"),
+            ]
+        ),
+    )
+    service = RequestHookService(
+        astrbot_context=_BrokenConfigContext(),
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+    context = SimpleNamespace(
+        event=_build_event(),
+        request=request,
+        should_expose=True,
+        can_process_upload=True,
+        explicit_tool_name=None,
+    )
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_skips_explicit_restriction_for_unavailable_workbook_tool():
     request = ProviderRequest(
         prompt="请调用 create_workbook",
@@ -5652,6 +5696,55 @@ async def test_file_tool_service_execute_excel_script_rejects_none_runtime():
     payload = json.loads(result)
     assert payload["success"] is False
     assert "computer runtime 为 none" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is False
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_returns_structured_error_when_runtime_lookup_fails():
+    class _BrokenConfigContext:
+        @staticmethod
+        def get_config(*_args, **_kwargs):
+            raise RuntimeError("config backend unavailable")
+
+    workspace_dir = _make_workspace("execute-excel-script-runtime-lookup-failure")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            astrbot_context=_BrokenConfigContext(),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "错误：读取当前会话 computer runtime 失败"
+    assert "config backend unavailable" in payload["traceback"]
     assert payload["retry_count"] == 0
     assert payload["retry_exhausted"] is False
     runner.assert_not_awaited()

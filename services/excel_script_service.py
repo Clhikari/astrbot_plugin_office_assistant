@@ -278,7 +278,16 @@ class ExcelScriptService:
             resolved_output_path = resolved_path
             resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        runtime_mode = self._resolve_runtime_mode(event)
+        try:
+            runtime_mode = self._resolve_runtime_mode(event)
+        except Exception as exc:
+            logger.warning(f"[文件管理] 读取 Excel runtime 配置失败: {exc}")
+            return self._build_non_retry_result(
+                event,
+                script=normalized_script,
+                error="错误：读取当前会话 computer runtime 失败",
+                traceback_text=str(exc),
+            )
         if runtime_mode == "none":
             return self._build_non_retry_result(
                 event,
@@ -291,7 +300,10 @@ class ExcelScriptService:
 
         booter = None
         if runtime_mode == "sandbox":
-            booter, booter_error = await self._acquire_sandbox_booter(event)
+            booter, booter_error = await self._acquire_sandbox_booter(
+                event,
+                runtime_mode=runtime_mode,
+            )
             if booter is None:
                 return self._build_non_retry_result(
                     event,
@@ -411,12 +423,20 @@ class ExcelScriptService:
     async def _acquire_sandbox_booter(
         self,
         event: AstrMessageEvent,
+        *,
+        runtime_mode: str | None = None,
     ) -> tuple[object | None, str | None]:
         if self._astrbot_context is None:
             return None, "错误：当前服务未注入 AstrBot context，无法使用 sandbox"
         if _get_computer_booter is None:
             return None, "错误：当前 AstrBot 版本未提供 sandbox 执行接口"
-        if self._resolve_runtime_mode(event) != "sandbox":
+        if runtime_mode is None:
+            try:
+                runtime_mode = self._resolve_runtime_mode(event)
+            except Exception as exc:
+                logger.warning(f"[文件管理] 读取 Excel runtime 配置失败: {exc}")
+                return None, "错误：读取当前会话 computer runtime 失败"
+        if runtime_mode != "sandbox":
             return (
                 None,
                 "错误：execute_excel_script 仅支持 sandbox runtime，请在 AstrBot 中启用 sandbox",
