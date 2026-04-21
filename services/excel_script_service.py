@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import tempfile
 import textwrap
@@ -29,6 +30,7 @@ class ScriptProcessResult:
     error: str | None = None
     traceback: str | None = None
     script: str | None = None
+    retryable: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +290,12 @@ class ExcelScriptService:
         )
 
         if not process_result.success:
-            return self._build_failure_result(
+            build_error_result = (
+                self._build_failure_result
+                if getattr(process_result, "retryable", True)
+                else self._build_non_retry_result
+            )
+            return build_error_result(
                 event,
                 script=process_result.script or normalized_script,
                 error=process_result.error or "脚本执行失败",
@@ -340,10 +347,7 @@ class ExcelScriptService:
         if not callable(get_config):
             return "local"
         session_id = str(getattr(event, "unified_msg_origin", "") or "")
-        try:
-            config = get_config(umo=session_id)
-        except TypeError:
-            config = get_config()
+        config = self._get_session_config(get_config, session_id)
         if not isinstance(config, dict):
             return "local"
         provider_settings = config.get("provider_settings", {})
@@ -353,6 +357,32 @@ class ExcelScriptService:
         if isinstance(runtime, str) and runtime.strip():
             return runtime.strip()
         return "local"
+
+    @staticmethod
+    def _get_session_config(get_config, session_id: str):
+        try:
+            signature = inspect.signature(get_config)
+        except (TypeError, ValueError):
+            return get_config(umo=session_id)
+
+        parameters = tuple(signature.parameters.values())
+        if any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+        ) or "umo" in signature.parameters:
+            return get_config(umo=session_id)
+
+        if any(
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            )
+            for parameter in parameters
+        ):
+            return get_config(session_id)
+
+        return get_config()
 
     async def _acquire_sandbox_booter(
         self,
@@ -545,7 +575,7 @@ class ExcelScriptService:
                 for local_path, remote_path in zip(
                     input_files,
                     sandbox_paths.remote_input_files,
-                    strict=False,
+                    strict=True,
                 ):
                     upload_result = await booter.upload_file(str(local_path), remote_path)
                     if not upload_result.get("success", False):
@@ -555,6 +585,7 @@ class ExcelScriptService:
                             error="Excel 输入文件上传失败",
                             traceback=str(upload_result.get("message", "") or ""),
                             script=script,
+                            retryable=False,
                         )
 
                 exec_result = await booter.python.exec(

@@ -54,6 +54,9 @@ from astrbot_plugin_office_assistant.services.runtime_builder import (
     _build_workbook_toolset,
     _build_workbook_summary_lookup,
 )
+from astrbot_plugin_office_assistant.services.excel_intent_router import (
+    ExcelIntentRouter,
+)
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
     SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
@@ -2783,6 +2786,40 @@ async def test_request_hook_service_injects_excel_script_notice_for_mixed_read_m
     assert "execute_excel_script" in context.notices[1]
 
 
+def test_excel_intent_router_keeps_export_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请导出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_ignores_output_filename_when_upload_present():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
+        upload_infos=[
+            {
+                "original_name": "input.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "input.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("input.xlsx",)
+
+
 @pytest.mark.asyncio
 async def test_request_hook_service_treats_output_xlsx_name_as_new_workbook_request():
     service = RequestHookService(
@@ -5482,6 +5519,172 @@ async def test_file_tool_service_execute_excel_script_rejects_non_sandbox_runtim
     assert payload["retry_count"] == 0
     assert payload["retry_exhausted"] is False
     mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_positional_session_config():
+    class _PositionalSessionContext:
+        @staticmethod
+        def get_config(session_id):
+            assert session_id == "session-1"
+            return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    workspace_dir = _make_workspace("execute-excel-script-positional-config")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            astrbot_context=_PositionalSessionContext(),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        service._excel_script_service._run_script_process = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                mode="text",
+                result_text="ok",
+                output_path=None,
+            )
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_sandbox_missing_capabilities():
+    workspace_dir = _make_workspace("execute-excel-script-missing-capabilities")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            astrbot_context=_build_astrbot_context(runtime="sandbox"),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python",))),
+        ):
+            first = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
+            )
+            second = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert first["success"] is False
+    assert "当前 sandbox profile 缺少必要能力：filesystem" in first["error"]
+    assert first["retry_count"] == 0
+    assert first["retry_exhausted"] is False
+    assert second["success"] is False
+    assert second["retry_count"] == 0
+    assert second["retry_exhausted"] is False
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_upload_failure_does_not_consume_retry_budget():
+    class _UploadFailureSandboxBooter(_FakeSandboxBooter):
+        async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+            _ = path
+            _ = file_name
+            return {"success": False, "message": "upload failed"}
+
+    workspace_dir = _make_workspace("execute-excel-script-upload-failure")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        openpyxl = pytest.importorskip("openpyxl")
+        source_path = workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(source_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        with _patch_excel_sandbox(_UploadFailureSandboxBooter(sandbox_dir)):
+            first = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                    input_files=[source_path.name],
+                )
+            )
+            second = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                    input_files=[source_path.name],
+                )
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert first["success"] is False
+    assert first["error"] == "Excel 输入文件上传失败"
+    assert first["retry_count"] == 0
+    assert first["retry_exhausted"] is False
+    assert second["success"] is False
+    assert second["error"] == "Excel 输入文件上传失败"
+    assert second["retry_count"] == 0
+    assert second["retry_exhausted"] is False
 
 
 @pytest.mark.asyncio
