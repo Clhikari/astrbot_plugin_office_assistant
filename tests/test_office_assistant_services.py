@@ -6,7 +6,7 @@ import shutil
 import traceback
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -72,6 +72,9 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
 )
 from astrbot_plugin_office_assistant.services.runtime_config import (
     get_session_config,
+)
+from astrbot_plugin_office_assistant.services.excel_script_service import (
+    ExcelScriptService,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -183,6 +186,28 @@ def test_get_session_config_accepts_positional_with_var_keyword():
 
     assert result == {"provider_settings": {"computer_use_runtime": "sandbox"}}
     assert calls == [("session-1", {})]
+
+
+def test_excel_script_service_join_sandbox_path_uses_windows_path_semantics():
+    joined = ExcelScriptService._join_sandbox_path(
+        "C:\\sandbox",
+        PurePosixPath(".office_assistant/excel_scripts/run/result.json"),
+    )
+
+    assert joined == "C:\\sandbox\\.office_assistant\\excel_scripts\\run\\result.json"
+
+
+def test_excel_script_service_build_prepare_script_uses_file_parent_in_sandbox():
+    script = ExcelScriptService._build_prepare_script(
+        [
+            "C:\\sandbox\\.office_assistant\\excel_scripts\\run\\result.json",
+            "/workspace/.office_assistant/excel_scripts/run/input.xlsx",
+        ]
+    )
+
+    assert "Path(raw_path).parent.mkdir(parents=True, exist_ok=True)" in script
+    assert "result.json" in script
+    assert "/workspace/.office_assistant/excel_scripts/run/input.xlsx" in script
 
 
 class _FakeSandboxPython:

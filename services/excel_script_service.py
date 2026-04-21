@@ -8,7 +8,7 @@ import sys
 import tempfile
 import textwrap
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from uuid import uuid4
 
 from astrbot.api import logger
@@ -418,9 +418,9 @@ class ExcelScriptService:
     @classmethod
     def _join_sandbox_path(cls, workspace_root: str, relative_path: PurePosixPath) -> str:
         if len(workspace_root) >= 2 and workspace_root[1] == ":":
-            return str(Path(workspace_root) / Path(relative_path.as_posix()))
+            return str(PureWindowsPath(workspace_root) / relative_path.as_posix())
         if "\\" in workspace_root:
-            return str(Path(workspace_root) / Path(relative_path.as_posix()))
+            return str(PureWindowsPath(workspace_root) / relative_path.as_posix())
         return str(PurePosixPath(workspace_root or cls._SANDBOX_WORKSPACE_ROOT) / relative_path)
 
     @classmethod
@@ -471,8 +471,8 @@ class ExcelScriptService:
         )
 
     @staticmethod
-    def _build_prepare_script(directory_paths: list[str]) -> str:
-        unique_paths = list(dict.fromkeys(directory_paths))
+    def _build_prepare_script(file_paths: list[str]) -> str:
+        unique_paths = list(dict.fromkeys(file_paths))
         serialized_paths = json.dumps(unique_paths, ensure_ascii=False)
         return textwrap.dedent(
             f"""
@@ -480,7 +480,7 @@ class ExcelScriptService:
             from pathlib import Path
 
             for raw_path in json.loads({serialized_paths!r}):
-                Path(raw_path).mkdir(parents=True, exist_ok=True)
+                Path(raw_path).parent.mkdir(parents=True, exist_ok=True)
             """
         ).strip()
 
@@ -581,7 +581,7 @@ class ExcelScriptService:
                     prepare_result = await booter.python.exec(
                         self._build_prepare_script(
                             [
-                                str(Path(path).parent)
+                                path
                                 for path in [
                                     *sandbox_paths.input_files,
                                     sandbox_paths.result_path,
