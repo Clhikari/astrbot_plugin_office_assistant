@@ -5575,6 +5575,61 @@ async def test_file_tool_service_execute_excel_script_accepts_positional_session
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_noarg_session_config_when_signature_unavailable():
+    class _NoArgSessionContext:
+        @staticmethod
+        def get_config():
+            return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    workspace_dir = _make_workspace("execute-excel-script-noarg-config")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            astrbot_context=_NoArgSessionContext(),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        service._excel_script_service._run_script_process = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                mode="text",
+                result_text="ok",
+                output_path=None,
+            )
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service.inspect.signature",
+            side_effect=ValueError("signature unavailable"),
+        ), patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_rejects_sandbox_missing_capabilities():
     workspace_dir = _make_workspace("execute-excel-script-missing-capabilities")
     executor = ThreadPoolExecutor(max_workers=1)
@@ -5624,6 +5679,62 @@ async def test_file_tool_service_execute_excel_script_rejects_sandbox_missing_ca
     assert second["retry_count"] == 0
     assert second["retry_exhausted"] is False
     runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_handles_sandbox_exec_exception():
+    class _ExecFailureSandboxPython(_FakeSandboxPython):
+        async def exec(
+            self,
+            code: str,
+            kernel_id: str | None = None,
+            timeout: int = 30,
+            silent: bool = False,
+        ) -> dict[str, object]:
+            _ = code
+            _ = kernel_id
+            _ = timeout
+            _ = silent
+            raise RuntimeError("sandbox rpc failed")
+
+    class _ExecFailureSandboxBooter(_FakeSandboxBooter):
+        def __init__(self, workspace_root: Path):
+            super().__init__(workspace_root)
+            self.python = _ExecFailureSandboxPython(workspace_root)
+
+    workspace_dir = _make_workspace("execute-excel-script-exec-exception")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        with _patch_excel_sandbox(_ExecFailureSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "Excel sandbox 初始化失败"
+    assert "sandbox rpc failed" in payload["traceback"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is False
 
 
 @pytest.mark.asyncio
@@ -5685,6 +5796,56 @@ async def test_file_tool_service_execute_excel_script_upload_failure_does_not_co
     assert second["error"] == "Excel 输入文件上传失败"
     assert second["retry_count"] == 0
     assert second["retry_exhausted"] is False
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_handles_upload_exception():
+    class _UploadExceptionSandboxBooter(_FakeSandboxBooter):
+        async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+            _ = path
+            _ = file_name
+            raise RuntimeError("upload rpc failed")
+
+    workspace_dir = _make_workspace("execute-excel-script-upload-exception")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        openpyxl = pytest.importorskip("openpyxl")
+        source_path = workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(source_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        with _patch_excel_sandbox(_UploadExceptionSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+                input_files=[source_path.name],
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "Excel 输入文件上传失败"
+    assert "upload rpc failed" in payload["traceback"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is False
 
 
 @pytest.mark.asyncio

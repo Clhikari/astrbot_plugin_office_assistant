@@ -363,7 +363,13 @@ class ExcelScriptService:
         try:
             signature = inspect.signature(get_config)
         except (TypeError, ValueError):
-            return get_config(umo=session_id)
+            try:
+                return get_config(session_id)
+            except TypeError:
+                try:
+                    return get_config(umo=session_id)
+                except TypeError:
+                    return get_config()
 
         parameters = tuple(signature.parameters.values())
         if any(
@@ -548,21 +554,30 @@ class ExcelScriptService:
             )
             result_path = temp_root / "result.json"
             try:
-                prepare_result = await booter.python.exec(
-                    self._build_prepare_script(
-                        [
-                            str(Path(path).parent)
-                            for path in [
-                                *sandbox_paths.input_files,
-                                sandbox_paths.result_path,
-                                sandbox_paths.output_path,
+                try:
+                    prepare_result = await booter.python.exec(
+                        self._build_prepare_script(
+                            [
+                                str(Path(path).parent)
+                                for path in [
+                                    *sandbox_paths.input_files,
+                                    sandbox_paths.result_path,
+                                    sandbox_paths.output_path,
+                                ]
+                                if path
                             ]
-                            if path
-                        ]
-                    ),
-                    timeout=10,
-                    silent=True,
-                )
+                        ),
+                        timeout=10,
+                        silent=True,
+                    )
+                except Exception as exc:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="Excel sandbox 初始化失败",
+                        traceback=str(exc),
+                        script=script,
+                    )
                 if not prepare_result.get("success", False):
                     return ScriptProcessResult(
                         success=False,
@@ -577,7 +592,19 @@ class ExcelScriptService:
                     sandbox_paths.remote_input_files,
                     strict=True,
                 ):
-                    upload_result = await booter.upload_file(str(local_path), remote_path)
+                    try:
+                        upload_result = await booter.upload_file(
+                            str(local_path),
+                            remote_path,
+                        )
+                    except Exception as exc:
+                        return ScriptProcessResult(
+                            success=False,
+                            mode="error",
+                            error="Excel 输入文件上传失败",
+                            traceback=str(exc),
+                            script=script,
+                        )
                     if not upload_result.get("success", False):
                         return ScriptProcessResult(
                             success=False,
@@ -588,16 +615,25 @@ class ExcelScriptService:
                             retryable=False,
                         )
 
-                exec_result = await booter.python.exec(
-                    self._build_runner_script(
+                try:
+                    exec_result = await booter.python.exec(
+                        self._build_runner_script(
+                            script=script,
+                            input_files=sandbox_paths.input_files,
+                            output_path=sandbox_paths.output_path,
+                            result_path=sandbox_paths.result_path,
+                        ),
+                        timeout=self._SCRIPT_TIMEOUT_SECONDS,
+                        silent=True,
+                    )
+                except Exception as exc:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="Excel 脚本执行失败",
+                        traceback=str(exc),
                         script=script,
-                        input_files=sandbox_paths.input_files,
-                        output_path=sandbox_paths.output_path,
-                        result_path=sandbox_paths.result_path,
-                    ),
-                    timeout=self._SCRIPT_TIMEOUT_SECONDS,
-                    silent=True,
-                )
+                    )
                 if not exec_result.get("success", False):
                     traceback_text = self._format_exec_traceback(exec_result)
                     error_text = "Excel 脚本执行失败"
