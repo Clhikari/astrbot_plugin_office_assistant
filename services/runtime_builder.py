@@ -141,6 +141,7 @@ def build_plugin_runtime(
         store_uploaded_file=store_uploaded_file,
     )
     file_processing_services = _build_file_processing_services(
+        astrbot_context=context,
         settings=settings,
         workspace_service=workspace_service,
         delivery_service=delivery_service,
@@ -315,6 +316,7 @@ def _build_workbook_summary_lookup(workbook_toolset):
 
 def _build_file_processing_services(
     *,
+    astrbot_context,
     settings: PluginSettings,
     workspace_service: WorkspaceService,
     delivery_service: DeliveryService,
@@ -363,6 +365,7 @@ def _build_file_processing_services(
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
     )
     file_tool_service = FileToolService(
+        astrbot_context=astrbot_context,
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,

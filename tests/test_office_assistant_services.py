@@ -1,6 +1,9 @@
 import base64
+import contextlib
 import json
+import io
 import shutil
+import traceback
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -142,6 +145,105 @@ def _make_workspace(name: str) -> Path:
     return workspace_dir
 
 
+def _build_astrbot_context(*, runtime: str = "sandbox"):
+    context = MagicMock()
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "provider_settings": {"computer_use_runtime": runtime}
+    }
+    return context
+
+
+class _FakeSandboxPython:
+    def __init__(self, workspace_root: Path):
+        self._workspace_root = workspace_root
+
+    async def exec(
+        self,
+        code: str,
+        kernel_id: str | None = None,
+        timeout: int = 30,
+        silent: bool = False,
+    ) -> dict[str, object]:
+        _ = kernel_id
+        _ = timeout
+        globals_dict = {"__name__": "__main__"}
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+                stderr_buffer
+            ):
+                exec(compile(code, "<fake-sandbox>", "exec"), globals_dict, globals_dict)
+        except Exception:
+            if not stderr_buffer.getvalue():
+                stderr_buffer.write(traceback.format_exc())
+            error_text = stderr_buffer.getvalue()
+            return {
+                "success": False,
+                "output": "" if silent else stdout_buffer.getvalue(),
+                "error": error_text,
+                "data": {
+                    "output": {"text": "" if silent else stdout_buffer.getvalue()},
+                    "error": error_text,
+                },
+            }
+
+        output_text = "" if silent else stdout_buffer.getvalue()
+        return {
+            "success": True,
+            "output": output_text,
+            "error": stderr_buffer.getvalue(),
+            "data": {
+                "output": {"text": output_text},
+                "error": stderr_buffer.getvalue(),
+            },
+        }
+
+
+class _FakeSandboxBooter:
+    def __init__(
+        self,
+        workspace_root: Path,
+        *,
+        capabilities: tuple[str, ...] = ("python", "filesystem"),
+    ):
+        self.workspace_root = str(workspace_root)
+        self.capabilities = capabilities
+        self.python = _FakeSandboxPython(workspace_root)
+
+    def _resolve_remote_path(self, path: str) -> Path:
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            return path_obj
+        return Path(self.workspace_root) / path_obj
+
+    async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+        source = Path(path)
+        destination = Path(self.workspace_root) / Path(file_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return {
+            "success": True,
+            "message": "uploaded",
+            "file_path": str(destination),
+        }
+
+    async def download_file(self, remote_path: str, local_path: str) -> None:
+        source = self._resolve_remote_path(remote_path)
+        if not source.exists():
+            raise FileNotFoundError(remote_path)
+        destination = Path(local_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def _patch_excel_sandbox(booter):
+    return patch(
+        "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+        new=AsyncMock(return_value=booter),
+    )
+
+
 def _write_png(path: Path) -> None:
     png_bytes = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9kAAAAASUVORK5CYII="
@@ -172,6 +274,7 @@ def _node_render_backend_config_for_tests() -> DocumentRenderBackendConfig:
 
 def _build_file_tool_service(
     *,
+    astrbot_context=None,
     workspace_service,
     office_generator=None,
     pdf_converter=None,
@@ -186,7 +289,9 @@ def _build_file_tool_service(
     group_feature_disabled_error=None,
 ):
     delivery_service = delivery_service or MagicMock()
+    astrbot_context = astrbot_context or _build_astrbot_context()
     return FileToolService(
+        astrbot_context=astrbot_context,
         workspace_service=workspace_service,
         office_generator=office_generator or MagicMock(),
         pdf_converter=pdf_converter or MagicMock(),
@@ -5191,6 +5296,8 @@ async def test_file_tool_service_read_workbook_rejects_non_excel_suffix():
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_returns_text_result():
     workspace_dir = _make_workspace("execute-excel-script-text")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5209,17 +5316,17 @@ async def test_file_tool_service_execute_excel_script_returns_text_result():
             delivery_service=delivery_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "worksheet = workbook.active\n"
-                "worksheet.title = '总表'\n"
-                "worksheet['A1'] = '值'\n"
-                "result_text = worksheet['A1'].value\n"
-            ),
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = '总表'\n"
+                    "worksheet['A1'] = '值'\n"
+                    "result_text = worksheet['A1'].value\n"
+                ),
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5234,6 +5341,8 @@ async def test_file_tool_service_execute_excel_script_returns_text_result():
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_returns_generated_file():
     workspace_dir = _make_workspace("execute-excel-script-file")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5252,17 +5361,17 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
             delivery_service=delivery_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "worksheet = workbook.active\n"
-                "worksheet['A1'] = '导出'\n"
-                "workbook.save(output_path)\n"
-            ),
-            output_name="script-output.xlsx",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet['A1'] = '导出'\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="script-output.xlsx",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5336,8 +5445,50 @@ async def test_file_tool_service_execute_excel_script_validation_errors_do_not_c
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_non_sandbox_runtime():
+    workspace_dir = _make_workspace("execute-excel-script-non-sandbox")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            astrbot_context=_build_astrbot_context(runtime="local"),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "仅支持 sandbox runtime" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is False
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
     workspace_dir = _make_workspace("execute-excel-script-input-copy")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5359,18 +5510,18 @@ async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = load_workbook(input_files[0])\n"
-                "worksheet = workbook.active\n"
-                "worksheet['A1'] = '已修改'\n"
-                "workbook.save(input_files[0])\n"
-                "result_text = worksheet['A1'].value\n"
-            ),
-            input_files=[source_path.name],
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = load_workbook(input_files[0])\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet['A1'] = '已修改'\n"
+                    "workbook.save(input_files[0])\n"
+                    "result_text = worksheet['A1'].value\n"
+                ),
+                input_files=[source_path.name],
+            )
         reloaded = openpyxl.load_workbook(source_path)
     finally:
         executor.shutdown(wait=False)
@@ -5386,6 +5537,8 @@ async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_separate():
     workspace_dir = _make_workspace("execute-excel-script-same-name-inputs")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5417,18 +5570,18 @@ async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_se
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "values = []\n"
-                "for path in input_files:\n"
-                "    workbook = load_workbook(path)\n"
-                "    values.append(workbook.active['A1'].value)\n"
-                "result_text = '|'.join(values)\n"
-            ),
-            input_files=["north/sales.xlsx", "south/sales.xlsx"],
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "values = []\n"
+                    "for path in input_files:\n"
+                    "    workbook = load_workbook(path)\n"
+                    "    values.append(workbook.active['A1'].value)\n"
+                    "result_text = '|'.join(values)\n"
+                ),
+                input_files=["north/sales.xlsx", "south/sales.xlsx"],
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5442,6 +5595,8 @@ async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_se
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_rejects_text_and_file_together():
     workspace_dir = _make_workspace("execute-excel-script-conflict")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5457,16 +5612,16 @@ async def test_file_tool_service_execute_excel_script_rejects_text_and_file_toge
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "workbook.save(output_path)\n"
-                "result_text = 'done'\n"
-            ),
-            output_name="conflict.xlsx",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "workbook.save(output_path)\n"
+                    "result_text = 'done'\n"
+                ),
+                output_name="conflict.xlsx",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5480,6 +5635,8 @@ async def test_file_tool_service_execute_excel_script_rejects_text_and_file_toge
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_returns_traceback_on_failure():
     workspace_dir = _make_workspace("execute-excel-script-error")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5495,11 +5652,11 @@ async def test_file_tool_service_execute_excel_script_returns_traceback_on_failu
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script="raise ValueError('boom')",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="raise ValueError('boom')",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5514,6 +5671,8 @@ async def test_file_tool_service_execute_excel_script_returns_traceback_on_failu
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_handles_invalid_result_json():
     workspace_dir = _make_workspace("execute-excel-script-invalid-result-json")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5530,10 +5689,11 @@ async def test_file_tool_service_execute_excel_script_handles_invalid_result_jso
             office_libs={"openpyxl": object()},
         )
 
-        def _invalid_result_runner(*, result_path: Path, **_kwargs) -> str:
+        def _invalid_result_runner(*, result_path: str, **_kwargs) -> str:
+            result_file = Path(result_path)
             return (
                 "from pathlib import Path\n"
-                f"Path({str(result_path.resolve())!r}).write_text('not json', encoding='utf-8')\n"
+                f"Path({str(result_file)!r}).write_text('not json', encoding='utf-8')\n"
             )
 
         with patch.object(
@@ -5541,10 +5701,11 @@ async def test_file_tool_service_execute_excel_script_handles_invalid_result_jso
             "_build_runner_script",
             side_effect=_invalid_result_runner,
         ):
-            result = await service.execute_excel_script(
-                event,
-                script="result_text = 'ok'",
-            )
+            with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+                result = await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5569,6 +5730,8 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
     traceback_fragment,
 ):
     workspace_dir = _make_workspace("execute-excel-script-non-object-result-json")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5585,10 +5748,11 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
             office_libs={"openpyxl": object()},
         )
 
-        def _non_object_result_runner(*, result_path: Path, **_kwargs) -> str:
+        def _non_object_result_runner(*, result_path: str, **_kwargs) -> str:
+            result_file = Path(result_path)
             return (
                 "from pathlib import Path\n"
-                f"Path({str(result_path.resolve())!r}).write_text({result_content!r}, encoding='utf-8')\n"
+                f"Path({str(result_file)!r}).write_text({result_content!r}, encoding='utf-8')\n"
             )
 
         with patch.object(
@@ -5596,10 +5760,11 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
             "_build_runner_script",
             side_effect=_non_object_result_runner,
         ):
-            result = await service.execute_excel_script(
-                event,
-                script="result_text = 'ok'",
-            )
+            with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+                result = await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5633,6 +5798,8 @@ async def test_file_tool_service_execute_excel_script_validates_file_mode_output
     traceback_fragment,
 ):
     workspace_dir = _make_workspace("execute-excel-script-invalid-file-output-path")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5649,10 +5816,11 @@ async def test_file_tool_service_execute_excel_script_validates_file_mode_output
             office_libs={"openpyxl": object()},
         )
 
-        def _file_payload_runner(*, result_path: Path, **_kwargs) -> str:
+        def _file_payload_runner(*, result_path: str, **_kwargs) -> str:
+            result_file = Path(result_path)
             return (
                 "from pathlib import Path\n"
-                f"Path({str(result_path.resolve())!r}).write_text({payload_text!r}, encoding='utf-8')\n"
+                f"Path({str(result_file)!r}).write_text({payload_text!r}, encoding='utf-8')\n"
             )
 
         with patch.object(
@@ -5660,11 +5828,12 @@ async def test_file_tool_service_execute_excel_script_validates_file_mode_output
             "_build_runner_script",
             side_effect=_file_payload_runner,
         ):
-            result = await service.execute_excel_script(
-                event,
-                script="workbook = Workbook()",
-                output_name="script-output.xlsx",
-            )
+            with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+                result = await service.execute_excel_script(
+                    event,
+                    script="workbook = Workbook()",
+                    output_name="script-output.xlsx",
+                )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5683,6 +5852,8 @@ async def test_file_tool_service_execute_excel_script_handles_result_read_error(
     monkeypatch,
 ):
     workspace_dir = _make_workspace("execute-excel-script-result-read-error")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5706,10 +5877,11 @@ async def test_file_tool_service_execute_excel_script_handles_result_read_error(
             return original_read_text(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "read_text", _broken_read_text)
-        result = await service.execute_excel_script(
-            event,
-            script="result_text = 'ok'",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5748,7 +5920,10 @@ async def test_file_tool_service_execute_excel_script_marks_retry_exhausted_afte
                 script="raise ValueError('boom')",
             )
         )
-        service._excel_script_service._run_script_process = runner
+        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._acquire_sandbox_booter = AsyncMock(
+            return_value=(MagicMock(capabilities=("python", "filesystem")), None)
+        )
 
         first = json.loads(
             await service.execute_excel_script(
@@ -5812,7 +5987,10 @@ async def test_file_tool_service_execute_excel_script_stops_running_after_retry_
                 script="raise ValueError('boom')",
             )
         )
-        service._excel_script_service._run_script_process = runner
+        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._acquire_sandbox_booter = AsyncMock(
+            return_value=(MagicMock(capabilities=("python", "filesystem")), None)
+        )
 
         for _ in range(3):
             await service.execute_excel_script(
@@ -5878,7 +6056,10 @@ async def test_file_tool_service_execute_excel_script_resets_retry_count_after_s
                 ),
             ]
         )
-        service._excel_script_service._run_script_process = runner
+        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._acquire_sandbox_booter = AsyncMock(
+            return_value=(MagicMock(capabilities=("python", "filesystem")), None)
+        )
 
         first = json.loads(
             await service.execute_excel_script(
