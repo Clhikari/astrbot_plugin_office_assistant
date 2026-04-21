@@ -132,6 +132,7 @@ def build_plugin_runtime(
         after_export=handle_exported_document_tool,
     )
     request_pipeline_services = _build_request_pipeline_services(
+        astrbot_context=context,
         settings=settings,
         upload_session_service=upload_session_service,
         access_policy_service=access_policy_service,
@@ -236,6 +237,7 @@ def _build_default_document_style(settings: PluginSettings) -> dict[str, object]
 
 def _build_request_pipeline_services(
     *,
+    astrbot_context,
     settings: PluginSettings,
     upload_session_service: UploadSessionService,
     access_policy_service: AccessPolicyService,
@@ -249,6 +251,7 @@ def _build_request_pipeline_services(
     )
 
     request_hook_service = RequestHookService(
+        astrbot_context=astrbot_context,
         auto_block_execution_tools=settings.auto_block_execution_tools,
         get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
         extract_upload_source=extract_upload_source,

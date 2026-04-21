@@ -243,6 +243,40 @@ async def test_before_llm_chat_keeps_workbook_id_follow_up_prompt_lightweight():
 
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_hides_execute_excel_script_when_runtime_is_none():
+    context = MagicMock()
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "provider_settings": {"computer_use_runtime": "none"}
+    }
+    plugin = FileOperationPlugin(context=context, config=_build_config())
+    try:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = ProviderRequest(
+            prompt="请生成一个带公式和条件格式的 Excel 报表",
+            system_prompt="base",
+            func_tool=ToolSet(
+                [
+                    _tool("existing_tool"),
+                    _tool("execute_excel_script"),
+                    _tool("astrbot_execute_shell"),
+                ]
+            ),
+        )
+
+        await plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "astrbot_execute_shell" not in tool_names
+        assert "execute_excel_script" not in tool_names
+        assert "execute_excel_script" not in req.prompt
+    finally:
+        await plugin.terminate()
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_skips_document_guide_for_generic_prompt():
     context = MagicMock()
     plugin = FileOperationPlugin(context=context, config=_build_config())

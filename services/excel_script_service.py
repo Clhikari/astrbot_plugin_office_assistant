@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import shutil
+import subprocess
+import sys
 import tempfile
 import textwrap
 from dataclasses import dataclass
@@ -274,19 +278,33 @@ class ExcelScriptService:
             resolved_output_path = resolved_path
             resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        booter, booter_error = await self._acquire_sandbox_booter(event)
-        if booter is None:
+        runtime_mode = self._resolve_runtime_mode(event)
+        if runtime_mode == "none":
             return self._build_non_retry_result(
                 event,
                 script=normalized_script,
-                error=booter_error or "错误：Excel sandbox 不可用",
+                error=(
+                    "错误：当前 computer runtime 为 none，无法执行 Excel 脚本，"
+                    "请启用 local 或 sandbox，或改走原语路径"
+                ),
             )
 
+        booter = None
+        if runtime_mode == "sandbox":
+            booter, booter_error = await self._acquire_sandbox_booter(event)
+            if booter is None:
+                return self._build_non_retry_result(
+                    event,
+                    script=normalized_script,
+                    error=booter_error or "错误：Excel sandbox 不可用",
+                )
+
         process_result = await self._run_script_process(
-            booter=booter,
             script=normalized_script,
             input_files=resolved_input_files,
             output_path=resolved_output_path,
+            runtime_mode=runtime_mode,
+            booter=booter,
         )
 
         if not process_result.success:
@@ -355,7 +373,7 @@ class ExcelScriptService:
             return "local"
         runtime = provider_settings.get("computer_use_runtime", "local")
         if isinstance(runtime, str) and runtime.strip():
-            return runtime.strip()
+            return runtime.strip().lower()
         return "local"
 
     @staticmethod
@@ -534,6 +552,38 @@ class ExcelScriptService:
             logger.warning(f"[文件管理] 清理 Excel sandbox 临时目录失败: {exc}")
 
     async def _run_script_process(
+        self,
+        *,
+        script: str,
+        input_files: list[Path],
+        output_path: Path | None,
+        runtime_mode: str,
+        booter=None,
+    ) -> ScriptProcessResult:
+        if runtime_mode == "sandbox":
+            if booter is None:
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel sandbox 不可用",
+                    traceback="Missing sandbox booter",
+                    script=script,
+                    retryable=False,
+                )
+            return await self._run_sandbox_script_process(
+                booter=booter,
+                script=script,
+                input_files=input_files,
+                output_path=output_path,
+            )
+        return await asyncio.to_thread(
+            self._run_local_script_process,
+            script=script,
+            input_files=input_files,
+            output_path=output_path,
+        )
+
+    async def _run_sandbox_script_process(
         self,
         *,
         booter,
@@ -769,6 +819,158 @@ class ExcelScriptService:
             finally:
                 await self._cleanup_sandbox_exec_dir(booter, sandbox_paths.exec_dir)
 
+    def _run_local_script_process(
+        self,
+        *,
+        script: str,
+        input_files: list[Path],
+        output_path: Path | None,
+    ) -> ScriptProcessResult:
+        workspace_root = self._workspace_service.plugin_data_path.resolve()
+        with tempfile.TemporaryDirectory(
+            prefix="excel_script_",
+            dir=str(workspace_root),
+        ) as temp_dir:
+            temp_root = Path(temp_dir)
+            copied_input_files: list[Path] = []
+            inputs_root = temp_root / "_inputs"
+            inputs_root.mkdir()
+            for index, original_path in enumerate(input_files):
+                copied_parent = inputs_root / str(index)
+                copied_parent.mkdir()
+                copied_path = copied_parent / original_path.name
+                shutil.copy2(original_path, copied_path)
+                copied_input_files.append(copied_path)
+
+            runner_path = temp_root / "runner.py"
+            result_path = temp_root / "result.json"
+            runner_path.write_text(
+                self._build_runner_script(
+                    script=script,
+                    input_files=[str(path.resolve()) for path in copied_input_files],
+                    output_path=(
+                        str(output_path.resolve()) if output_path is not None else None
+                    ),
+                    result_path=str(result_path.resolve()),
+                ),
+                encoding="utf-8",
+            )
+            try:
+                completed = subprocess.run(
+                    [sys.executable, str(runner_path)],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=self._SCRIPT_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本执行超时",
+                    traceback=str(exc),
+                    script=script,
+                )
+            except OSError as exc:
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本执行失败",
+                    traceback=str(exc),
+                    script=script,
+                )
+
+            if not result_path.exists():
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本未返回结果",
+                    traceback=(completed.stderr or completed.stdout or "").strip(),
+                    script=script,
+                )
+
+            try:
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本结果解析失败",
+                    traceback=str(exc),
+                    script=script,
+                )
+            if not isinstance(payload, dict):
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error="Excel 脚本结果解析失败",
+                    traceback=f"Unexpected JSON payload type: {type(payload).__name__}",
+                    script=script,
+                )
+            if not payload.get("success"):
+                return ScriptProcessResult(
+                    success=False,
+                    mode="error",
+                    error=str(payload.get("error", "脚本执行失败")),
+                    traceback=str(payload.get("traceback", "")),
+                    script=script,
+                )
+
+            mode = str(payload.get("mode", ""))
+            if mode == "text":
+                return ScriptProcessResult(
+                    success=True,
+                    mode="text",
+                    result_text=str(payload.get("result_text", "")),
+                )
+            if mode == "file":
+                output_path_value = payload.get("output_path")
+                if not isinstance(output_path_value, str) or not output_path_value.strip():
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但缺少 output_path",
+                        traceback="",
+                        script=script,
+                    )
+                if output_path is None:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但当前请求未提供 output_path",
+                        traceback="",
+                        script=script,
+                    )
+                expected_output_path = str(output_path.resolve())
+                if output_path_value != expected_output_path:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了无效的 output_path",
+                        traceback=f"Unexpected output_path: {output_path_value}",
+                        script=script,
+                    )
+                if not output_path.exists():
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但 output_path 不存在",
+                        traceback="",
+                        script=script,
+                    )
+                return ScriptProcessResult(
+                    success=True,
+                    mode="file",
+                    output_path=output_path,
+                )
+            return ScriptProcessResult(
+                success=False,
+                mode="error",
+                error=f"未知脚本返回模式: {mode}",
+                traceback="",
+                script=script,
+            )
+
     @staticmethod
     def _build_runner_script(
         *,
@@ -792,6 +994,9 @@ class ExcelScriptService:
             output_path = Path(output_path_value) if output_path_value else None
             result_path = Path(json.loads({serialized_result_path!r}))
             script = json.loads({serialized_script!r})
+            initial_exists = output_path.exists() if output_path is not None else False
+            initial_size = output_path.stat().st_size if initial_exists else None
+            initial_mtime_ns = output_path.stat().st_mtime_ns if initial_exists else None
 
             try:
                 import openpyxl
@@ -811,7 +1016,15 @@ class ExcelScriptService:
                 exec(script, namespace, namespace)
                 result_text = namespace.get("result_text")
                 has_text = result_text is not None
-                has_file = output_path is not None and output_path.exists()
+                has_file = False
+                if output_path is not None and output_path.exists():
+                    if not initial_exists:
+                        has_file = True
+                    else:
+                        has_file = (
+                            output_path.stat().st_size != initial_size
+                            or output_path.stat().st_mtime_ns != initial_mtime_ns
+                        )
                 if has_text and has_file:
                     payload = {{
                         "success": False,

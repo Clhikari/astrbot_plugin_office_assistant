@@ -1,3 +1,4 @@
+import inspect
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -111,6 +112,7 @@ class RequestHookService:
     def __init__(
         self,
         *,
+        astrbot_context=None,
         auto_block_execution_tools: bool,
         get_cached_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]],
         extract_upload_source: Callable[
@@ -123,6 +125,7 @@ class RequestHookService:
         lookup_document_summary: Callable[[str], dict[str, object] | None] | None = None,
         lookup_workbook_summary: Callable[[str], dict[str, object] | None] | None = None,
     ) -> None:
+        self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
         self._extract_upload_source = extract_upload_source
@@ -144,6 +147,7 @@ class RequestHookService:
         ]
         self._tool_exposure_hooks = [
             self.apply_execution_tool_block,
+            self.apply_excel_script_runtime_restriction,
             self.apply_explicit_file_tool_restriction,
         ]
 
@@ -214,6 +218,56 @@ class RequestHookService:
         if not callable(names):
             return set()
         return {str(name) for name in names() if name}
+
+    def _resolve_excel_runtime_mode(self, event: AstrMessageEvent) -> str:
+        if self._astrbot_context is None:
+            return "local"
+        get_config = getattr(self._astrbot_context, "get_config", None)
+        if not callable(get_config):
+            return "local"
+        session_id = str(getattr(event, "unified_msg_origin", "") or "")
+        config = self._get_session_config(get_config, session_id)
+        if not isinstance(config, dict):
+            return "local"
+        provider_settings = config.get("provider_settings", {})
+        if not isinstance(provider_settings, dict):
+            return "local"
+        runtime = provider_settings.get("computer_use_runtime", "local")
+        if isinstance(runtime, str) and runtime.strip():
+            return runtime.strip().lower()
+        return "local"
+
+    @staticmethod
+    def _get_session_config(get_config, session_id: str):
+        try:
+            signature = inspect.signature(get_config)
+        except (TypeError, ValueError):
+            try:
+                return get_config(session_id)
+            except TypeError:
+                try:
+                    return get_config(umo=session_id)
+                except TypeError:
+                    return get_config()
+
+        parameters = tuple(signature.parameters.values())
+        if any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+        ) or "umo" in signature.parameters:
+            return get_config(umo=session_id)
+
+        if any(
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            )
+            for parameter in parameters
+        ):
+            return get_config(session_id)
+
+        return get_config()
 
     @classmethod
     def _has_workbook_tools_available(cls, *, exposed_tool_names: set[str]) -> bool:
@@ -661,6 +715,18 @@ class RequestHookService:
             for tool_name in EXECUTION_TOOLS:
                 context.request.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
+        return context
+
+    async def apply_excel_script_runtime_restriction(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        if not (context.should_expose and context.request.func_tool):
+            return context
+        if self._resolve_excel_runtime_mode(context.event) != "none":
+            return context
+        context.request.func_tool.remove_tool("execute_excel_script")
+        logger.info("[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script")
         return context
 
     async def apply_explicit_file_tool_restriction(
