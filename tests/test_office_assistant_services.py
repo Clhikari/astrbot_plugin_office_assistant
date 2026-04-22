@@ -2677,6 +2677,148 @@ async def test_request_hook_service_injects_excel_script_notice_for_mixed_read_m
     assert SECTION_STATIC_EXCEL_READ not in context.section_names
     assert "execute_excel_script" in context.notices[1]
 
+def test_excel_intent_router_keeps_export_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请导出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_ignores_output_filename_when_upload_present():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
+        upload_infos=[
+            {
+                "original_name": "input.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "input.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("input.xlsx",)
+
+
+def test_excel_intent_router_keeps_output_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请输出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_keeps_export_purpose_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 用于导出并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_prefers_read_for_update_record_query():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 更新记录并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="请更新 report.xlsx 中的数据并保存",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and update formulas",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_add_column_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and add a column",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_insert_formulas_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and insert formulas",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_keeps_write_into_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请把数据写入 report.xlsx 并统计",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "create_workbook", "write_rows", "export_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
 
 @pytest.mark.asyncio
 async def test_request_hook_service_treats_output_xlsx_name_as_new_workbook_request():

@@ -26,6 +26,11 @@ class ExcelRouteDecision:
 
 class ExcelIntentRouter:
     _MATCH_CONTEXT_WINDOW = 24
+    _ENGLISH_ADD_INSERT_TARGET_RE = (
+        r"(?:column|columns|row|rows|sheet|sheets|worksheet|worksheets|"
+        r"formula|formulas|chart|charts|style|styles|cell|cells|"
+        r"conditional formatting|data validation)"
+    )
     _WORKBOOK_TOOL_NAMES = frozenset(
         {"create_workbook", "write_rows", "export_workbook"}
     )
@@ -43,7 +48,21 @@ class ExcelIntentRouter:
     _MODIFY_RE = re.compile(
         r"(修改|补写|更新|重排|改写|调整|删除|新增|追加|插入|替换|生成新版本|"
         r"加公式|改样式|加样式|加图表|加条件格式|加数据验证|"
-        r"\bmodify\b|\bedit\b|\bupdate\b|\brewrite\b)",
+        r"\bmodify\b|\bedit\b|\bupdate\b|\brewrite\b|"
+        rf"\b(?:add|insert)\s+(?:a|an|the|new)?\s*{_ENGLISH_ADD_INSERT_TARGET_RE}\b)",
+        flags=re.IGNORECASE,
+    )
+    _EXPLICIT_MODIFY_RE = re.compile(
+        r"(修改|补写|重排|改写|调整|删除|追加|插入|替换|生成新版本|"
+        r"加公式|改样式|加样式|加图表|加条件格式|加数据验证|"
+        r"(?:新增|增加|添加)\s*(?:一列|列|一行|行|sheet|工作表|公式|图表|条件格式|数据验证)|"
+        r"更新\s*(?:这个|该|当前|现有|已有|原有|文件|工作簿|表格|sheet|xlsx|xls)|"
+        r"更新.{0,32}(?:数据|内容|单元格|公式|样式)|"
+        r"\bupdate\s+(?:this|the|current|existing|workbook|file|sheet|xlsx|xls)\b|"
+        r"\bupdate\b.{0,32}\b(?:data|content|cell|cells|formula|formulas|style|styles|"
+        r"chart|charts|sheet|sheets|worksheet|worksheets)\b|"
+        rf"\b(?:add|insert)\s+(?:a|an|the|new)?\s*{_ENGLISH_ADD_INSERT_TARGET_RE}\b|"
+        r"\bmodify\b|\bedit\b|\brewrite\b)",
         flags=re.IGNORECASE,
     )
     _NEW_RE = re.compile(
@@ -108,7 +127,9 @@ class ExcelIntentRouter:
         if cls._CONVERSION_RE.search(normalized_text):
             return None
 
-        if has_excel_file and has_modify_intent:
+        if has_excel_file and has_modify_intent and (
+            not has_read_intent or cls._has_explicit_modify_intent(normalized_text)
+        ):
             return ExcelRouteDecision(
                 route="modify_existing",
                 matched_files=matched_files,
@@ -206,6 +227,10 @@ class ExcelIntentRouter:
             cls._OUTPUT_FILENAME_PREFIX_RE.search(prefix)
             or cls._OUTPUT_FILENAME_SUFFIX_RE.search(suffix)
         )
+
+    @classmethod
+    def _has_explicit_modify_intent(cls, request_text: str) -> bool:
+        return bool(cls._EXPLICIT_MODIFY_RE.search(request_text))
 
     @classmethod
     def _can_use_workbook_primitives(
