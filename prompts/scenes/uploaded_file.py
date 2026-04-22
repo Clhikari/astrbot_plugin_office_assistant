@@ -1,7 +1,7 @@
+from ...constants import EXCEL_SUFFIXES
 from ...services.upload_types import UploadInfo
 
 MAX_DETAILED_UPLOAD_INFOS = 3
-_EXCEL_SUFFIXES = frozenset({".xlsx", ".xls"})
 
 
 def format_minimal_upload_file_info(info: UploadInfo) -> str:
@@ -116,7 +116,7 @@ def _display_upload_name(info: UploadInfo) -> str:
 def _preferred_read_tool(upload_infos: list[UploadInfo]) -> str:
     readable_infos = [info for info in upload_infos if info.get("is_supported")]
     if readable_infos and all(
-        str(info.get("file_suffix", "")).lower() in _EXCEL_SUFFIXES
+        str(info.get("file_suffix", "")).lower() in EXCEL_SUFFIXES
         for info in readable_infos
     ):
         return "read_workbook"

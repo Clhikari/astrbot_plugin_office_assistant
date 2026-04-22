@@ -11,7 +11,13 @@ import mcp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
-from ..constants import PDF_SUFFIX, SUFFIX_TO_OFFICE_TYPE, TEXT_SUFFIXES, OfficeType
+from ..constants import (
+    EXCEL_SUFFIXES,
+    PDF_SUFFIX,
+    SUFFIX_TO_OFFICE_TYPE,
+    TEXT_SUFFIXES,
+    OfficeType,
+)
 from ..utils import extract_excel_sheets, format_file_size, safe_error_message
 
 if TYPE_CHECKING:
@@ -20,7 +26,7 @@ if TYPE_CHECKING:
 
 
 class FileReadService:
-    _EXCEL_SUFFIXES = frozenset({".xlsx", ".xls"})
+    _EXCEL_SUFFIXES = EXCEL_SUFFIXES
 
     @dataclass(frozen=True, slots=True)
     class ReadTarget:
@@ -108,10 +114,6 @@ class FileReadService:
             return
 
         try:
-            if target is None:
-                yield "错误：文件路径解析失败"
-                return
-
             resolved_path = target.resolved_path
             suffix = target.suffix
             if suffix in TEXT_SUFFIXES:
@@ -194,9 +196,6 @@ class FileReadService:
         )
         if err:
             yield err
-            return
-        if target is None:
-            yield "错误：文件路径解析失败"
             return
 
         try:

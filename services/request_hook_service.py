@@ -35,6 +35,10 @@ from .request_hook_notice_helpers import (
     FollowUpNoticeRule,
 )
 from .upload_types import UploadInfo
+from .runtime_config import (
+    SUPPORTED_COMPUTER_RUNTIME_MODES,
+    resolve_computer_runtime_mode,
+)
 
 
 def _normalize_string_list(value: object) -> list[str]:
@@ -111,6 +115,7 @@ class RequestHookService:
     def __init__(
         self,
         *,
+        astrbot_context=None,
         auto_block_execution_tools: bool,
         get_cached_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]],
         extract_upload_source: Callable[
@@ -123,6 +128,7 @@ class RequestHookService:
         lookup_document_summary: Callable[[str], dict[str, object] | None] | None = None,
         lookup_workbook_summary: Callable[[str], dict[str, object] | None] | None = None,
     ) -> None:
+        self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
         self._extract_upload_source = extract_upload_source
@@ -144,6 +150,7 @@ class RequestHookService:
         ]
         self._tool_exposure_hooks = [
             self.apply_execution_tool_block,
+            self.apply_excel_script_runtime_restriction,
             self.apply_explicit_file_tool_restriction,
         ]
 
@@ -214,6 +221,9 @@ class RequestHookService:
         if not callable(names):
             return set()
         return {str(name) for name in names() if name}
+
+    def _resolve_excel_runtime_mode(self, event: AstrMessageEvent) -> str:
+        return resolve_computer_runtime_mode(self._astrbot_context, event)
 
     @classmethod
     def _has_workbook_tools_available(cls, *, exposed_tool_names: set[str]) -> bool:
@@ -661,6 +671,31 @@ class RequestHookService:
             for tool_name in EXECUTION_TOOLS:
                 context.request.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
+        return context
+
+    async def apply_excel_script_runtime_restriction(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        if not (context.should_expose and context.request.func_tool):
+            return context
+        try:
+            runtime_mode = self._resolve_excel_runtime_mode(context.event)
+        except Exception as exc:
+            logger.warning(
+                f"[文件管理] 读取 Excel runtime 配置失败，跳过 execute_excel_script 显隐控制: {exc}"
+            )
+            return context
+        if runtime_mode in {"local", "sandbox"}:
+            return context
+        context.request.func_tool.remove_tool("execute_excel_script")
+        if runtime_mode == "none":
+            logger.info("[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script")
+            return context
+        if runtime_mode not in SUPPORTED_COMPUTER_RUNTIME_MODES:
+            logger.warning(
+                f"[文件管理] 当前 computer runtime 配置不受支持：{runtime_mode}，已隐藏 execute_excel_script"
+            )
         return context
 
     async def apply_explicit_file_tool_restriction(

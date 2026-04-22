@@ -1,9 +1,12 @@
 import base64
+import contextlib
 import json
+import io
 import shutil
+import traceback
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -51,6 +54,9 @@ from astrbot_plugin_office_assistant.services.runtime_builder import (
     _build_workbook_toolset,
     _build_workbook_summary_lookup,
 )
+from astrbot_plugin_office_assistant.services.excel_intent_router import (
+    ExcelIntentRouter,
+)
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
     SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
@@ -63,6 +69,13 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_STATIC_WORKBOOK_TOOLS,
     SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
     PromptContextService,
+)
+from astrbot_plugin_office_assistant.services.runtime_config import (
+    get_session_config,
+    resolve_computer_runtime_mode,
+)
+from astrbot_plugin_office_assistant.services.excel_script_service import (
+    ExcelScriptService,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -142,6 +155,397 @@ def _make_workspace(name: str) -> Path:
     return workspace_dir
 
 
+def _build_astrbot_context(*, runtime: str = "sandbox"):
+    context = MagicMock()
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "provider_settings": {"computer_use_runtime": runtime}
+    }
+    return context
+
+
+def _build_provider_request(
+    prompt: str,
+    *,
+    tool_names: list[str] | tuple[str, ...],
+    system_prompt: str = "base",
+):
+    return ProviderRequest(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        func_tool=ToolSet([_tool(name) for name in tool_names]),
+    )
+
+
+def _build_request_hook_service(
+    *,
+    astrbot_context=None,
+    auto_block_execution_tools: bool = True,
+    get_cached_upload_infos=None,
+    extract_upload_source=None,
+    store_uploaded_file=None,
+    consume_session_notice_once=None,
+    allow_external_input_files: bool = False,
+    **kwargs,
+):
+    return RequestHookService(
+        astrbot_context=astrbot_context,
+        auto_block_execution_tools=auto_block_execution_tools,
+        get_cached_upload_infos=get_cached_upload_infos or (lambda _event: []),
+        extract_upload_source=extract_upload_source or AsyncMock(),
+        store_uploaded_file=store_uploaded_file or MagicMock(),
+        consume_session_notice_once=consume_session_notice_once
+        or _build_notice_once_callback(),
+        allow_external_input_files=allow_external_input_files,
+        **kwargs,
+    )
+
+
+def _build_tool_exposure_context(
+    request,
+    *,
+    event=None,
+    should_expose: bool = True,
+    can_process_upload: bool = True,
+    explicit_tool_name: str | None = None,
+):
+    return SimpleNamespace(
+        event=event or _build_event(),
+        request=request,
+        should_expose=should_expose,
+        can_process_upload=can_process_upload,
+        explicit_tool_name=explicit_tool_name,
+    )
+
+
+def _build_notice_context(
+    request,
+    *,
+    event=None,
+    should_expose: bool = True,
+    can_process_upload: bool = True,
+    explicit_tool_name: str | None = None,
+    notices=None,
+    section_names=None,
+    system_notices=None,
+    system_section_names=None,
+):
+    return NoticeBuildContext(
+        event=event or _build_event(),
+        request=request,
+        should_expose=should_expose,
+        can_process_upload=can_process_upload,
+        explicit_tool_name=explicit_tool_name,
+        notices=notices or [],
+        section_names=section_names or [],
+        system_notices=system_notices or [],
+        system_section_names=system_section_names or [],
+    )
+
+
+@contextlib.contextmanager
+def _managed_workspace_service(
+    *,
+    name: str | None = None,
+    plugin_data_path: Path | None = None,
+    office_libs=None,
+    max_file_size: int = 1024 * 1024,
+    feature_settings=None,
+):
+    workspace_dir = plugin_data_path or _make_workspace(name or "workspace-service")
+    executor = ThreadPoolExecutor(max_workers=1)
+    should_cleanup = plugin_data_path is None
+    try:
+        yield SimpleNamespace(
+            workspace_dir=workspace_dir,
+            executor=executor,
+            workspace_service=WorkspaceService(
+                plugin_data_path=workspace_dir,
+                executor=executor,
+                office_libs=office_libs or {},
+                max_file_size=max_file_size,
+                feature_settings=feature_settings or {},
+            ),
+        )
+    finally:
+        executor.shutdown(wait=False)
+        if should_cleanup:
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def _managed_file_tool_service(
+    *,
+    workspace_name: str | None = None,
+    plugin_data_path: Path | None = None,
+    office_libs=None,
+    workspace_office_libs=None,
+    max_file_size: int = 1024 * 1024,
+    feature_settings=None,
+    **service_kwargs,
+):
+    effective_office_libs = office_libs or {}
+    with _managed_workspace_service(
+        name=workspace_name,
+        plugin_data_path=plugin_data_path,
+        office_libs=workspace_office_libs or effective_office_libs,
+        max_file_size=max_file_size,
+        feature_settings=feature_settings,
+    ) as managed:
+        service = _build_file_tool_service(
+            workspace_service=managed.workspace_service,
+            office_libs=effective_office_libs,
+            **service_kwargs,
+        )
+        yield SimpleNamespace(
+            workspace_dir=managed.workspace_dir,
+            workspace_service=managed.workspace_service,
+            service=service,
+        )
+
+
+def _build_upload_session_service(
+    *,
+    context=None,
+    recent_text_ttl_seconds: int = 30,
+    upload_session_ttl_seconds: int = 300,
+    recent_text_max_entries: int = 32,
+    recent_text_cleanup_interval_seconds: int = 10,
+    upload_session_cleanup_interval_seconds: int = 30,
+    extract_upload_source=None,
+    store_uploaded_file=None,
+    allow_external_input_files: bool = False,
+):
+    return UploadSessionService(
+        context=context or MagicMock(),
+        recent_text_ttl_seconds=recent_text_ttl_seconds,
+        upload_session_ttl_seconds=upload_session_ttl_seconds,
+        recent_text_max_entries=recent_text_max_entries,
+        recent_text_cleanup_interval_seconds=recent_text_cleanup_interval_seconds,
+        upload_session_cleanup_interval_seconds=upload_session_cleanup_interval_seconds,
+        extract_upload_source=extract_upload_source or AsyncMock(),
+        store_uploaded_file=store_uploaded_file or MagicMock(),
+        allow_external_input_files=allow_external_input_files,
+    )
+
+
+def _build_command_service(
+    *,
+    workspace_service,
+    plugin_data_path: Path,
+    pdf_converter=None,
+    upload_session_service=None,
+    auto_delete: bool = False,
+    allow_external_input_files: bool = False,
+    enable_features_in_group: bool = True,
+    auto_block_execution_tools: bool = True,
+    reply_to_user: bool = True,
+    is_group_feature_enabled=None,
+    check_permission=None,
+    group_feature_disabled_error=None,
+    **kwargs,
+):
+    pdf_converter = pdf_converter or MagicMock()
+    if not hasattr(pdf_converter, "capabilities"):
+        pdf_converter.capabilities = {
+            "office_to_pdf": False,
+            "pdf_to_word": False,
+            "pdf_to_excel": False,
+        }
+    return CommandService(
+        workspace_service=workspace_service,
+        pdf_converter=pdf_converter,
+        plugin_data_path=plugin_data_path,
+        auto_delete=auto_delete,
+        allow_external_input_files=allow_external_input_files,
+        enable_features_in_group=enable_features_in_group,
+        auto_block_execution_tools=auto_block_execution_tools,
+        reply_to_user=reply_to_user,
+        upload_session_service=upload_session_service or MagicMock(),
+        is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
+        check_permission=check_permission or (lambda _event: True),
+        group_feature_disabled_error=group_feature_disabled_error
+        or (lambda: "group disabled"),
+        **kwargs,
+    )
+
+
+def test_get_session_config_prefers_positional_before_umo_keyword():
+    calls: list[tuple[str, str | None]] = []
+
+    def _get_config(config, *, umo=None):
+        calls.append((config, umo))
+        return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    result = get_session_config(_get_config, "session-1")
+
+    assert result == {"provider_settings": {"computer_use_runtime": "sandbox"}}
+    assert calls == [("session-1", None)]
+
+
+def test_get_session_config_accepts_positional_with_var_keyword():
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def _get_config(session_id, **kwargs):
+        calls.append((session_id, kwargs))
+        return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    result = get_session_config(_get_config, "session-1")
+
+    assert result == {"provider_settings": {"computer_use_runtime": "sandbox"}}
+    assert calls == [("session-1", {})]
+
+
+def test_get_session_config_reraises_internal_typeerror_when_signature_unavailable():
+    calls: list[str] = []
+
+    def _get_config(session_id):
+        calls.append(session_id)
+        raise TypeError("backend exploded")
+
+    with patch(
+        "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
+        side_effect=ValueError("signature unavailable"),
+    ), pytest.raises(TypeError, match="backend exploded"):
+        get_session_config(_get_config, "session-1")
+
+    assert calls == ["session-1"]
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    [
+        (False, "false"),
+        (None, "null"),
+        ("", "<empty>"),
+    ],
+)
+def test_resolve_computer_runtime_mode_marks_non_string_or_empty_values_invalid(
+    runtime,
+    expected,
+):
+    event = _build_event()
+
+    context = MagicMock()
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "provider_settings": {"computer_use_runtime": runtime}
+    }
+
+    assert resolve_computer_runtime_mode(context, event) == expected
+
+
+def test_excel_script_service_join_sandbox_path_uses_windows_path_semantics():
+    joined = ExcelScriptService._join_sandbox_path(
+        "C:\\sandbox",
+        PurePosixPath(".office_assistant/excel_scripts/run/result.json"),
+    )
+
+    assert joined == "C:\\sandbox\\.office_assistant\\excel_scripts\\run\\result.json"
+
+
+def test_excel_script_service_build_prepare_script_uses_file_parent_in_sandbox():
+    script = ExcelScriptService._build_prepare_script(
+        [
+            "C:\\sandbox\\.office_assistant\\excel_scripts\\run\\result.json",
+            "/workspace/.office_assistant/excel_scripts/run/input.xlsx",
+        ]
+    )
+
+    assert "Path(raw_path).parent.mkdir(parents=True, exist_ok=True)" in script
+    assert "result.json" in script
+    assert "/workspace/.office_assistant/excel_scripts/run/input.xlsx" in script
+
+
+class _FakeSandboxPython:
+    def __init__(self, workspace_root: Path):
+        self._workspace_root = workspace_root
+
+    async def exec(
+        self,
+        code: str,
+        kernel_id: str | None = None,
+        timeout: int = 30,
+        silent: bool = False,
+    ) -> dict[str, object]:
+        _ = kernel_id
+        _ = timeout
+        globals_dict = {"__name__": "__main__"}
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+                stderr_buffer
+            ):
+                exec(compile(code, "<fake-sandbox>", "exec"), globals_dict, globals_dict)
+        except Exception:
+            if not stderr_buffer.getvalue():
+                stderr_buffer.write(traceback.format_exc())
+            error_text = stderr_buffer.getvalue()
+            return {
+                "success": False,
+                "output": "" if silent else stdout_buffer.getvalue(),
+                "error": error_text,
+                "data": {
+                    "output": {"text": "" if silent else stdout_buffer.getvalue()},
+                    "error": error_text,
+                },
+            }
+
+        output_text = "" if silent else stdout_buffer.getvalue()
+        return {
+            "success": True,
+            "output": output_text,
+            "error": stderr_buffer.getvalue(),
+            "data": {
+                "output": {"text": output_text},
+                "error": stderr_buffer.getvalue(),
+            },
+        }
+
+
+class _FakeSandboxBooter:
+    def __init__(
+        self,
+        workspace_root: Path,
+        *,
+        capabilities: tuple[str, ...] = ("python", "filesystem"),
+    ):
+        self.workspace_root = str(workspace_root)
+        self.capabilities = capabilities
+        self.python = _FakeSandboxPython(workspace_root)
+
+    def _resolve_remote_path(self, path: str) -> Path:
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            return path_obj
+        return Path(self.workspace_root) / path_obj
+
+    async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+        source = Path(path)
+        destination = Path(self.workspace_root) / Path(file_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return {
+            "success": True,
+            "message": "uploaded",
+            "file_path": str(destination),
+        }
+
+    async def download_file(self, remote_path: str, local_path: str) -> None:
+        source = self._resolve_remote_path(remote_path)
+        if not source.exists():
+            raise FileNotFoundError(remote_path)
+        destination = Path(local_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def _patch_excel_sandbox(booter):
+    return patch(
+        "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+        new=AsyncMock(return_value=booter),
+    )
+
+
 def _write_png(path: Path) -> None:
     png_bytes = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9kAAAAASUVORK5CYII="
@@ -172,6 +576,7 @@ def _node_render_backend_config_for_tests() -> DocumentRenderBackendConfig:
 
 def _build_file_tool_service(
     *,
+    astrbot_context=None,
     workspace_service,
     office_generator=None,
     pdf_converter=None,
@@ -186,7 +591,9 @@ def _build_file_tool_service(
     group_feature_disabled_error=None,
 ):
     delivery_service = delivery_service or MagicMock()
+    astrbot_context = astrbot_context or _build_astrbot_context()
     return FileToolService(
+        astrbot_context=astrbot_context,
         workspace_service=workspace_service,
         office_generator=office_generator or MagicMock(),
         pdf_converter=pdf_converter or MagicMock(),
@@ -1185,31 +1592,18 @@ async def test_export_hook_service_aliases_post_export_hook_service():
 
 @pytest.mark.asyncio
 async def test_request_hook_service_builds_default_tool_hooks():
-    request = ProviderRequest(
-        prompt="请用 read_file 看一下 report.docx",
-        system_prompt="base",
-        func_tool=ToolSet(
-            [
-                _tool("read_file"),
-                _tool("create_document"),
-                _tool("astrbot_execute_shell"),
-                _tool("astrbot_execute_python"),
-            ]
-        ),
+    request = _build_provider_request(
+        "请用 read_file 看一下 report.docx",
+        tool_names=[
+            "read_file",
+            "create_document",
+            "astrbot_execute_shell",
+            "astrbot_execute_python",
+        ],
     )
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
-    )
-    context = SimpleNamespace(
-        event=_build_event(),
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
+    service = _build_request_hook_service()
+    context = _build_tool_exposure_context(
+        request,
         explicit_tool_name="read_file",
     )
 
@@ -1224,31 +1618,145 @@ async def test_request_hook_service_builds_default_tool_hooks():
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_skips_explicit_restriction_for_unavailable_workbook_tool():
-    request = ProviderRequest(
-        prompt="请调用 create_workbook",
-        system_prompt="base",
-        func_tool=ToolSet(
-            [
-                _tool("read_file"),
-                _tool("create_document"),
-                _tool("astrbot_execute_shell"),
-            ]
+async def test_request_hook_service_hides_execute_excel_script_for_none_runtime():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="none"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_legacy_none_runtime():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=SimpleNamespace(
+            astrbot_config={"provider_settings": {"computer_use_runtime": "none"}}
         ),
     )
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_unsupported_runtime():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
     )
-    context = SimpleNamespace(
-        event=_build_event(),
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbx"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_false_runtime_value():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime=False),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_execute_excel_script_when_runtime_lookup_fails():
+    class _BrokenConfigContext:
+        @staticmethod
+        def get_config(*_args, **_kwargs):
+            raise RuntimeError("config backend unavailable")
+
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_BrokenConfigContext(),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_explicit_restriction_for_unavailable_workbook_tool():
+    request = _build_provider_request(
+        "请调用 create_workbook",
+        tool_names=[
+            "read_file",
+            "create_document",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service()
+    context = _build_tool_exposure_context(
+        request,
         explicit_tool_name="create_workbook",
     )
 
@@ -1264,17 +1772,13 @@ async def test_request_hook_service_skips_explicit_restriction_for_unavailable_w
 
 @pytest.mark.asyncio
 async def test_request_hook_service_merges_multiple_uploaded_files_into_one_notice():
-    request = ProviderRequest(
-        prompt="根据上传文件整理内容",
-        system_prompt="base",
-        func_tool=ToolSet([_tool("read_file")]),
-    )
+    request = _build_provider_request("根据上传文件整理内容", tool_names=["read_file"])
     event = _build_event()
     event.message_obj.message = [
         Comp.File(name="report.docx", file="report.docx"),
         Comp.File(name="notes.txt", file="notes.txt"),
     ]
-    service = RequestHookService(
+    service = _build_request_hook_service(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [
             {
@@ -1294,22 +1798,9 @@ async def test_request_hook_service_merges_multiple_uploaded_files_into_one_noti
                 "source_path": "/AstrBot/data/temp/notes.txt",
             },
         ],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=True,
     )
-    context = NoticeBuildContext(
-        event=event,
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
-        notices=[],
-        section_names=[],
-        system_notices=[],
-        system_section_names=[],
-    )
+    context = _build_notice_context(request, event=event)
 
     context = await service.append_uploaded_file_notices(context)
 
@@ -1332,29 +1823,17 @@ async def test_request_hook_service_merges_multiple_uploaded_files_into_one_noti
 
 @pytest.mark.asyncio
 async def test_request_hook_service_limits_multi_file_notice_details():
-    request = ProviderRequest(
-        prompt="根据上传文件整理内容",
-        system_prompt="base",
-        func_tool=ToolSet([_tool("read_file")]),
-    )
+    request = _build_provider_request("根据上传文件整理内容", tool_names=["read_file"])
     event = _build_event()
     event.message_obj.message = [
         Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
     ]
-    service = RequestHookService(
-        auto_block_execution_tools=True,
+    service = _build_request_hook_service(
         get_cached_upload_infos=lambda _event: _build_upload_infos(5),
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
     )
-    context = SimpleNamespace(
+    context = _build_notice_context(
+        request,
         event=event,
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
         notices=[],
         section_names=[],
     )
@@ -1373,35 +1852,26 @@ async def test_request_hook_service_limits_multi_file_notice_details():
 
 @pytest.mark.asyncio
 async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_prompt():
-    request = ProviderRequest(
-        prompt=(
+    request = _build_provider_request(
+        (
             "\n[System Notice] 用户上传了 2 个文件\n\n"
             "[文件信息]\n"
             "- 原始文件名: file-0.txt\n"
             "  工作区文件名: file_0.txt\n"
         ),
-        system_prompt="base",
-        func_tool=ToolSet([_tool("read_file")]),
+        tool_names=["read_file"],
     )
     event = _build_event()
     event._buffered = True
     event.message_obj.message = [
         Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(2)
     ]
-    service = RequestHookService(
-        auto_block_execution_tools=True,
+    service = _build_request_hook_service(
         get_cached_upload_infos=lambda _event: _build_upload_infos(2),
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
     )
-    context = SimpleNamespace(
+    context = _build_notice_context(
+        request,
         event=event,
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
         notices=[],
         section_names=[],
     )
@@ -1414,8 +1884,8 @@ async def test_request_hook_service_skips_scene_notice_for_file_only_buffered_pr
 
 @pytest.mark.asyncio
 async def test_request_hook_service_skips_additional_notice_for_buffered_prompt_with_instruction():
-    request = ProviderRequest(
-        prompt=(
+    request = _build_provider_request(
+        (
             "\n[System Notice] 用户上传了 1 个文件\n\n"
             "[文件信息]\n"
             "- 原始文件名: report.docx\n"
@@ -1423,14 +1893,12 @@ async def test_request_hook_service_skips_additional_notice_for_buffered_prompt_
             "[用户指令]\n"
             "根据文件整理成正式汇报\n"
         ),
-        system_prompt="base",
-        func_tool=ToolSet([_tool("read_file")]),
+        tool_names=["read_file"],
     )
     event = _build_event()
     event._buffered = True
     event.message_obj.message = [Comp.File(name="report.docx", file="report.docx")]
-    service = RequestHookService(
-        auto_block_execution_tools=True,
+    service = _build_request_hook_service(
         get_cached_upload_infos=lambda _event: [
             {
                 "original_name": "report.docx",
@@ -1441,17 +1909,10 @@ async def test_request_hook_service_skips_additional_notice_for_buffered_prompt_
                 "source_path": "",
             }
         ],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
     )
-    context = SimpleNamespace(
+    context = _build_notice_context(
+        request,
         event=event,
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
         notices=[],
         section_names=[],
     )
@@ -1464,32 +1925,21 @@ async def test_request_hook_service_skips_additional_notice_for_buffered_prompt_
 
 @pytest.mark.asyncio
 async def test_request_hook_service_omitted_files_use_names_without_external_paths():
-    request = ProviderRequest(
-        prompt="根据上传文件整理内容",
-        system_prompt="base",
-        func_tool=ToolSet([_tool("read_file")]),
-    )
+    request = _build_provider_request("根据上传文件整理内容", tool_names=["read_file"])
     event = _build_event()
     event.message_obj.message = [
         Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
     ]
-    service = RequestHookService(
-        auto_block_execution_tools=True,
+    service = _build_request_hook_service(
         get_cached_upload_infos=lambda _event: _build_upload_infos(
             5,
             source_path_template="/tmp/file_{idx}.txt",
         ),
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=True,
     )
-    context = SimpleNamespace(
+    context = _build_notice_context(
+        request,
         event=event,
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
         notices=[],
         section_names=[],
     )
@@ -1507,11 +1957,7 @@ async def test_request_hook_service_omitted_files_use_names_without_external_pat
 
 @pytest.mark.asyncio
 async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_items():
-    request = ProviderRequest(
-        prompt="根据上传文件整理内容",
-        system_prompt="base",
-        func_tool=ToolSet([_tool("read_file")]),
-    )
+    request = _build_provider_request("根据上传文件整理内容", tool_names=["read_file"])
     event = _build_event()
     event.message_obj.message = [
         Comp.File(name=f"file-{idx}.txt", file=f"file-{idx}.txt") for idx in range(5)
@@ -1519,20 +1965,13 @@ async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_
     upload_infos = _build_upload_infos(5)
     upload_infos[3]["source_path"] = "/tmp/file_3.txt"
     upload_infos[4]["source_path"] = ""
-    service = RequestHookService(
-        auto_block_execution_tools=True,
+    service = _build_request_hook_service(
         get_cached_upload_infos=lambda _event: upload_infos,
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=True,
     )
-    context = SimpleNamespace(
+    context = _build_notice_context(
+        request,
         event=event,
-        request=request,
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
         notices=[],
         section_names=[],
     )
@@ -1548,30 +1987,18 @@ async def test_request_hook_service_keeps_omitted_count_aligned_with_mixed_path_
 
 @pytest.mark.asyncio
 async def test_request_hook_service_injects_document_follow_up_notice_for_draft():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
+    service = _build_request_hook_service(
         lookup_document_summary=lambda document_id: {
             "document_id": document_id,
             "status": "draft",
             "block_count": 3,
         },
     )
-    context = NoticeBuildContext(
-        event=_build_event(),
-        request=ProviderRequest(
-            prompt='继续完善 document_id="doc-1" 的内容',
-            system_prompt="base",
-            func_tool=ToolSet([_tool("create_document")]),
+    context = _build_notice_context(
+        _build_provider_request(
+            '继续完善 document_id="doc-1" 的内容',
+            tool_names=["create_document"],
         ),
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
-        notices=[],
     )
 
     context = await service.append_document_tool_guide_notice(context)
@@ -1585,13 +2012,7 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_draft(
 
 @pytest.mark.asyncio
 async def test_request_hook_service_injects_workbook_follow_up_notice_for_draft():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
+    service = _build_request_hook_service(
         lookup_workbook_summary=lambda workbook_id: {
             "workbook_id": workbook_id,
             "status": "draft",
@@ -1601,17 +2022,11 @@ async def test_request_hook_service_injects_workbook_follow_up_notice_for_draft(
             "next_allowed_actions": ["write_rows", "export_workbook"],
         },
     )
-    context = NoticeBuildContext(
-        event=_build_event(),
-        request=ProviderRequest(
-            prompt='继续补充 workbook_id="wb-1" 的数据',
-            system_prompt="base",
-            func_tool=ToolSet([_tool("create_workbook")]),
+    context = _build_notice_context(
+        _build_provider_request(
+            '继续补充 workbook_id="wb-1" 的数据',
+            tool_names=["create_workbook"],
         ),
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
-        notices=[],
     )
 
     context = await service.append_document_tool_guide_notice(context)
@@ -1625,13 +2040,7 @@ async def test_request_hook_service_injects_workbook_follow_up_notice_for_draft(
 
 @pytest.mark.asyncio
 async def test_request_hook_service_filters_none_values_from_workbook_follow_up_notice():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
+    service = _build_request_hook_service(
         lookup_workbook_summary=lambda workbook_id: {
             "workbook_id": workbook_id,
             "status": "draft",
@@ -1641,17 +2050,11 @@ async def test_request_hook_service_filters_none_values_from_workbook_follow_up_
             "next_allowed_actions": [None, "write_rows", " "],
         },
     )
-    context = NoticeBuildContext(
-        event=_build_event(),
-        request=ProviderRequest(
-            prompt='继续补充 workbook_id="wb-2" 的数据',
-            system_prompt="base",
-            func_tool=ToolSet([_tool("write_rows")]),
+    context = _build_notice_context(
+        _build_provider_request(
+            '继续补充 workbook_id="wb-2" 的数据',
+            tool_names=["write_rows"],
         ),
-        should_expose=True,
-        can_process_upload=True,
-        explicit_tool_name=None,
-        notices=[],
     )
 
     context = await service.append_document_tool_guide_notice(context)
@@ -1664,28 +2067,16 @@ async def test_request_hook_service_filters_none_values_from_workbook_follow_up_
 
 @pytest.mark.asyncio
 async def test_request_hook_service_injects_workbook_follow_up_notice_for_missing_summary():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
+    service = _build_request_hook_service(
         lookup_workbook_summary=lambda _workbook_id: None,
     )
 
     context = await service.append_document_tool_guide_notice(
-        NoticeBuildContext(
-            event=_build_event(),
-            request=ProviderRequest(
+        _build_notice_context(
+            _build_provider_request(
                 prompt='继续处理 workbook_id="wb-missing"',
-                system_prompt="base",
-                func_tool=ToolSet([_tool("write_rows")]),
+                tool_names=["write_rows"],
             ),
-            should_expose=True,
-            can_process_upload=True,
-            explicit_tool_name=None,
-            notices=[],
         )
     )
 
@@ -2524,6 +2915,90 @@ async def test_request_hook_service_injects_excel_read_notice_for_reading_xlsx_r
 
 
 @pytest.mark.asyncio
+async def test_request_hook_service_prefers_excel_read_notice_for_update_record_query():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "report.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取 report.xlsx 更新记录并总结",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+    ]
+    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
+    assert "read_workbook" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_prefers_excel_script_notice_for_update_data_query():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "report.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请更新 report.xlsx 中的数据并保存",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
+    ]
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
+    assert "execute_excel_script" in context.notices[1]
+
+
+@pytest.mark.asyncio
 async def test_request_hook_service_skips_workbook_guide_for_xlsx_to_pdf_conversion_requests():
     service = RequestHookService(
         auto_block_execution_tools=True,
@@ -2634,6 +3109,238 @@ async def test_request_hook_service_injects_excel_script_notice_for_existing_xls
     ]
     assert "read_workbook" in context.notices[0]
     assert "execute_excel_script" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_excel_script_notice_for_mixed_read_modify_xlsx_requests():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取这个 xlsx 后新增一列公式并导出新版本",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
+    ]
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
+    assert "execute_excel_script" in context.notices[1]
+
+
+def test_excel_intent_router_keeps_export_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请导出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_ignores_output_filename_when_upload_present():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
+        upload_infos=[
+            {
+                "original_name": "input.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "input.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("input.xlsx",)
+
+
+def test_excel_intent_router_keeps_output_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请输出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_keeps_export_purpose_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 用于导出并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_prefers_read_for_update_record_query():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 更新记录并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="请更新 report.xlsx 中的数据并保存",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and update formulas",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_keeps_write_into_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请把数据写入 report.xlsx 并统计",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "create_workbook", "write_rows", "export_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_phrase():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取 report.xlsx 用于导出并总结",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+    ]
+    assert "read_workbook" in context.notices[1]
+    assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_treats_explicit_output_xlsx_name_as_new_workbook_request():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请生成一个 Excel，保存为 sales.xlsx，并汇总 Q1 销售数据",
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("read_workbook"),
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_WORKBOOK_TOOLS,
+    ]
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
+    assert "create_workbook" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -3378,16 +4085,10 @@ async def test_upload_session_service_omits_external_path_when_disabled():
 async def test_upload_session_service_uses_extracted_filename_for_type_detection():
     context = MagicMock()
     source_path = Path(__file__).resolve()
-    service = UploadSessionService(
+    service = _build_upload_session_service(
         context=context,
-        recent_text_ttl_seconds=30,
-        upload_session_ttl_seconds=300,
-        recent_text_max_entries=32,
-        recent_text_cleanup_interval_seconds=10,
-        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
         store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
-        allow_external_input_files=False,
     )
     event = _build_event()
     upload = Comp.File(name="upload-token", file="upload-token")
@@ -3408,13 +4109,8 @@ async def test_upload_session_service_uses_extracted_filename_for_type_detection
 async def test_upload_session_service_assigns_file_ids_per_session_user():
     context = MagicMock()
     source_path = Path(__file__).resolve()
-    service = UploadSessionService(
+    service = _build_upload_session_service(
         context=context,
-        recent_text_ttl_seconds=30,
-        upload_session_ttl_seconds=300,
-        recent_text_max_entries=32,
-        recent_text_cleanup_interval_seconds=10,
-        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(
             side_effect=[
                 (source_path, "A.docx"),
@@ -3425,7 +4121,6 @@ async def test_upload_session_service_assigns_file_ids_per_session_user():
         store_uploaded_file=MagicMock(
             side_effect=[Path("A_1.docx"), Path("B_1.xlsx"), Path("C_1.docx")]
         ),
-        allow_external_input_files=False,
     )
     user_a = _build_event(sender_id="user-a")
     user_b = _build_event(sender_id="user-b")
@@ -3457,16 +4152,12 @@ async def test_upload_session_service_assigns_file_ids_per_session_user():
 async def test_upload_session_service_uses_independent_upload_ttl():
     context = MagicMock()
     source_path = Path(__file__).resolve()
-    service = UploadSessionService(
+    service = _build_upload_session_service(
         context=context,
         recent_text_ttl_seconds=20,
         upload_session_ttl_seconds=120,
-        recent_text_max_entries=32,
-        recent_text_cleanup_interval_seconds=10,
-        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(return_value=(source_path, "A.docx")),
         store_uploaded_file=MagicMock(return_value=Path("A_1.docx")),
-        allow_external_input_files=False,
     )
     event = _build_event(sender_id="user-a")
 
@@ -3495,13 +4186,8 @@ async def test_command_service_doc_lists_selects_and_clears_uploaded_files():
     context.get_event_queue.return_value = event_queue
     context.get_config.return_value = {"wake_prefix": ["/"]}
     source_path = Path(__file__).resolve()
-    upload_session_service = UploadSessionService(
+    upload_session_service = _build_upload_session_service(
         context=context,
-        recent_text_ttl_seconds=30,
-        upload_session_ttl_seconds=300,
-        recent_text_max_entries=32,
-        recent_text_cleanup_interval_seconds=10,
-        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(
             side_effect=[
                 (source_path, "A.docx"),
@@ -3509,37 +4195,12 @@ async def test_command_service_doc_lists_selects_and_clears_uploaded_files():
             ]
         ),
         store_uploaded_file=MagicMock(side_effect=[Path("A_1.docx"), Path("B_1.xlsx")]),
-        allow_external_input_files=False,
     )
-    workspace_dir = _make_workspace("command-doc")
-    executor = ThreadPoolExecutor(max_workers=1)
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        pdf_converter = MagicMock()
-        pdf_converter.capabilities = {
-            "office_to_pdf": False,
-            "pdf_to_word": False,
-            "pdf_to_excel": False,
-        }
-        service = CommandService(
-            workspace_service=workspace_service,
-            pdf_converter=pdf_converter,
-            plugin_data_path=workspace_dir,
-            auto_delete=False,
-            allow_external_input_files=False,
-            enable_features_in_group=True,
-            auto_block_execution_tools=True,
-            reply_to_user=True,
+    with _managed_workspace_service(name="command-doc") as managed:
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
+            plugin_data_path=managed.workspace_dir,
             upload_session_service=upload_session_service,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
         upload_event_a = _build_event(sender_id="user-a")
         upload_event_b = _build_event(sender_id="user-a")
@@ -3580,9 +4241,6 @@ async def test_command_service_doc_lists_selects_and_clears_uploaded_files():
         remaining = service.doc_list(_build_event(sender_id="user-a"))
         assert "[f1] A.docx" not in remaining
         assert "[f2] B.xlsx" in remaining
-    finally:
-        shutil.rmtree(workspace_dir, ignore_errors=True)
-        executor.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -3592,13 +4250,8 @@ async def test_command_service_doc_use_supports_multiple_file_ids():
     context.get_event_queue.return_value = event_queue
     context.get_config.return_value = {"wake_prefix": ["/"]}
     source_path = Path(__file__).resolve()
-    upload_session_service = UploadSessionService(
+    upload_session_service = _build_upload_session_service(
         context=context,
-        recent_text_ttl_seconds=30,
-        upload_session_ttl_seconds=300,
-        recent_text_max_entries=32,
-        recent_text_cleanup_interval_seconds=10,
-        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(
             side_effect=[
                 (source_path, "A.docx"),
@@ -3606,37 +4259,12 @@ async def test_command_service_doc_use_supports_multiple_file_ids():
             ]
         ),
         store_uploaded_file=MagicMock(side_effect=[Path("A_1.docx"), Path("B_1.xlsx")]),
-        allow_external_input_files=False,
     )
-    workspace_dir = _make_workspace("command-doc-multi")
-    executor = ThreadPoolExecutor(max_workers=1)
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        pdf_converter = MagicMock()
-        pdf_converter.capabilities = {
-            "office_to_pdf": False,
-            "pdf_to_word": False,
-            "pdf_to_excel": False,
-        }
-        service = CommandService(
-            workspace_service=workspace_service,
-            pdf_converter=pdf_converter,
-            plugin_data_path=workspace_dir,
-            auto_delete=False,
-            allow_external_input_files=False,
-            enable_features_in_group=True,
-            auto_block_execution_tools=True,
-            reply_to_user=True,
+    with _managed_workspace_service(name="command-doc-multi") as managed:
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
+            plugin_data_path=managed.workspace_dir,
             upload_session_service=upload_session_service,
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
         await upload_session_service._ensure_upload_infos(
             _build_event(sender_id="user-a"),
@@ -3658,9 +4286,6 @@ async def test_command_service_doc_use_supports_multiple_file_ids():
         cached_infos = upload_session_service.get_cached_upload_infos(queued_event)
         assert [info["file_id"] for info in cached_infos] == ["f1", "f2"]
         assert "根据这些文件整理成正式汇报" in queued_event.message_str
-    finally:
-        shutil.rmtree(workspace_dir, ignore_errors=True)
-        executor.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -3669,16 +4294,10 @@ async def test_upload_session_service_requeue_uses_configured_wake_prefix():
     event_queue = AsyncMock()
     context.get_event_queue.return_value = event_queue
     context.get_config.return_value = {"wake_prefix": ["!"]}
-    service = UploadSessionService(
+    service = _build_upload_session_service(
         context=context,
-        recent_text_ttl_seconds=30,
-        upload_session_ttl_seconds=300,
-        recent_text_max_entries=32,
-        recent_text_cleanup_interval_seconds=10,
-        upload_session_cleanup_interval_seconds=30,
         extract_upload_source=AsyncMock(),
         store_uploaded_file=MagicMock(),
-        allow_external_input_files=False,
     )
     event = _build_event(sender_id="user-a")
     upload_info = {
@@ -4196,26 +4815,12 @@ async def test_error_hook_service_uses_event_session_when_target_not_configured(
 
 @pytest.mark.asyncio
 async def test_file_tool_service_reads_text_from_workspace_file():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={},
-        )
-
-        result = await service.read_file(event, Path(__file__).resolve().name)
-    finally:
-        executor.shutdown(wait=False)
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent
+    ) as managed:
+        result = await managed.service.read_file(event, Path(__file__).resolve().name)
 
     assert result is not None
     assert "[文件:" in result
@@ -4224,13 +4829,14 @@ async def test_file_tool_service_reads_text_from_workspace_file():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
-    workspace_dir = _make_workspace("read-docx-images")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "image-report.docx"
-    image_path = workspace_dir / "embedded.png"
 
-    try:
+    with _managed_file_tool_service(
+        workspace_name="read-docx-images",
+        office_libs={"docx": object()},
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        image_path = managed.workspace_dir / "embedded.png"
         docx = _import_docx()
 
         _write_png(image_path)
@@ -4240,22 +4846,7 @@ async def test_file_tool_service_reads_docx_and_extracts_embedded_images():
         document.add_paragraph("图片后的说明")
         document.save(docx_path)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.read_file(event, docx_path.name)
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
+        result = await managed.service.read_file(event, docx_path.name)
 
     assert result is not None
     assert "文档正文" in result
@@ -4356,11 +4947,6 @@ def test_extract_word_content_returns_structured_result_for_legacy_doc(
 def test_workspace_service_extract_office_text_reads_legacy_doc(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    workspace_dir = _make_workspace("workspace-legacy-doc")
-    executor = ThreadPoolExecutor(max_workers=1)
-    doc_path = workspace_dir / "legacy.doc"
-    doc_path.write_bytes(b"legacy")
-
     monkeypatch.setattr(office_utils, "_ANTIWORD_AVAILABLE", True)
     monkeypatch.setattr(office_utils, "_WIN32COM_AVAILABLE", False)
     monkeypatch.setattr(
@@ -4369,29 +4955,21 @@ def test_workspace_service_extract_office_text_reads_legacy_doc(
         lambda _path: "Legacy document text",
     )
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        extracted = workspace_service.extract_office_text(doc_path, OfficeType.WORD)
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
+    with _managed_workspace_service(name="workspace-legacy-doc") as managed:
+        doc_path = managed.workspace_dir / "legacy.doc"
+        doc_path.write_bytes(b"legacy")
+        extracted = managed.workspace_service.extract_office_text(doc_path, OfficeType.WORD)
 
     assert extracted == "Legacy document text"
 
 
 def test_workspace_service_extract_word_content_skips_docx_image_materialization_when_disabled():
-    workspace_dir = _make_workspace("workspace-docx-no-image-materialize")
-    executor = ThreadPoolExecutor(max_workers=1)
-    docx_path = workspace_dir / "image-report.docx"
-    image_path = workspace_dir / "embedded.png"
-
-    try:
+    with _managed_workspace_service(
+        name="workspace-docx-no-image-materialize",
+        office_libs={"docx": object()},
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        image_path = managed.workspace_dir / "embedded.png"
         docx = _import_docx()
 
         _write_png(image_path)
@@ -4401,21 +4979,10 @@ def test_workspace_service_extract_word_content_skips_docx_image_materialization
         document.add_paragraph("图后说明")
         document.save(docx_path)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-
-        extracted = workspace_service.extract_word_content(
+        extracted = managed.workspace_service.extract_word_content(
             docx_path,
             include_images=False,
         )
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert extracted is not None
     assert extracted.image_count == 1
@@ -4424,12 +4991,12 @@ def test_workspace_service_extract_word_content_skips_docx_image_materialization
 
 
 def test_workspace_service_extract_word_content_formats_relative_image_paths_when_enabled():
-    workspace_dir = _make_workspace("workspace-docx-image-materialize")
-    executor = ThreadPoolExecutor(max_workers=1)
-    docx_path = workspace_dir / "image-report.docx"
-    image_path = workspace_dir / "embedded.png"
-
-    try:
+    with _managed_workspace_service(
+        name="workspace-docx-image-materialize",
+        office_libs={"docx": object()},
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        image_path = managed.workspace_dir / "embedded.png"
         docx = _import_docx()
 
         _write_png(image_path)
@@ -4439,25 +5006,14 @@ def test_workspace_service_extract_word_content_formats_relative_image_paths_whe
         document.add_paragraph("图后说明")
         document.save(docx_path)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-
-        extracted = workspace_service.extract_word_content(
+        extracted = managed.workspace_service.extract_word_content(
             docx_path,
             include_images=True,
         )
-        formatted = workspace_service.format_word_content(
+        formatted = managed.workspace_service.format_word_content(
             extracted,
             include_image_paths=True,
         )
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert extracted is not None
     assert extracted.image_count == 1
@@ -4467,19 +5023,20 @@ def test_workspace_service_extract_word_content_formats_relative_image_paths_whe
     assert "图后说明" in formatted
     assert "[插图1]" in formatted
     assert ".read_assets/" in formatted
-    assert str(workspace_dir) not in formatted
-    assert str(workspace_dir.resolve()) not in formatted
+    assert str(managed.workspace_dir) not in formatted
+    assert str(managed.workspace_dir.resolve()) not in formatted
 
 
 @pytest.mark.asyncio
 async def test_file_tool_service_streams_docx_images_as_tool_results():
-    workspace_dir = _make_workspace("stream-docx-images")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "image-report.docx"
-    image_path = workspace_dir / "embedded.png"
 
-    try:
+    with _managed_file_tool_service(
+        workspace_name="stream-docx-images",
+        office_libs={"docx": object()},
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        image_path = managed.workspace_dir / "embedded.png"
         docx = _import_docx()
 
         _write_png(image_path)
@@ -4489,27 +5046,12 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
         document.add_paragraph("图片后的说明")
         document.save(docx_path)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-        )
-
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert isinstance(results[0], str)
     assert "文档正文" in results[0]
@@ -4524,34 +5066,17 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_returns_error_when_docx_library_missing():
-    workspace_dir = _make_workspace("missing-docx-lib")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "missing-lib.docx"
-    docx_path.write_bytes(b"not-a-real-docx")
-
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={},
-        )
+    with _managed_file_tool_service(workspace_name="missing-docx-lib") as managed:
+        docx_path = managed.workspace_dir / "missing-lib.docx"
+        docx_path.write_bytes(b"not-a-real-docx")
 
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert results == ["错误：文件 'missing-lib.docx' 无法读取，可能未安装对应解析库"]
 
@@ -4560,70 +5085,56 @@ async def test_file_tool_service_returns_error_when_docx_library_missing():
 async def test_file_tool_service_skips_unreadable_docx_image_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    workspace_dir = _make_workspace("broken-docx-image")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "broken-image.docx"
-    docx_path.write_bytes(b"placeholder")
-    broken_image_path = workspace_dir / "broken.png"
-    healthy_image_path = workspace_dir / "healthy.png"
-    broken_image_path.write_bytes(b"broken")
-    _write_png(healthy_image_path)
+    with _managed_file_tool_service(
+        workspace_name="broken-docx-image",
+        office_libs={"docx": object()},
+    ) as managed:
+        docx_path = managed.workspace_dir / "broken-image.docx"
+        docx_path.write_bytes(b"placeholder")
+        broken_image_path = managed.workspace_dir / "broken.png"
+        healthy_image_path = managed.workspace_dir / "healthy.png"
+        broken_image_path.write_bytes(b"broken")
+        _write_png(healthy_image_path)
 
-    extracted = ExtractedWordContent(
-        items=[
-            ExtractedWordItem(type="text", text="文档正文"),
-            ExtractedWordItem(
-                type="image",
-                image_path=broken_image_path,
-                image_index=1,
-            ),
-            ExtractedWordItem(type="text", text="收尾说明"),
-            ExtractedWordItem(
-                type="image",
-                image_path=healthy_image_path,
-                image_index=2,
-            ),
-        ],
-        image_paths=[broken_image_path, healthy_image_path],
-    )
-
-    original_read_bytes = Path.read_bytes
-
-    def fake_read_bytes(path: Path) -> bytes:
-        if path == broken_image_path:
-            raise OSError("broken image")
-        return original_read_bytes(path)
-
-    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
-
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
+        extracted = ExtractedWordContent(
+            items=[
+                ExtractedWordItem(type="text", text="文档正文"),
+                ExtractedWordItem(
+                    type="image",
+                    image_path=broken_image_path,
+                    image_index=1,
+                ),
+                ExtractedWordItem(type="text", text="收尾说明"),
+                ExtractedWordItem(
+                    type="image",
+                    image_path=healthy_image_path,
+                    image_index=2,
+                ),
+            ],
+            image_paths=[broken_image_path, healthy_image_path],
         )
+
+        original_read_bytes = Path.read_bytes
+
+        def fake_read_bytes(path: Path) -> bytes:
+            if path == broken_image_path:
+                raise OSError("broken image")
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
         monkeypatch.setattr(
-            workspace_service,
+            managed.workspace_service,
             "extract_word_content",
             lambda _path, include_images=True: extracted,
         )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-        )
-
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert len(results) == 2
     assert isinstance(results[0], str)
@@ -4638,26 +5149,21 @@ async def test_file_tool_service_skips_unreadable_docx_image_bytes(
 
 @pytest.mark.asyncio
 async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
-    workspace_dir = _make_workspace("stream-docx-image-index")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "image-report.docx"
-    large_image = workspace_dir / "embedded-large.png"
-    small_image = workspace_dir / "embedded-small.png"
-
-    try:
+    with _managed_file_tool_service(
+        workspace_name="stream-docx-image-index",
+        office_libs={"docx": object()},
+        max_inline_docx_image_bytes=20,
+        max_inline_docx_image_count=2,
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        large_image = managed.workspace_dir / "embedded-large.png"
+        small_image = managed.workspace_dir / "embedded-small.png"
         docx_path.write_bytes(b"docx")
         large_image.write_bytes(b"a" * 40)
         small_image.write_bytes(b"b" * 10)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        workspace_service.extract_word_content = MagicMock(
+        managed.workspace_service.extract_word_content = MagicMock(
             return_value=SimpleNamespace(
                 text="文档正文",
                 image_paths=[large_image, small_image],
@@ -4679,22 +5185,12 @@ async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
             )
         )
 
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-            max_inline_docx_image_bytes=20,
-            max_inline_docx_image_count=2,
-        )
-
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert isinstance(results[0], str)
     assert "[插图2]" in results[0]
@@ -4706,30 +5202,25 @@ async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_limits_inline_docx_images():
-    workspace_dir = _make_workspace("stream-docx-image-limits")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "image-report.docx"
-    small_image_1 = workspace_dir / "embedded-1.png"
-    large_image = workspace_dir / "embedded-large.png"
-    small_image_2 = workspace_dir / "embedded-2.png"
-    small_image_3 = workspace_dir / "embedded-3.png"
-
-    try:
+    with _managed_file_tool_service(
+        workspace_name="stream-docx-image-limits",
+        office_libs={"docx": object()},
+        max_inline_docx_image_bytes=20,
+        max_inline_docx_image_count=2,
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        small_image_1 = managed.workspace_dir / "embedded-1.png"
+        large_image = managed.workspace_dir / "embedded-large.png"
+        small_image_2 = managed.workspace_dir / "embedded-2.png"
+        small_image_3 = managed.workspace_dir / "embedded-3.png"
         docx_path.write_bytes(b"docx")
         small_image_1.write_bytes(b"a" * 10)
         large_image.write_bytes(b"b" * 40)
         small_image_2.write_bytes(b"c" * 10)
         small_image_3.write_bytes(b"d" * 10)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        workspace_service.extract_word_content = MagicMock(
+        managed.workspace_service.extract_word_content = MagicMock(
             return_value=SimpleNamespace(
                 text="文档正文",
                 image_paths=[
@@ -4750,22 +5241,12 @@ async def test_file_tool_service_limits_inline_docx_images():
             )
         )
 
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-            max_inline_docx_image_bytes=20,
-            max_inline_docx_image_count=2,
-        )
-
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert isinstance(results[0], str)
     assert "文档正文" in results[0]
@@ -4783,24 +5264,18 @@ async def test_file_tool_service_limits_inline_docx_images():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_skips_docx_image_review_when_disabled():
-    workspace_dir = _make_workspace("stream-docx-image-review-disabled")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "image-report.docx"
-    image_path = workspace_dir / "embedded.png"
-
-    try:
+    with _managed_file_tool_service(
+        workspace_name="stream-docx-image-review-disabled",
+        office_libs={"docx": object()},
+        enable_docx_image_review=False,
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-report.docx"
+        image_path = managed.workspace_dir / "embedded.png"
         _write_png(image_path)
         docx_path.write_bytes(b"docx")
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        workspace_service.extract_word_content = MagicMock(
+        managed.workspace_service.extract_word_content = MagicMock(
             return_value=SimpleNamespace(
                 text="文档正文",
                 image_paths=[image_path],
@@ -4817,28 +5292,19 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
             )
         )
 
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-            enable_docx_image_review=False,
-        )
-
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert len(results) == 1
     assert isinstance(results[0], str)
     assert "图前说明" in results[0]
     assert "图后说明" in results[0]
     assert "[插图1]" not in results[0]
-    workspace_service.extract_word_content.assert_called_once_with(
+    managed.workspace_service.extract_word_content.assert_called_once_with(
         docx_path,
         include_images=False,
     )
@@ -4846,24 +5312,18 @@ async def test_file_tool_service_skips_docx_image_review_when_disabled():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_returns_message_for_image_only_docx_when_review_disabled():
-    workspace_dir = _make_workspace("stream-docx-image-only-disabled")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
-    docx_path = workspace_dir / "image-only.docx"
-    image_path = workspace_dir / "embedded.png"
-
-    try:
+    with _managed_file_tool_service(
+        workspace_name="stream-docx-image-only-disabled",
+        office_libs={"docx": object()},
+        enable_docx_image_review=False,
+    ) as managed:
+        docx_path = managed.workspace_dir / "image-only.docx"
+        image_path = managed.workspace_dir / "embedded.png"
         _write_png(image_path)
         docx_path.write_bytes(b"docx")
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        workspace_service.extract_word_content = MagicMock(
+        managed.workspace_service.extract_word_content = MagicMock(
             return_value=SimpleNamespace(
                 text=None,
                 image_paths=[image_path],
@@ -4878,27 +5338,18 @@ async def test_file_tool_service_returns_message_for_image_only_docx_when_review
             )
         )
 
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"docx": object()},
-            enable_docx_image_review=False,
-        )
-
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
+            async for result in managed.service.iter_read_file_tool_results(
                 event, docx_path.name
             )
         ]
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert len(results) == 1
     assert isinstance(results[0], str)
     assert "仅包含图片内容" in results[0]
     assert "[插图1]" not in results[0]
-    workspace_service.extract_word_content.assert_called_once_with(
+    managed.workspace_service.extract_word_content.assert_called_once_with(
         docx_path,
         include_images=False,
     )
@@ -4906,26 +5357,12 @@ async def test_file_tool_service_returns_message_for_image_only_docx_when_review
 
 @pytest.mark.asyncio
 async def test_file_tool_service_returns_local_guidance_for_missing_file():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={},
-        )
-
-        result = await service.read_file(event, "CLAUDE.md")
-    finally:
-        executor.shutdown(wait=False)
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent
+    ) as managed:
+        result = await managed.service.read_file(event, "CLAUDE.md")
 
     assert result is not None
     assert "错误：文件 'CLAUDE.md' 不存在。" in result
@@ -5030,13 +5467,14 @@ async def test_file_tool_service_offloads_office_text_extraction_to_thread():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_reads_workbook_with_sheet_sections():
-    workspace_dir = _make_workspace("read-workbook")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
-    try:
+    with _managed_file_tool_service(
+        workspace_name="read-workbook",
+        office_libs={"openpyxl": object()},
+    ) as managed:
         openpyxl = pytest.importorskip("openpyxl")
-        workbook_path = workspace_dir / "sales.xlsx"
+        workbook_path = managed.workspace_dir / "sales.xlsx"
         workbook = openpyxl.Workbook()
         summary_sheet = workbook.active
         summary_sheet.title = "总表"
@@ -5047,22 +5485,7 @@ async def test_file_tool_service_reads_workbook_with_sheet_sections():
         east_sheet.append(["上海", 80])
         workbook.save(workbook_path)
 
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"openpyxl": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={"openpyxl": object()},
-        )
-
-        result = await service.read_workbook(event, workbook_path.name)
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
+        result = await managed.service.read_workbook(event, workbook_path.name)
 
     assert result is not None
     assert "[文件信息] 文件名: sales.xlsx" in result
@@ -5076,27 +5499,17 @@ async def test_file_tool_service_reads_workbook_with_sheet_sections():
 @pytest.mark.asyncio
 async def test_file_tool_service_read_workbook_rejects_non_excel_suffix():
     workspace_dir = _make_workspace("read-workbook-invalid")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
     try:
         text_path = workspace_dir / "notes.txt"
         text_path.write_text("demo", encoding="utf-8")
-        workspace_service = WorkspaceService(
+        with _managed_file_tool_service(
             plugin_data_path=workspace_dir,
-            executor=executor,
             office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_libs={},
-        )
-
-        result = await service.read_workbook(event, text_path.name)
+        ) as managed:
+            result = await managed.service.read_workbook(event, text_path.name)
     finally:
-        executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert result is not None
@@ -5107,39 +5520,28 @@ async def test_file_tool_service_read_workbook_rejects_non_excel_suffix():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_returns_text_result():
-    workspace_dir = _make_workspace("execute-excel-script-text")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"openpyxl": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        delivery_service = MagicMock()
-        delivery_service.send_file_with_preview = AsyncMock()
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            delivery_service=delivery_service,
-            office_libs={"openpyxl": object()},
-        )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "worksheet = workbook.active\n"
-                "worksheet.title = '总表'\n"
-                "worksheet['A1'] = '值'\n"
-                "result_text = worksheet['A1'].value\n"
-            ),
-        )
-    finally:
-        executor.shutdown(wait=False)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-text",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = '总表'\n"
+                    "worksheet['A1'] = '值'\n"
+                    "result_text = worksheet['A1'].value\n"
+                ),
+            )
 
     payload = json.loads(result)
     assert payload["success"] is True
@@ -5150,7 +5552,398 @@ async def test_file_tool_service_execute_excel_script_returns_text_result():
 
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_returns_generated_file():
-    workspace_dir = _make_workspace("execute-excel-script-file")
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-file",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet['A1'] = '导出'\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="script-output.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["output_name"] == "script-output.xlsx"
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("is_group_feature_enabled", "check_permission", "expected_error"),
+    [
+        (lambda _event: False, lambda _event: True, "group disabled"),
+        (lambda _event: True, lambda _event: False, "错误：权限不足"),
+    ],
+)
+async def test_file_tool_service_execute_excel_script_system_errors_stop_retry_without_consuming_budget(
+    is_group_feature_enabled,
+    check_permission,
+    expected_error,
+):
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-validation-error",
+        office_libs={"openpyxl": object()},
+        is_group_feature_enabled=is_group_feature_enabled,
+        check_permission=check_permission,
+    ) as managed:
+        service = managed.service
+        runner = MagicMock()
+        service._excel_script_service._run_script_process = runner
+
+        first = json.loads(
+            await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+        )
+        second = json.loads(
+            await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+        )
+
+    assert first["success"] is False
+    assert first["error"] == expected_error
+    assert first["retry_count"] == 0
+    assert first["retry_exhausted"] is True
+    assert second["success"] is False
+    assert second["error"] == expected_error
+    assert second["retry_count"] == 0
+    assert second["retry_exhausted"] is True
+    assert runner.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-local-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+    ) as managed:
+        service = managed.service
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_none_runtime():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-none-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="none"),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "computer runtime 为 none" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_legacy_none_runtime():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-legacy-none-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=SimpleNamespace(
+            astrbot_config={"provider_settings": {"computer_use_runtime": "none"}}
+        ),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "computer runtime 为 none" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_unsupported_runtime():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-unsupported-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="sandbx"),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "不支持的 computer runtime 配置：sandbx" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_false_runtime_value():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-false-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime=False),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "不支持的 computer runtime 配置：false" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_returns_structured_error_when_runtime_lookup_fails():
+    class _BrokenConfigContext:
+        @staticmethod
+        def get_config(*_args, **_kwargs):
+            raise RuntimeError("config backend unavailable")
+
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-runtime-lookup-failure",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_BrokenConfigContext(),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "错误：读取当前会话 computer runtime 失败"
+    assert "config backend unavailable" in payload["traceback"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_legacy_sandbox_runtime():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-legacy-sandbox-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=SimpleNamespace(
+            astrbot_config={"provider_settings": {"computer_use_runtime": "sandbox"}}
+        ),
+    ) as managed:
+        service = managed.service
+        service._excel_script_service._run_script_process = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                mode="text",
+                result_text="ok",
+                output_path=None,
+            )
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_positional_session_config():
+    class _PositionalSessionContext:
+        @staticmethod
+        def get_config(session_id):
+            assert session_id == "session-1"
+            return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-positional-config",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_PositionalSessionContext(),
+    ) as managed:
+        service = managed.service
+        service._excel_script_service._run_script_process = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                mode="text",
+                result_text="ok",
+                output_path=None,
+            )
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_noarg_session_config_when_signature_unavailable():
+    class _NoArgSessionContext:
+        @staticmethod
+        def get_config():
+            return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-noarg-config",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_NoArgSessionContext(),
+    ) as managed:
+        service = managed.service
+        service._excel_script_service._run_script_process = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                mode="text",
+                result_text="ok",
+                output_path=None,
+            )
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
+            side_effect=ValueError("signature unavailable"),
+        ), patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_sandbox_missing_capabilities():
+    workspace_dir = _make_workspace("execute-excel-script-missing-capabilities")
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5162,38 +5955,158 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
             max_file_size=1024 * 1024,
             feature_settings={},
         )
-        delivery_service = MagicMock()
-        delivery_service.send_file_with_preview = AsyncMock()
         service = _build_file_tool_service(
+            astrbot_context=_build_astrbot_context(runtime="sandbox"),
             workspace_service=workspace_service,
-            delivery_service=delivery_service,
             office_libs={"openpyxl": object()},
         )
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
 
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "worksheet = workbook.active\n"
-                "worksheet['A1'] = '导出'\n"
-                "workbook.save(output_path)\n"
-            ),
-            output_name="script-output.xlsx",
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(return_value=MagicMock(capabilities=("python",))),
+        ):
+            first = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
+            )
+            second = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert first["success"] is False
+    assert "当前 sandbox profile 缺少必要能力：filesystem" in first["error"]
+    assert first["retry_count"] == 0
+    assert first["retry_exhausted"] is True
+    assert second["success"] is False
+    assert second["retry_count"] == 0
+    assert second["retry_exhausted"] is True
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_sandbox_disabled_capability_flags():
+    workspace_dir = _make_workspace("execute-excel-script-disabled-capability-flags")
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
         )
+        service = _build_file_tool_service(
+            astrbot_context=_build_astrbot_context(runtime="sandbox"),
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(
+                return_value=MagicMock(
+                    capabilities={"python": True, "filesystem": False}
+                )
+            ),
+        ):
+            result = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result["success"] is False
+    assert "当前 sandbox profile 缺少必要能力：filesystem" in result["error"]
+    assert result["retry_count"] == 0
+    assert result["retry_exhausted"] is True
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_handles_sandbox_exec_exception():
+    class _ExecFailureSandboxPython(_FakeSandboxPython):
+        async def exec(
+            self,
+            code: str,
+            kernel_id: str | None = None,
+            timeout: int = 30,
+            silent: bool = False,
+        ) -> dict[str, object]:
+            _ = code
+            _ = kernel_id
+            _ = timeout
+            _ = silent
+            raise RuntimeError("sandbox rpc failed")
+
+    class _ExecFailureSandboxBooter(_FakeSandboxBooter):
+        def __init__(self, workspace_root: Path):
+            super().__init__(workspace_root)
+            self.python = _ExecFailureSandboxPython(workspace_root)
+
+    workspace_dir = _make_workspace("execute-excel-script-exec-exception")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        with _patch_excel_sandbox(_ExecFailureSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
     payload = json.loads(result)
-    assert payload["success"] is True
-    assert payload["mode"] == "file"
-    assert payload["output_name"] == "script-output.xlsx"
-    delivery_service.send_file_with_preview.assert_awaited_once()
+    assert payload["success"] is False
+    assert payload["error"] == "Excel sandbox 初始化失败"
+    assert "sandbox rpc failed" in payload["traceback"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is False
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
-    workspace_dir = _make_workspace("execute-excel-script-input-copy")
+async def test_file_tool_service_execute_excel_script_upload_failure_stops_retry_without_consuming_budget():
+    class _UploadFailureSandboxBooter(_FakeSandboxBooter):
+        async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+            _ = path
+            _ = file_name
+            return {"success": False, "message": "upload failed"}
+
+    workspace_dir = _make_workspace("execute-excel-script-upload-failure")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5215,18 +6128,123 @@ async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
+        with _patch_excel_sandbox(_UploadFailureSandboxBooter(sandbox_dir)):
+            first = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                    input_files=[source_path.name],
+                )
+            )
+            second = json.loads(
+                await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                    input_files=[source_path.name],
+                )
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
 
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = load_workbook(input_files[0])\n"
-                "worksheet = workbook.active\n"
-                "worksheet['A1'] = '已修改'\n"
-                "workbook.save(input_files[0])\n"
-                "result_text = worksheet['A1'].value\n"
-            ),
-            input_files=[source_path.name],
+    assert first["success"] is False
+    assert first["error"] == "Excel 输入文件上传失败"
+    assert first["retry_count"] == 0
+    assert first["retry_exhausted"] is True
+    assert second["success"] is False
+    assert second["error"] == "Excel 输入文件上传失败"
+    assert second["retry_count"] == 0
+    assert second["retry_exhausted"] is True
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_handles_upload_exception():
+    class _UploadExceptionSandboxBooter(_FakeSandboxBooter):
+        async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+            _ = path
+            _ = file_name
+            raise RuntimeError("upload rpc failed")
+
+    workspace_dir = _make_workspace("execute-excel-script-upload-exception")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        openpyxl = pytest.importorskip("openpyxl")
+        source_path = workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(source_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
         )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        with _patch_excel_sandbox(_UploadExceptionSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+                input_files=[source_path.name],
+            )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "Excel 输入文件上传失败"
+    assert "upload rpc failed" in payload["traceback"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is False
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
+    workspace_dir = _make_workspace("execute-excel-script-input-copy")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        openpyxl = pytest.importorskip("openpyxl")
+        source_path = workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(source_path)
+
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = load_workbook(input_files[0])\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet['A1'] = '已修改'\n"
+                    "workbook.save(input_files[0])\n"
+                    "result_text = worksheet['A1'].value\n"
+                ),
+                input_files=[source_path.name],
+            )
         reloaded = openpyxl.load_workbook(source_path)
     finally:
         executor.shutdown(wait=False)
@@ -5242,6 +6260,8 @@ async def test_file_tool_service_execute_excel_script_uses_input_file_copies():
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_separate():
     workspace_dir = _make_workspace("execute-excel-script-same-name-inputs")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5273,18 +6293,18 @@ async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_se
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "values = []\n"
-                "for path in input_files:\n"
-                "    workbook = load_workbook(path)\n"
-                "    values.append(workbook.active['A1'].value)\n"
-                "result_text = '|'.join(values)\n"
-            ),
-            input_files=["north/sales.xlsx", "south/sales.xlsx"],
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "values = []\n"
+                    "for path in input_files:\n"
+                    "    workbook = load_workbook(path)\n"
+                    "    values.append(workbook.active['A1'].value)\n"
+                    "result_text = '|'.join(values)\n"
+                ),
+                input_files=["north/sales.xlsx", "south/sales.xlsx"],
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5298,6 +6318,8 @@ async def test_file_tool_service_execute_excel_script_keeps_same_named_inputs_se
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_rejects_text_and_file_together():
     workspace_dir = _make_workspace("execute-excel-script-conflict")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5313,16 +6335,16 @@ async def test_file_tool_service_execute_excel_script_rejects_text_and_file_toge
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "workbook.save(output_path)\n"
-                "result_text = 'done'\n"
-            ),
-            output_name="conflict.xlsx",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "workbook.save(output_path)\n"
+                    "result_text = 'done'\n"
+                ),
+                output_name="conflict.xlsx",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5336,6 +6358,8 @@ async def test_file_tool_service_execute_excel_script_rejects_text_and_file_toge
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_returns_traceback_on_failure():
     workspace_dir = _make_workspace("execute-excel-script-error")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5351,11 +6375,11 @@ async def test_file_tool_service_execute_excel_script_returns_traceback_on_failu
             workspace_service=workspace_service,
             office_libs={"openpyxl": object()},
         )
-
-        result = await service.execute_excel_script(
-            event,
-            script="raise ValueError('boom')",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="raise ValueError('boom')",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5370,6 +6394,8 @@ async def test_file_tool_service_execute_excel_script_returns_traceback_on_failu
 @pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_handles_invalid_result_json():
     workspace_dir = _make_workspace("execute-excel-script-invalid-result-json")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5386,10 +6412,11 @@ async def test_file_tool_service_execute_excel_script_handles_invalid_result_jso
             office_libs={"openpyxl": object()},
         )
 
-        def _invalid_result_runner(*, result_path: Path, **_kwargs) -> str:
+        def _invalid_result_runner(*, result_path: str, **_kwargs) -> str:
+            result_file = Path(result_path)
             return (
                 "from pathlib import Path\n"
-                f"Path({str(result_path.resolve())!r}).write_text('not json', encoding='utf-8')\n"
+                f"Path({str(result_file)!r}).write_text('not json', encoding='utf-8')\n"
             )
 
         with patch.object(
@@ -5397,10 +6424,11 @@ async def test_file_tool_service_execute_excel_script_handles_invalid_result_jso
             "_build_runner_script",
             side_effect=_invalid_result_runner,
         ):
-            result = await service.execute_excel_script(
-                event,
-                script="result_text = 'ok'",
-            )
+            with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+                result = await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5425,6 +6453,8 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
     traceback_fragment,
 ):
     workspace_dir = _make_workspace("execute-excel-script-non-object-result-json")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5441,10 +6471,11 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
             office_libs={"openpyxl": object()},
         )
 
-        def _non_object_result_runner(*, result_path: Path, **_kwargs) -> str:
+        def _non_object_result_runner(*, result_path: str, **_kwargs) -> str:
+            result_file = Path(result_path)
             return (
                 "from pathlib import Path\n"
-                f"Path({str(result_path.resolve())!r}).write_text({result_content!r}, encoding='utf-8')\n"
+                f"Path({str(result_file)!r}).write_text({result_content!r}, encoding='utf-8')\n"
             )
 
         with patch.object(
@@ -5452,10 +6483,11 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
             "_build_runner_script",
             side_effect=_non_object_result_runner,
         ):
-            result = await service.execute_excel_script(
-                event,
-                script="result_text = 'ok'",
-            )
+            with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+                result = await service.execute_excel_script(
+                    event,
+                    script="result_text = 'ok'",
+                )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5468,10 +6500,83 @@ async def test_file_tool_service_execute_excel_script_handles_non_object_result_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload_text", "expected_error", "traceback_fragment"),
+    [
+        (
+            '{"success": true, "mode": "file"}',
+            "脚本返回了 file 模式，但缺少 output_path",
+            "",
+        ),
+        (
+            '{"success": true, "mode": "file", "output_path": "unexpected.xlsx"}',
+            "脚本返回了无效的 output_path",
+            "unexpected.xlsx",
+        ),
+    ],
+)
+async def test_file_tool_service_execute_excel_script_validates_file_mode_output_path(
+    payload_text,
+    expected_error,
+    traceback_fragment,
+):
+    workspace_dir = _make_workspace("execute-excel-script-invalid-file-output-path")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
+    executor = ThreadPoolExecutor(max_workers=1)
+    event = _build_event()
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={"openpyxl": object()},
+            max_file_size=1024 * 1024,
+            feature_settings={},
+        )
+        service = _build_file_tool_service(
+            workspace_service=workspace_service,
+            office_libs={"openpyxl": object()},
+        )
+
+        def _file_payload_runner(*, result_path: str, **_kwargs) -> str:
+            result_file = Path(result_path)
+            return (
+                "from pathlib import Path\n"
+                f"Path({str(result_file)!r}).write_text({payload_text!r}, encoding='utf-8')\n"
+            )
+
+        with patch.object(
+            service._excel_script_service,
+            "_build_runner_script",
+            side_effect=_file_payload_runner,
+        ):
+            with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+                result = await service.execute_excel_script(
+                    event,
+                    script="workbook = Workbook()",
+                    output_name="script-output.xlsx",
+                )
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == expected_error
+    if traceback_fragment:
+        assert traceback_fragment in payload["traceback"]
+    else:
+        assert payload["traceback"] == ""
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_handles_result_read_error(
     monkeypatch,
 ):
     workspace_dir = _make_workspace("execute-excel-script-result-read-error")
+    sandbox_dir = workspace_dir / "fake-sandbox"
+    sandbox_dir.mkdir()
     executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
 
@@ -5495,10 +6600,11 @@ async def test_file_tool_service_execute_excel_script_handles_result_read_error(
             return original_read_text(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "read_text", _broken_read_text)
-        result = await service.execute_excel_script(
-            event,
-            script="result_text = 'ok'",
-        )
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -5537,7 +6643,10 @@ async def test_file_tool_service_execute_excel_script_marks_retry_exhausted_afte
                 script="raise ValueError('boom')",
             )
         )
-        service._excel_script_service._run_script_process = runner
+        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._acquire_sandbox_booter = AsyncMock(
+            return_value=(MagicMock(capabilities=("python", "filesystem")), None)
+        )
 
         first = json.loads(
             await service.execute_excel_script(
@@ -5601,7 +6710,10 @@ async def test_file_tool_service_execute_excel_script_stops_running_after_retry_
                 script="raise ValueError('boom')",
             )
         )
-        service._excel_script_service._run_script_process = runner
+        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._acquire_sandbox_booter = AsyncMock(
+            return_value=(MagicMock(capabilities=("python", "filesystem")), None)
+        )
 
         for _ in range(3):
             await service.execute_excel_script(
@@ -5667,7 +6779,10 @@ async def test_file_tool_service_execute_excel_script_resets_retry_count_after_s
                 ),
             ]
         )
-        service._excel_script_service._run_script_process = runner
+        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._acquire_sandbox_booter = AsyncMock(
+            return_value=(MagicMock(capabilities=("python", "filesystem")), None)
+        )
 
         first = json.loads(
             await service.execute_excel_script(
@@ -5704,8 +6819,6 @@ async def test_file_tool_service_execute_excel_script_resets_retry_count_after_s
 
 @pytest.mark.asyncio
 async def test_file_tool_service_creates_office_file_via_generator_and_delivery():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     event.send = AsyncMock()
     office_generator = MagicMock()
@@ -5713,30 +6826,20 @@ async def test_file_tool_service_creates_office_file_via_generator_and_delivery(
     delivery_service = MagicMock()
     delivery_service.send_file_with_preview = AsyncMock()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={"enable_office_files": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
-            pdf_converter=MagicMock(),
-            delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.create_office_file(
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent,
+        office_libs={"docx": object()},
+        feature_settings={"enable_office_files": True},
+        office_generator=office_generator,
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.create_office_file(
             event,
             filename="report.docx",
             content="hello world",
             file_type="word",
         )
-    finally:
-        executor.shutdown(wait=False)
 
     office_generator.generate.assert_awaited_once()
     delivery_service.send_file_with_preview.assert_awaited_once()
@@ -5747,130 +6850,107 @@ async def test_file_tool_service_creates_office_file_via_generator_and_delivery(
 async def test_file_tool_service_create_office_file_exports_word_via_node_backend():
     docx = _import_docx()
     workspace_dir = _make_workspace("create-office-word-node")
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     event.send = AsyncMock()
     delivery_service = MagicMock()
     delivery_service.send_file_with_preview = AsyncMock()
 
     try:
-        workspace_service = WorkspaceService(
+        with _managed_file_tool_service(
             plugin_data_path=workspace_dir,
-            executor=executor,
             office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
             feature_settings={"enable_office_files": True},
-        )
-        office_generator = OfficeGenerator(
-            data_path=workspace_dir,
-            render_backend_config=_node_render_backend_config_for_tests(),
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
+            office_generator=OfficeGenerator(
+                data_path=workspace_dir,
+                render_backend_config=_node_render_backend_config_for_tests(),
+            ),
             pdf_converter=MagicMock(),
             delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.create_office_file(
-            event,
-            filename="report.docx",
-            content={
-                "metadata": {
-                    "title": "Node Legacy Entry",
-                    "document_style": {
-                        "summary_card_defaults": {
-                            "title_align": "center",
-                            "title_emphasis": "strong",
-                            "title_font_scale": 1.2,
-                            "title_space_before": 12,
-                            "title_space_after": 4,
-                            "list_space_after": 8,
+        ) as managed:
+            result = await managed.service.create_office_file(
+                event,
+                filename="report.docx",
+                content={
+                    "metadata": {
+                        "title": "Node Legacy Entry",
+                        "document_style": {
+                            "summary_card_defaults": {
+                                "title_align": "center",
+                                "title_emphasis": "strong",
+                                "title_font_scale": 1.2,
+                                "title_space_before": 12,
+                                "title_space_after": 4,
+                                "list_space_after": 8,
+                            }
                         }
                     },
+                    "blocks": [
+                        {"type": "heading", "text": "一、经营总览", "level": 1},
+                        {
+                            "type": "table",
+                            "headers": ["日期", "时间", "内容"],
+                            "rows": [
+                                ["第一天", "09:00", "课程 A"],
+                                ["第二天", "13:00", "课程 B"],
+                            ],
+                        },
+                        {
+                            "type": "summary_card",
+                            "title": "Highlights",
+                            "items": ["Stable revenue", "Lower churn"],
+                            "variant": "conclusion",
+                        },
+                    ],
                 },
-                "blocks": [
-                    {"type": "heading", "text": "一、经营总览", "level": 1},
-                    {
-                        "type": "table",
-                        "headers": ["日期", "时间", "内容"],
-                        "rows": [
-                            ["第一天", "09:00", "课程 A"],
-                            ["第二天", "13:00", "课程 B"],
-                        ],
-                    },
-                    {
-                        "type": "summary_card",
-                        "title": "Highlights",
-                        "items": ["Stable revenue", "Lower churn"],
-                        "variant": "conclusion",
-                    },
-                ],
-            },
-            file_type="word",
-        )
-        assert result is None
-        delivery_service.send_file_with_preview.assert_awaited_once()
-        delivered_path = Path(delivery_service.send_file_with_preview.await_args.args[1])
-        loaded_doc = docx.Document(delivered_path)
-        table = loaded_doc.tables[0]
+                file_type="word",
+            )
+            assert result is None
+            delivery_service.send_file_with_preview.assert_awaited_once()
+            delivered_path = Path(delivery_service.send_file_with_preview.await_args.args[1])
+            loaded_doc = docx.Document(delivered_path)
+            table = loaded_doc.tables[0]
 
-        assert any(
-            paragraph.text == "Node Legacy Entry" for paragraph in loaded_doc.paragraphs
-        )
-        assert any(
-            paragraph.text == "一、经营总览" for paragraph in loaded_doc.paragraphs
-        )
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
+            assert any(
+                paragraph.text == "Node Legacy Entry" for paragraph in loaded_doc.paragraphs
+            )
+            assert any(
+                paragraph.text == "一、经营总览" for paragraph in loaded_doc.paragraphs
+            )
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-        summary_title = _find_paragraph(loaded_doc, "Highlights")
-        summary_item = _find_paragraph(loaded_doc, "• Stable revenue")
-        assert summary_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
-        assert summary_title.runs[0].bold is True
-        assert summary_title.paragraph_format.space_before.pt == pytest.approx(12, abs=0.5)
-        assert summary_title.paragraph_format.space_after.pt == pytest.approx(4, abs=0.5)
-        assert summary_item.paragraph_format.space_after.pt == pytest.approx(8, abs=0.5)
-        assert table.rows[0].cells[0].text == "日期"
-        assert len(table.rows) >= 3
+            summary_title = _find_paragraph(loaded_doc, "Highlights")
+            summary_item = _find_paragraph(loaded_doc, "• Stable revenue")
+            assert summary_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
+            assert summary_title.runs[0].bold is True
+            assert summary_title.paragraph_format.space_before.pt == pytest.approx(12, abs=0.5)
+            assert summary_title.paragraph_format.space_after.pt == pytest.approx(4, abs=0.5)
+            assert summary_item.paragraph_format.space_after.pt == pytest.approx(8, abs=0.5)
+            assert table.rows[0].cells[0].text == "日期"
+            assert len(table.rows) >= 3
     finally:
-        executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
 
 @pytest.mark.asyncio
 async def test_file_tool_service_create_office_file_returns_error_without_sending():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     event.send = AsyncMock()
     office_generator = MagicMock()
     delivery_service = MagicMock()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={"enable_office_files": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
-            pdf_converter=MagicMock(),
-            delivery_service=delivery_service,
-            office_libs={},
-        )
-
-        result = await service.create_office_file(
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent,
+        feature_settings={"enable_office_files": True},
+        office_generator=office_generator,
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.create_office_file(
             event,
             filename="report.unsupported",
             content="hello world",
             file_type="unknown",
         )
-    finally:
-        executor.shutdown(wait=False)
 
     assert result == "错误：不支持的文件类型 'unknown'。允许值：excel/powerpoint"
     event.send.assert_not_called()
@@ -5880,38 +6960,26 @@ async def test_file_tool_service_create_office_file_returns_error_without_sendin
 
 @pytest.mark.asyncio
 async def test_file_tool_service_create_office_file_returns_error_when_generated_file_missing():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     office_generator = MagicMock()
     office_generator.generate = AsyncMock(return_value=None)
     delivery_service = MagicMock()
     delivery_service.send_file_with_preview = AsyncMock()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={"enable_office_files": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
-            pdf_converter=MagicMock(),
-            delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.create_office_file(
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent,
+        office_libs={"docx": object()},
+        feature_settings={"enable_office_files": True},
+        office_generator=office_generator,
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.create_office_file(
             event,
             filename="report.docx",
             content="hello world",
             file_type="word",
         )
-    finally:
-        executor.shutdown(wait=False)
 
     assert result == "错误：文件生成失败，未找到输出文件"
     delivery_service.send_file_with_preview.assert_not_called()
@@ -5919,36 +6987,24 @@ async def test_file_tool_service_create_office_file_returns_error_when_generated
 
 @pytest.mark.asyncio
 async def test_file_tool_service_create_office_file_requires_explicit_type_without_suffix():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     office_generator = MagicMock()
     delivery_service = MagicMock()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"openpyxl": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={"enable_office_files": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
-            pdf_converter=MagicMock(),
-            delivery_service=delivery_service,
-            office_libs={"openpyxl": object()},
-        )
-
-        result = await service.create_office_file(
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent,
+        office_libs={"openpyxl": object()},
+        feature_settings={"enable_office_files": True},
+        office_generator=office_generator,
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.create_office_file(
             event,
             filename="report",
             content="hello world",
             file_type="",
         )
-    finally:
-        executor.shutdown(wait=False)
 
     assert (
         result
@@ -5960,36 +7016,24 @@ async def test_file_tool_service_create_office_file_requires_explicit_type_witho
 
 @pytest.mark.asyncio
 async def test_file_tool_service_create_office_file_rejects_word_fallback_without_suffix():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     office_generator = MagicMock()
     delivery_service = MagicMock()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={"enable_office_files": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
-            pdf_converter=MagicMock(),
-            delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.create_office_file(
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent,
+        office_libs={"docx": object()},
+        feature_settings={"enable_office_files": True},
+        office_generator=office_generator,
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.create_office_file(
             event,
             filename="report",
             content="hello world",
             file_type="word",
         )
-    finally:
-        executor.shutdown(wait=False)
 
     assert (
         result
@@ -6002,8 +7046,6 @@ async def test_file_tool_service_create_office_file_rejects_word_fallback_withou
 
 @pytest.mark.asyncio
 async def test_file_tool_service_create_office_file_returns_direct_result_for_explicit_tool_error():
-    workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     event.get_extra.side_effect = lambda key, default=None: {
         EXPLICIT_FILE_TOOL_EVENT_KEY: "create_office_file"
@@ -6012,30 +7054,20 @@ async def test_file_tool_service_create_office_file_returns_direct_result_for_ex
     office_generator = MagicMock()
     delivery_service = MagicMock()
 
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
-            feature_settings={"enable_office_files": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
-            office_generator=office_generator,
-            pdf_converter=MagicMock(),
-            delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.create_office_file(
+    with _managed_file_tool_service(
+        plugin_data_path=Path(__file__).resolve().parent,
+        office_libs={"docx": object()},
+        feature_settings={"enable_office_files": True},
+        office_generator=office_generator,
+        pdf_converter=MagicMock(),
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.create_office_file(
             event,
             filename="report",
             content="hello world",
             file_type="word",
         )
-    finally:
-        executor.shutdown(wait=False)
 
     assert (
         result
@@ -6050,7 +7082,6 @@ async def test_file_tool_service_create_office_file_returns_direct_result_for_ex
 @pytest.mark.asyncio
 async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
     workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     source_path = workspace_dir / "convert-source.docx"
     source_path.write_text("demo", encoding="utf-8")
@@ -6062,30 +7093,22 @@ async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
     delivery_service.send_file_with_preview = AsyncMock()
 
     try:
-        workspace_service = WorkspaceService(
+        with _managed_file_tool_service(
             plugin_data_path=workspace_dir,
-            executor=executor,
             office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
             feature_settings={"enable_pdf_conversion": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
             office_generator=MagicMock(),
             pdf_converter=pdf_converter,
             delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-        output_path.write_text("pdf", encoding="utf-8")
-
-        result = await service.convert_to_pdf(
-            event,
-            filename=source_path.name,
-        )
+        ) as managed:
+            output_path.write_text("pdf", encoding="utf-8")
+            result = await managed.service.convert_to_pdf(
+                event,
+                filename=source_path.name,
+            )
     finally:
         source_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
-        executor.shutdown(wait=False)
 
     pdf_converter.office_to_pdf.assert_awaited_once_with(source_path)
     delivery_service.send_file_with_preview.assert_awaited_once()
@@ -6095,7 +7118,6 @@ async def test_file_tool_service_convert_to_pdf_returns_none_after_delivery():
 @pytest.mark.asyncio
 async def test_file_tool_service_convert_to_pdf_returns_error_when_generated_file_missing():
     workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     source_path = workspace_dir / "convert-source-missing.docx"
     source_path.write_text("demo", encoding="utf-8")
@@ -6106,28 +7128,20 @@ async def test_file_tool_service_convert_to_pdf_returns_error_when_generated_fil
     delivery_service.send_file_with_preview = AsyncMock()
 
     try:
-        workspace_service = WorkspaceService(
+        with _managed_file_tool_service(
             plugin_data_path=workspace_dir,
-            executor=executor,
             office_libs={"docx": object()},
-            max_file_size=1024 * 1024,
             feature_settings={"enable_pdf_conversion": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
             office_generator=MagicMock(),
             pdf_converter=pdf_converter,
             delivery_service=delivery_service,
-            office_libs={"docx": object()},
-        )
-
-        result = await service.convert_to_pdf(
-            event,
-            filename=source_path.name,
-        )
+        ) as managed:
+            result = await managed.service.convert_to_pdf(
+                event,
+                filename=source_path.name,
+            )
     finally:
         source_path.unlink(missing_ok=True)
-        executor.shutdown(wait=False)
 
     assert result == "错误：PDF 转换失败，未找到生成的 PDF 文件"
     delivery_service.send_file_with_preview.assert_not_called()
@@ -6136,7 +7150,6 @@ async def test_file_tool_service_convert_to_pdf_returns_error_when_generated_fil
 @pytest.mark.asyncio
 async def test_file_tool_service_convert_from_pdf_returns_error_when_generated_file_missing():
     workspace_dir = Path(__file__).resolve().parent
-    executor = ThreadPoolExecutor(max_workers=1)
     event = _build_event()
     source_path = workspace_dir / "convert-back-missing.pdf"
     source_path.write_text("pdf", encoding="utf-8")
@@ -6148,29 +7161,20 @@ async def test_file_tool_service_convert_from_pdf_returns_error_when_generated_f
     delivery_service.send_file_with_preview = AsyncMock()
 
     try:
-        workspace_service = WorkspaceService(
+        with _managed_file_tool_service(
             plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
             feature_settings={"enable_pdf_conversion": True},
-        )
-        service = _build_file_tool_service(
-            workspace_service=workspace_service,
             office_generator=MagicMock(),
             pdf_converter=pdf_converter,
             delivery_service=delivery_service,
-            office_libs={},
-        )
-
-        result = await service.convert_from_pdf(
-            event,
-            filename=source_path.name,
-            target_format="word",
-        )
+        ) as managed:
+            result = await managed.service.convert_from_pdf(
+                event,
+                filename=source_path.name,
+                target_format="word",
+            )
     finally:
         source_path.unlink(missing_ok=True)
-        executor.shutdown(wait=False)
 
     assert result == "错误：PDF→Word 文档 转换失败，未找到生成的文件"
     delivery_service.send_file_with_preview.assert_not_called()
@@ -6182,56 +7186,26 @@ def test_command_service_lists_office_files_in_workspace():
     sample_file = workspace_dir / "report.docx"
     sample_file.write_text("demo", encoding="utf-8")
 
-    executor = ThreadPoolExecutor(max_workers=1)
     try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=workspace_dir,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
-        pdf_converter = MagicMock()
-        pdf_converter.capabilities = {
-            "office_to_pdf": False,
-            "pdf_to_word": False,
-            "pdf_to_excel": False,
-        }
-        service = CommandService(
-            workspace_service=workspace_service,
-            pdf_converter=pdf_converter,
-            plugin_data_path=workspace_dir,
-            auto_delete=False,
-            allow_external_input_files=False,
-            enable_features_in_group=True,
-            auto_block_execution_tools=True,
-            reply_to_user=True,
-            upload_session_service=MagicMock(),
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
-        )
+        with _managed_workspace_service(plugin_data_path=workspace_dir) as managed:
+            service = _build_command_service(
+                workspace_service=managed.workspace_service,
+                plugin_data_path=workspace_dir,
+            )
 
-        result = service.list_files(_build_event())
+            result = service.list_files(_build_event())
     finally:
         sample_file.unlink(missing_ok=True)
         workspace_dir.rmdir()
-        executor.shutdown(wait=False)
 
     assert "机器人工作区 Office 文件列表" in result
     assert "report.docx" in result
 
 
 def test_command_service_builds_pdf_status_summary():
-    executor = ThreadPoolExecutor(max_workers=1)
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=Path(__file__).resolve().parent,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
+    with _managed_workspace_service(
+        plugin_data_path=Path(__file__).resolve().parent
+    ) as managed:
         pdf_converter = MagicMock()
         pdf_converter.get_detailed_status.return_value = {
             "capabilities": {
@@ -6248,24 +7222,13 @@ def test_command_service_builds_pdf_status_summary():
             "libs": {"pdf2docx": False, "tabula-py": True},
         }
         pdf_converter.get_missing_dependencies.return_value = ["pdf2docx"]
-        service = CommandService(
-            workspace_service=workspace_service,
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
             pdf_converter=pdf_converter,
             plugin_data_path=Path(__file__).resolve().parent,
-            auto_delete=False,
-            allow_external_input_files=False,
-            enable_features_in_group=True,
-            auto_block_execution_tools=True,
-            reply_to_user=True,
-            upload_session_service=MagicMock(),
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
         )
 
         result = service.pdf_status(_build_event())
-    finally:
-        executor.shutdown(wait=False)
 
     assert "Office→PDF: ✅ 可用 (libreoffice)" in result
     assert "PDF→Excel:  ✅ 可用 (tabula)" in result
@@ -6274,34 +7237,19 @@ def test_command_service_builds_pdf_status_summary():
 
 
 def test_command_service_fileinfo_reports_word_toolchain_available():
-    executor = ThreadPoolExecutor(max_workers=1)
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=Path(__file__).resolve().parent,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
+    with _managed_workspace_service(
+        plugin_data_path=Path(__file__).resolve().parent
+    ) as managed:
         pdf_converter = MagicMock()
         pdf_converter.capabilities = {
             "office_to_pdf": False,
             "pdf_to_word": False,
             "pdf_to_excel": False,
         }
-        service = CommandService(
-            workspace_service=workspace_service,
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
             pdf_converter=pdf_converter,
             plugin_data_path=Path(__file__).resolve().parent,
-            auto_delete=False,
-            allow_external_input_files=False,
-            enable_features_in_group=True,
-            auto_block_execution_tools=True,
-            reply_to_user=True,
-            upload_session_service=MagicMock(),
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
             node_renderer_entry="D:/custom/renderer.js",
         )
 
@@ -6310,42 +7258,25 @@ def test_command_service_fileinfo_reports_word_toolchain_available():
             return_value=True,
         ):
             result = service.fileinfo(_build_event())
-    finally:
-        executor.shutdown(wait=False)
 
     assert "Word工具链: ✅ Node 渲染可用" in result
     assert "renderer.js" in result
 
 
 def test_command_service_fileinfo_reports_word_toolchain_unavailable():
-    executor = ThreadPoolExecutor(max_workers=1)
-    try:
-        workspace_service = WorkspaceService(
-            plugin_data_path=Path(__file__).resolve().parent,
-            executor=executor,
-            office_libs={},
-            max_file_size=1024 * 1024,
-            feature_settings={},
-        )
+    with _managed_workspace_service(
+        plugin_data_path=Path(__file__).resolve().parent
+    ) as managed:
         pdf_converter = MagicMock()
         pdf_converter.capabilities = {
             "office_to_pdf": False,
             "pdf_to_word": False,
             "pdf_to_excel": False,
         }
-        service = CommandService(
-            workspace_service=workspace_service,
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
             pdf_converter=pdf_converter,
             plugin_data_path=Path(__file__).resolve().parent,
-            auto_delete=False,
-            allow_external_input_files=False,
-            enable_features_in_group=True,
-            auto_block_execution_tools=True,
-            reply_to_user=True,
-            upload_session_service=MagicMock(),
-            is_group_feature_enabled=lambda _event: True,
-            check_permission=lambda _event: True,
-            group_feature_disabled_error=lambda: "group disabled",
             node_renderer_entry="D:/custom/missing-renderer.js",
         )
 
@@ -6354,8 +7285,6 @@ def test_command_service_fileinfo_reports_word_toolchain_unavailable():
             return_value=False,
         ):
             result = service.fileinfo(_build_event())
-    finally:
-        executor.shutdown(wait=False)
 
     assert "Word工具链: ❌ Node 渲染不可用" in result
     assert "missing-renderer.js" in result
