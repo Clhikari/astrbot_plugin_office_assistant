@@ -67,7 +67,15 @@ def resolve_computer_runtime_mode(
     provider_settings = config.get("provider_settings", {})
     if not isinstance(provider_settings, dict):
         return default
-    runtime = provider_settings.get("computer_use_runtime", default)
+    if "computer_use_runtime" not in provider_settings:
+        return default
+    runtime = provider_settings.get("computer_use_runtime")
     if isinstance(runtime, str) and runtime.strip():
         return runtime.strip().lower()
-    return default
+    if runtime is None:
+        return "null"
+    if isinstance(runtime, bool):
+        return str(runtime).lower()
+    if isinstance(runtime, str):
+        return "<empty>"
+    return str(runtime)

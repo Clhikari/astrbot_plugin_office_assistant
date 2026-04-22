@@ -72,6 +72,7 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
 )
 from astrbot_plugin_office_assistant.services.runtime_config import (
     get_session_config,
+    resolve_computer_runtime_mode,
 )
 from astrbot_plugin_office_assistant.services.excel_script_service import (
     ExcelScriptService,
@@ -408,6 +409,28 @@ def test_get_session_config_reraises_internal_typeerror_when_signature_unavailab
         get_session_config(_get_config, "session-1")
 
     assert calls == ["session-1"]
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    [
+        (False, "false"),
+        (None, "null"),
+        ("", "<empty>"),
+    ],
+)
+def test_resolve_computer_runtime_mode_marks_non_string_or_empty_values_invalid(
+    runtime,
+    expected,
+):
+    event = _build_event()
+
+    context = MagicMock()
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "provider_settings": {"computer_use_runtime": runtime}
+    }
+
+    assert resolve_computer_runtime_mode(context, event) == expected
 
 
 def test_excel_script_service_join_sandbox_path_uses_windows_path_semantics():
@@ -1656,6 +1679,30 @@ async def test_request_hook_service_hides_execute_excel_script_for_unsupported_r
     )
     service = _build_request_hook_service(
         astrbot_context=_build_astrbot_context(runtime="sandbx"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_false_runtime_value():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime=False),
     )
     context = _build_tool_exposure_context(request)
 
@@ -5699,6 +5746,37 @@ async def test_file_tool_service_execute_excel_script_rejects_unsupported_runtim
     payload = json.loads(result)
     assert payload["success"] is False
     assert "不支持的 computer runtime 配置：sandbx" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_false_runtime_value():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-false-runtime",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime=False),
+    ) as managed:
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "不支持的 computer runtime 配置：false" in payload["error"]
     assert payload["retry_count"] == 0
     assert payload["retry_exhausted"] is True
     runner.assert_not_awaited()
