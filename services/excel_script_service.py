@@ -53,6 +53,7 @@ class SandboxScriptPaths:
 
 class ExcelScriptService:
     _EXCEL_SUFFIXES = EXCEL_SUFFIXES
+    _SCRIPT_EDIT_SUFFIXES = frozenset({".xlsx"})
     _MAX_SCRIPT_RETRIES = 2
     _RETRY_COUNT_EVENT_KEY = "office_assistant_excel_script_retry_failures"
     _SCRIPT_TIMEOUT_SECONDS = 30
@@ -237,7 +238,7 @@ class ExcelScriptService:
                 event,
                 filename,
                 require_exists=True,
-                allowed_suffixes=self._EXCEL_SUFFIXES,
+                allowed_suffixes=self._SCRIPT_EDIT_SUFFIXES,
                 allow_external_path=self._allow_external_input_files,
                 is_group_feature_enabled=self._is_group_feature_enabled,
                 check_permission_fn=self._check_permission,
@@ -263,7 +264,7 @@ class ExcelScriptService:
                 event,
                 output_name,
                 require_exists=False,
-                allowed_suffixes=self._EXCEL_SUFFIXES,
+                allowed_suffixes=self._SCRIPT_EDIT_SUFFIXES,
                 allow_external_path=False,
                 is_group_feature_enabled=self._is_group_feature_enabled,
                 check_permission_fn=self._check_permission,
@@ -844,6 +845,7 @@ class ExcelScriptService:
             dir=str(workspace_root),
         ) as temp_dir:
             temp_root = Path(temp_dir)
+            staged_output_path: Path | None = None
             copied_input_files: list[Path] = []
             inputs_root = temp_root / "_inputs"
             inputs_root.mkdir()
@@ -854,6 +856,11 @@ class ExcelScriptService:
                 shutil.copy2(original_path, copied_path)
                 copied_input_files.append(copied_path)
 
+            if output_path is not None:
+                output_root = temp_root / "_output"
+                output_root.mkdir()
+                staged_output_path = output_root / output_path.name
+
             runner_path = temp_root / "runner.py"
             result_path = temp_root / "result.json"
             runner_path.write_text(
@@ -861,7 +868,9 @@ class ExcelScriptService:
                     script=script,
                     input_files=[str(path.resolve()) for path in copied_input_files],
                     output_path=(
-                        str(output_path.resolve()) if output_path is not None else None
+                        str(staged_output_path.resolve())
+                        if staged_output_path is not None
+                        else None
                     ),
                     result_path=str(result_path.resolve()),
                 ),
@@ -954,7 +963,15 @@ class ExcelScriptService:
                         traceback="",
                         script=script,
                     )
-                expected_output_path = str(output_path.resolve())
+                if staged_output_path is None:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="脚本返回了 file 模式，但当前请求未提供 output_path",
+                        traceback="",
+                        script=script,
+                    )
+                expected_output_path = str(staged_output_path.resolve())
                 if output_path_value != expected_output_path:
                     return ScriptProcessResult(
                         success=False,
@@ -963,12 +980,22 @@ class ExcelScriptService:
                         traceback=f"Unexpected output_path: {output_path_value}",
                         script=script,
                     )
-                if not output_path.exists():
+                if not staged_output_path.exists():
                     return ScriptProcessResult(
                         success=False,
                         mode="error",
                         error="脚本返回了 file 模式，但 output_path 不存在",
                         traceback="",
+                        script=script,
+                    )
+                try:
+                    staged_output_path.replace(output_path)
+                except OSError as exc:
+                    return ScriptProcessResult(
+                        success=False,
+                        mode="error",
+                        error="Excel 脚本结果写入失败",
+                        traceback=str(exc),
                         script=script,
                     )
                 return ScriptProcessResult(

@@ -47,6 +47,8 @@ class ExcelIntentRouter:
     )
     _MODIFY_RE = re.compile(
         r"(修改|补写|更新|重排|改写|调整|删除|新增|追加|插入|替换|生成新版本|"
+        r"写入.{0,32}(?:\.xlsx|\.xls|工作簿|sheet)|"
+        r"填入.{0,32}(?:\.xlsx|\.xls|工作簿|sheet)|"
         r"加公式|改样式|加样式|加图表|加条件格式|加数据验证|"
         r"\bmodify\b|\bedit\b|\bupdate\b|\brewrite\b|"
         rf"\b(?:add|insert)\s+(?:a|an|the|new)?\s*{_ENGLISH_ADD_INSERT_TARGET_RE}\b)",
@@ -56,6 +58,7 @@ class ExcelIntentRouter:
         r"(修改|补写|重排|改写|调整|删除|追加|插入|替换|生成新版本|"
         r"加公式|改样式|加样式|加图表|加条件格式|加数据验证|"
         r"(?:新增|增加|添加)\s*(?:一列|列|一行|行|sheet|工作表|公式|图表|条件格式|数据验证)|"
+        r"(?:写入|填入).{0,32}(?:\.xlsx|\.xls|工作簿|sheet)|"
         r"更新\s*(?:这个|该|当前|现有|已有|原有|文件|工作簿|表格|sheet|xlsx|xls)|"
         r"更新.{0,32}(?:数据|内容|单元格|公式|样式)|"
         r"\bupdate\s+(?:this|the|current|existing|workbook|file|sheet|xlsx|xls)\b|"

@@ -3280,16 +3280,19 @@ def test_excel_intent_router_treats_english_read_insert_formulas_prompt_as_modif
     assert decision.route == "modify_existing"
     assert decision.requires_script is True
     assert decision.should_inject_guide is True
+
+
 def test_excel_intent_router_keeps_write_into_existing_filename():
     decision = ExcelIntentRouter.decide(
         request_text="请把数据写入 report.xlsx 并统计",
         upload_infos=[],
         explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "create_workbook", "write_rows", "export_workbook"},
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
     )
 
     assert decision is not None
-    assert decision.route == "read_existing"
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
     assert decision.matched_files == ("report.xlsx",)
 
 
@@ -3634,6 +3637,26 @@ def test_upload_prompt_service_prefers_read_workbook_for_excel_uploads():
     assert "先调用 `read_file` 读取文件" not in prompt_text
 
 
+def test_upload_prompt_service_prefers_execute_excel_script_for_excel_modifications():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "/AstrBot/data/temp/sales.xlsx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="增加一列公式并导出新版本",
+    )
+
+    assert "先调用 `execute_excel_script` 处理文件" in prompt_text
+    assert "先调用 `read_workbook` 读取文件" not in prompt_text
+
+
 def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
     service = UploadPromptService(allow_external_input_files=False)
 
@@ -3699,7 +3722,7 @@ def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
     assert "工作区文件名: readable_1.txt" in prompt_text
     assert "工作区文件名: unreadable_1.bin" in prompt_text
     assert "外部绝对路径" not in prompt_text
-    assert "先调用 `read_file` 读取文件" in prompt_text
+    assert "先调用 `read_file` 依次读取这些文件" in prompt_text
 
 
 def test_upload_prompt_service_limits_file_details_for_many_uploads():
@@ -5550,6 +5573,32 @@ async def test_file_tool_service_read_workbook_truncates_large_sheet_preview():
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_read_workbook_keeps_prefix_of_long_row_after_header():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="read-workbook-long-row",
+        office_libs={"openpyxl": object()},
+    ) as managed:
+        openpyxl = pytest.importorskip("openpyxl")
+        workbook_path = managed.workspace_dir / "long-row.xlsx"
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = "明细"
+        worksheet.append(["列名"])
+        worksheet.append(["A" * 15_000])
+        workbook.save(workbook_path)
+
+        result = await managed.service.read_workbook(event, workbook_path.name)
+
+    assert result is not None
+    assert "[Sheet: 明细]" in result
+    assert "列名" in result
+    assert "AAAA" in result
+    assert "[已截断：单个 Sheet 预览已达到上限]" in result
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_read_workbook_truncates_when_total_preview_limit_reached():
     event = _build_event()
 
@@ -5572,6 +5621,10 @@ async def test_file_tool_service_read_workbook_truncates_when_total_preview_limi
         third_sheet = workbook.create_sheet("Sheet3")
         third_sheet.append(["内容"])
         third_sheet.append(["C" * 5_000])
+
+        fourth_sheet = workbook.create_sheet("Sheet4")
+        fourth_sheet.append(["内容"])
+        fourth_sheet.append(["D" * 5_000])
         workbook.save(workbook_path)
 
         result = await managed.service.read_workbook(event, workbook_path.name)
@@ -5579,6 +5632,7 @@ async def test_file_tool_service_read_workbook_truncates_when_total_preview_limi
     assert result is not None
     assert "[Sheet 列表] Sheet1, Sheet2, Sheet3" in result
     assert "[Sheet: Sheet3]" in result
+    assert "[Sheet: Sheet4]" not in result
     assert "工作簿总预览已达到上限" in result
 
 
@@ -5741,6 +5795,64 @@ async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
     assert payload["mode"] == "text"
     assert payload["result_text"] == "ok"
     mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_xls_inputs():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-xls-input",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+    ) as managed:
+        source_path = managed.workspace_dir / "legacy.xls"
+        source_path.write_text("legacy", encoding="utf-8")
+
+        result = await managed.service.execute_excel_script(
+            event,
+            script="result_text = 'ok'",
+            input_files=[source_path.name],
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "错误：不支持的文件格式 '.xls'" in payload["error"]
+    assert ".xlsx" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_preserves_existing_output_on_local_failure():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-local-output-staging",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+    ) as managed:
+        openpyxl = pytest.importorskip("openpyxl")
+        output_path = managed.workspace_dir / "report.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(output_path)
+
+        result = await managed.service.execute_excel_script(
+            event,
+            script=(
+                "workbook = Workbook()\n"
+                "worksheet = workbook.active\n"
+                "worksheet['A1'] = '新值'\n"
+                "workbook.save(output_path)\n"
+                "raise RuntimeError('boom')\n"
+            ),
+            output_name=output_path.name,
+        )
+        reloaded = openpyxl.load_workbook(output_path)
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "boom"
+    assert reloaded.active["A1"].value == "原始"
 
 
 @pytest.mark.asyncio
