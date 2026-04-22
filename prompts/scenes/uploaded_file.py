@@ -3,6 +3,7 @@ from ...services.excel_intent_router import ExcelIntentRouter
 from ...services.upload_types import UploadInfo
 
 MAX_DETAILED_UPLOAD_INFOS = 3
+_SCRIPT_EDIT_SUFFIXES = frozenset({".xlsx"})
 
 
 def format_minimal_upload_file_info(info: UploadInfo) -> str:
@@ -131,10 +132,7 @@ def _preferred_read_tool(
         return "read_file"
 
     if all(
-        str(info.get("file_suffix", "")).lower() in EXCEL_SUFFIXES
-        for info in readable_infos
-    ) and all(
-        str(info.get("file_suffix", "")).lower() == ".xlsx"
+        str(info.get("file_suffix", "")).lower() in _SCRIPT_EDIT_SUFFIXES
         for info in readable_infos
     ):
         decision = ExcelIntentRouter.decide(

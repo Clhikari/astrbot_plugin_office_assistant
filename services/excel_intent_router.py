@@ -26,6 +26,7 @@ class ExcelRouteDecision:
 
 class ExcelIntentRouter:
     _MATCH_CONTEXT_WINDOW = 24
+    _SCRIPT_EDIT_SUFFIXES = frozenset({".xlsx"})
     _ENGLISH_ADD_INSERT_TARGET_RE = (
         r"(?:column|columns|row|rows|sheet|sheets|worksheet|worksheets|"
         r"formula|formulas|chart|charts|style|styles|cell|cells|"
@@ -133,6 +134,16 @@ class ExcelIntentRouter:
         if has_excel_file and has_modify_intent and (
             not has_read_intent or cls._has_explicit_modify_intent(normalized_text)
         ):
+            if not cls._all_script_editable_files(matched_files):
+                return ExcelRouteDecision(
+                    route="read_existing",
+                    matched_files=matched_files,
+                    requires_script=False,
+                    should_inject_guide=cls._can_read_existing(
+                        explicit_tool_name=explicit_tool_name,
+                        exposed_tool_names=exposed_tool_names,
+                    ),
+                )
             return ExcelRouteDecision(
                 route="modify_existing",
                 matched_files=matched_files,
@@ -234,6 +245,15 @@ class ExcelIntentRouter:
     @classmethod
     def _has_explicit_modify_intent(cls, request_text: str) -> bool:
         return bool(cls._EXPLICIT_MODIFY_RE.search(request_text))
+
+    @classmethod
+    def _all_script_editable_files(cls, matched_files: tuple[str, ...]) -> bool:
+        if not matched_files:
+            return True
+        return all(
+            str(file_name).lower().endswith(tuple(cls._SCRIPT_EDIT_SUFFIXES))
+            for file_name in matched_files
+        )
 
     @classmethod
     def _can_use_workbook_primitives(

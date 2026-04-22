@@ -3240,6 +3240,21 @@ def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
     assert decision.should_inject_guide is True
 
 
+def test_excel_intent_router_falls_back_to_read_for_xls_modify_request():
+    decision = ExcelIntentRouter.decide(
+        request_text="请更新 legacy.xls 中的数据并保存",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+    assert decision.matched_files == ("legacy.xls",)
+
+
 def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify_existing():
     decision = ExcelIntentRouter.decide(
         request_text="read report.xlsx and update formulas",
@@ -3655,6 +3670,26 @@ def test_upload_prompt_service_prefers_execute_excel_script_for_excel_modificati
 
     assert "先调用 `execute_excel_script` 处理文件" in prompt_text
     assert "先调用 `read_workbook` 读取文件" not in prompt_text
+
+
+def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
+    service = UploadPromptService(allow_external_input_files=True)
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "legacy.xls",
+                "file_suffix": ".xls",
+                "stored_name": "legacy_1.xls",
+                "source_path": "/AstrBot/data/temp/legacy.xls",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="更新这个表里的数据并保存",
+    )
+
+    assert "先调用 `read_workbook` 读取文件" in prompt_text
+    assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
 
 
 def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
