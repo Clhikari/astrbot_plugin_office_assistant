@@ -118,6 +118,69 @@ class ExtractedExcelSheet:
     text: str
 
 
+_EXCEL_PREVIEW_MAX_ROWS_PER_SHEET = 200
+_EXCEL_PREVIEW_MAX_CHARS_PER_SHEET = 12_000
+_EXCEL_PREVIEW_MAX_TOTAL_CHARS = 24_000
+_EXCEL_PREVIEW_NOTE_RESERVE = 120
+
+
+def _build_excel_sheet_preview(
+    *,
+    sheet_name: str,
+    rows,
+    remaining_chars: int,
+) -> tuple[ExtractedExcelSheet, int]:
+    if remaining_chars <= 0:
+        text = "[已截断：工作簿总预览已达到上限，未继续展开此 Sheet]"
+        return ExtractedExcelSheet(name=sheet_name, text=text), len(text)
+
+    sheet_limit = min(_EXCEL_PREVIEW_MAX_CHARS_PER_SHEET, remaining_chars)
+    content_limit = max(sheet_limit - _EXCEL_PREVIEW_NOTE_RESERVE, 0)
+    lines: list[str] = []
+    content_chars = 0
+    shown_rows = 0
+    row_limit_hit = False
+    char_limit_hit = False
+    workbook_limit_hit = False
+
+    for row in rows:
+        if shown_rows >= _EXCEL_PREVIEW_MAX_ROWS_PER_SHEET:
+            row_limit_hit = True
+            break
+
+        row_text = "\t".join("" if value is None else str(value) for value in row)
+        line_cost = len(row_text) + (1 if lines else 0)
+        if content_chars + line_cost <= content_limit:
+            lines.append(row_text)
+            content_chars += line_cost
+            shown_rows += 1
+            continue
+
+        if not lines and content_limit > 0:
+            truncated_row = row_text[:content_limit].rstrip()
+            if truncated_row:
+                lines.append(truncated_row)
+                content_chars += len(truncated_row)
+                shown_rows = 1
+
+        char_limit_hit = True
+        workbook_limit_hit = sheet_limit < _EXCEL_PREVIEW_MAX_CHARS_PER_SHEET
+        break
+
+    note_parts: list[str] = []
+    if row_limit_hit:
+        note_parts.append(f"仅展示前 {shown_rows} 行")
+    if workbook_limit_hit:
+        note_parts.append("工作簿总预览已达到上限")
+    elif char_limit_hit:
+        note_parts.append("单个 Sheet 预览已达到上限")
+    if note_parts:
+        lines.append(f"[已截断：{'；'.join(note_parts)}]")
+
+    text = "\n".join(lines)
+    return ExtractedExcelSheet(name=sheet_name, text=text), len(text)
+
+
 def format_extracted_word_content(
     content: ExtractedWordContent | None,
     *,
@@ -488,17 +551,15 @@ def extract_excel_sheets(file_path: Path) -> list[ExtractedExcelSheet] | None:
 
         workbook = load_workbook(file_path, read_only=True, data_only=True)
         extracted_sheets: list[ExtractedExcelSheet] = []
+        remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
         for worksheet in workbook.worksheets:
-            lines = [
-                "\t".join("" if value is None else str(value) for value in row)
-                for row in worksheet.iter_rows(values_only=True)
-            ]
-            extracted_sheets.append(
-                ExtractedExcelSheet(
-                    name=worksheet.title,
-                    text="\n".join(lines),
-                )
+            extracted_sheet, consumed_chars = _build_excel_sheet_preview(
+                sheet_name=worksheet.title,
+                rows=worksheet.iter_rows(values_only=True),
+                remaining_chars=remaining_chars,
             )
+            extracted_sheets.append(extracted_sheet)
+            remaining_chars = max(remaining_chars - consumed_chars, 0)
         return extracted_sheets
     except ImportError:
         return None
@@ -537,17 +598,19 @@ def _extract_xls_sheets_xlrd(file_path: Path) -> list[ExtractedExcelSheet] | Non
 
         workbook = xlrd.open_workbook(str(file_path))
         extracted_sheets: list[ExtractedExcelSheet] = []
+        remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
         for sheet in workbook.sheets():
-            lines = []
-            for row_idx in range(sheet.nrows):
-                row_values = [str(cell.value) for cell in sheet.row(row_idx)]
-                lines.append("\t".join(row_values))
-            extracted_sheets.append(
-                ExtractedExcelSheet(
-                    name=sheet.name,
-                    text="\n".join(lines),
-                )
+            row_iter = (
+                (cell.value for cell in sheet.row(row_idx))
+                for row_idx in range(sheet.nrows)
             )
+            extracted_sheet, consumed_chars = _build_excel_sheet_preview(
+                sheet_name=sheet.name,
+                rows=row_iter,
+                remaining_chars=remaining_chars,
+            )
+            extracted_sheets.append(extracted_sheet)
+            remaining_chars = max(remaining_chars - consumed_chars, 0)
         return extracted_sheets
     except ImportError:
         return None
@@ -564,22 +627,23 @@ def _extract_xls_sheets_win32com(
             workbook = app.Workbooks.Open(str(file_path.resolve()))
             try:
                 extracted_sheets: list[ExtractedExcelSheet] = []
+                remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
                 for worksheet in workbook.Worksheets:
                     used_range = worksheet.UsedRange
-                    lines = []
-                    if used_range:
-                        for row in used_range.Rows:
-                            row_values = [
-                                "" if cell.Value is None else str(cell.Value)
-                                for cell in row.Cells
-                            ]
-                            lines.append("\t".join(row_values))
-                    extracted_sheets.append(
-                        ExtractedExcelSheet(
-                            name=str(worksheet.Name),
-                            text="\n".join(lines),
+                    row_iter = (
+                        (
+                            cell.Value
+                            for cell in row.Cells
                         )
+                        for row in used_range.Rows
+                    ) if used_range else ()
+                    extracted_sheet, consumed_chars = _build_excel_sheet_preview(
+                        sheet_name=str(worksheet.Name),
+                        rows=row_iter,
+                        remaining_chars=remaining_chars,
                     )
+                    extracted_sheets.append(extracted_sheet)
+                    remaining_chars = max(remaining_chars - consumed_chars, 0)
                 return extracted_sheets
             finally:
                 with suppress(Exception):

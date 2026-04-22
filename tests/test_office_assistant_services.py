@@ -5522,6 +5522,67 @@ async def test_file_tool_service_reads_workbook_with_sheet_sections():
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_read_workbook_truncates_large_sheet_preview():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="read-workbook-truncated-sheet",
+        office_libs={"openpyxl": object()},
+    ) as managed:
+        openpyxl = pytest.importorskip("openpyxl")
+        workbook_path = managed.workspace_dir / "large.xlsx"
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = "明细"
+        worksheet.append(["序号", "内容"])
+        for index in range(220):
+            worksheet.append([index, f"第{index:03d}行"])
+        workbook.save(workbook_path)
+
+        result = await managed.service.read_workbook(event, workbook_path.name)
+
+    assert result is not None
+    assert "[Sheet: 明细]" in result
+    assert "第000行" in result
+    assert "第198行" in result
+    assert "第199行" not in result
+    assert "[已截断：仅展示前 200 行]" in result
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_read_workbook_truncates_when_total_preview_limit_reached():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="read-workbook-total-limit",
+        office_libs={"openpyxl": object()},
+    ) as managed:
+        openpyxl = pytest.importorskip("openpyxl")
+        workbook_path = managed.workspace_dir / "huge.xlsx"
+        workbook = openpyxl.Workbook()
+        first_sheet = workbook.active
+        first_sheet.title = "Sheet1"
+        first_sheet.append(["内容"])
+        first_sheet.append(["A" * 11_000])
+
+        second_sheet = workbook.create_sheet("Sheet2")
+        second_sheet.append(["内容"])
+        second_sheet.append(["B" * 11_000])
+
+        third_sheet = workbook.create_sheet("Sheet3")
+        third_sheet.append(["内容"])
+        third_sheet.append(["C" * 5_000])
+        workbook.save(workbook_path)
+
+        result = await managed.service.read_workbook(event, workbook_path.name)
+
+    assert result is not None
+    assert "[Sheet 列表] Sheet1, Sheet2, Sheet3" in result
+    assert "[Sheet: Sheet3]" in result
+    assert "工作簿总预览已达到上限" in result
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_read_workbook_rejects_non_excel_suffix():
     workspace_dir = _make_workspace("read-workbook-invalid")
     event = _build_event()
