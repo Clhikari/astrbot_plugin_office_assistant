@@ -42,6 +42,7 @@ class FileToolService:
     def __init__(
         self,
         *,
+        astrbot_context=None,
         workspace_service=None,
         office_generator=None,
         pdf_converter=None,
@@ -121,6 +122,7 @@ class FileToolService:
         self._excel_script_service = excel_script_service
         if self._excel_script_service is None and workspace_service is not None:
             self._excel_script_service = ExcelScriptService(
+                astrbot_context=astrbot_context,
                 workspace_service=workspace_service,
                 file_delivery_service=generated_output_delivery_service,
                 allow_external_input_files=allow_external_input_files,
