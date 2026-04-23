@@ -103,6 +103,12 @@ class ExcelIntentRouter:
         flags=re.IGNORECASE,
     )
     _ANY_FILENAME_RE = re.compile(r"([^\s'\"`]+?\.[A-Za-z0-9]+)", flags=re.IGNORECASE)
+    _CURRENT_UPLOAD_WORKBOOK_RE = re.compile(
+        r"(这个表|该表|当前表|这个工作簿|该工作簿|当前工作簿|"
+        r"这个xlsx|该xlsx|当前xlsx|这个xls|该xls|当前xls|"
+        r"这个excel|该excel|当前excel|这个sheet|该sheet|当前sheet)",
+        flags=re.IGNORECASE,
+    )
 
     @classmethod
     def decide(
@@ -203,19 +209,30 @@ class ExcelIntentRouter:
     ) -> tuple[str, ...]:
         matched_names: list[str] = []
         request_mentions_filename = cls._request_mentions_filename(request_text)
+        excel_upload_infos = [
+            info
+            for info in upload_infos
+            if str(info.get("file_suffix", "")).lower() in cls._EXCEL_SUFFIXES
+        ]
+        references_current_upload_workbook = cls._references_current_upload_workbook(
+            request_text=request_text,
+            excel_upload_count=len(excel_upload_infos),
+        )
 
-        for info in upload_infos:
-            suffix = str(info.get("file_suffix", "")).lower()
-            if suffix not in cls._EXCEL_SUFFIXES:
-                continue
+        for info in excel_upload_infos:
             stored_name = str(info.get("stored_name", "")).strip()
             original_name = str(info.get("original_name", "")).strip()
-            if request_mentions_filename and not cls._request_references_upload_name(
-                request_text,
-                stored_name=stored_name,
-                original_name=original_name,
-            ):
-                continue
+            if request_mentions_filename:
+                if cls._request_references_upload_name(
+                    request_text,
+                    stored_name=stored_name,
+                    original_name=original_name,
+                ):
+                    pass
+                elif references_current_upload_workbook:
+                    pass
+                else:
+                    continue
             chosen_name = stored_name or original_name
             if chosen_name and chosen_name not in matched_names:
                 matched_names.append(chosen_name)
@@ -264,6 +281,17 @@ class ExcelIntentRouter:
             if pattern.search(request_text):
                 return True
         return False
+
+    @classmethod
+    def _references_current_upload_workbook(
+        cls,
+        *,
+        request_text: str,
+        excel_upload_count: int,
+    ) -> bool:
+        if excel_upload_count != 1:
+            return False
+        return bool(cls._CURRENT_UPLOAD_WORKBOOK_RE.search(request_text))
 
     @classmethod
     def _looks_like_output_filename_reference(

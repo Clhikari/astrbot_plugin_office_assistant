@@ -77,6 +77,10 @@ from astrbot_plugin_office_assistant.services.runtime_config import (
 from astrbot_plugin_office_assistant.services.excel_script_service import (
     ExcelScriptService,
 )
+from astrbot_plugin_office_assistant.prompts.static.excel_tools import (
+    build_excel_routing_notice,
+    build_excel_script_notice,
+)
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
     ExtractedWordItem,
@@ -3227,6 +3231,28 @@ def test_excel_intent_router_ignores_unreferenced_uploaded_excel_files():
     assert decision is None
 
 
+def test_excel_intent_router_keeps_single_uploaded_excel_when_request_refs_current_table():
+    decision = ExcelIntentRouter.decide(
+        request_text="根据 notes.txt 给这个表新增一列",
+        upload_infos=[
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "modify_existing"
+    assert decision.requires_script is True
+    assert decision.matched_files == ("sales_1.xlsx",)
+
+
 def test_excel_intent_router_keeps_export_purpose_existing_filename():
     decision = ExcelIntentRouter.decide(
         request_text="请读取 report.xlsx 用于导出并总结",
@@ -3449,6 +3475,38 @@ async def test_request_hook_service_skips_excel_notice_for_unreferenced_uploaded
     assert SECTION_STATIC_EXCEL_ROUTING not in context.section_names
     assert SECTION_STATIC_EXCEL_READ not in context.section_names
     assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_excel_script_notice_when_current_table_is_referenced():
+    service = _build_request_hook_service(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        _build_notice_context(
+            _build_provider_request(
+                "根据 notes.txt 给这个表新增一列",
+                tool_names=["read_workbook", "execute_excel_script"],
+            )
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
+    ]
+    assert "execute_excel_script" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -3808,6 +3866,15 @@ def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
 
     assert "先调用 `read_workbook` 读取文件" in prompt_text
     assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
+
+
+def test_excel_tool_notices_do_not_advertise_xls_script_modification():
+    routing_notice = build_excel_routing_notice()
+    script_notice = build_excel_script_notice()
+
+    assert "修改已有 `.xlsx` -> `execute_excel_script`" in routing_notice
+    assert "修改已有 `.xlsx/.xls` -> `execute_excel_script`" not in routing_notice
+    assert "现有 `.xls` 不支持 `execute_excel_script` 修改" in script_notice
 
 
 def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():

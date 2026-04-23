@@ -4,7 +4,8 @@ def build_excel_routing_notice() -> str:
         "- 新建 + 无图表无公式 -> `create_workbook` / `write_rows` / `export_workbook`\n"
         "- 新建 + 有图表或公式 -> `execute_excel_script`\n"
         "- 读取已有 `.xlsx/.xls` -> `read_workbook`\n"
-        "- 修改已有 `.xlsx/.xls` -> `execute_excel_script`\n"
+        "- 修改已有 `.xlsx` -> `execute_excel_script`\n"
+        "- 修改已有 `.xls` 不走 `execute_excel_script`，先用 `read_workbook`\n"
         "- 读取完成后，如目标是基于读取结果继续生成新文件，可以继续调用新建路径\n"
     )
 
@@ -22,7 +23,8 @@ def build_excel_read_notice() -> str:
 def build_excel_script_notice() -> str:
     return (
         "\n[System Notice] Excel 脚本工具指南\n"
-        "- 复杂新建或修改已有 Excel 时，使用 `execute_excel_script`\n"
+        "- 复杂新建或修改已有 `.xlsx` 时，使用 `execute_excel_script`\n"
+        "- 现有 `.xls` 不支持 `execute_excel_script` 修改\n"
         "- 脚本运行环境提供 `openpyxl`、`Workbook`、`load_workbook`、`Path`\n"
         "- 已校验的输入工作簿通过 `input_files` 提供；需要导出文件时写到 `output_path`\n"
         "- 成功时只能二选一：设置 `result_text` 返回文本，或写出 `output_path` 返回文件\n"
