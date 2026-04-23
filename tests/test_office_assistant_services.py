@@ -3,11 +3,12 @@ import contextlib
 import json
 import io
 import shutil
+import sys
 import traceback
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -3923,6 +3924,7 @@ def test_excel_tool_notices_do_not_advertise_xls_script_modification():
     assert "修改已有 `.xlsx` -> `execute_excel_script`" in routing_notice
     assert "修改已有 `.xlsx/.xls` -> `execute_excel_script`" not in routing_notice
     assert "现有 `.xls` 不支持 `execute_excel_script` 修改" in script_notice
+    assert "优先使用 `sandbox` runtime" in script_notice
 
 
 def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
@@ -5924,6 +5926,48 @@ async def test_file_tool_service_read_workbook_normalizes_control_chars_inside_c
     assert "第三行\t第四段" not in result
 
 
+def test_excel_sheet_preview_empty_sheet_consumes_render_budget():
+    extracted_sheet, consumed_chars, stop_after_sheet = office_utils._build_excel_sheet_preview(
+        sheet_name="空表",
+        rows=(),
+        remaining_chars=office_utils._EXCEL_PREVIEW_MAX_TOTAL_CHARS,
+    )
+
+    assert extracted_sheet.text == ""
+    assert consumed_chars >= len("[Sheet: 空表]\n[空表]")
+    assert stop_after_sheet is False
+
+
+def test_extract_excel_sheets_limits_empty_sheet_count_by_render_budget():
+    class _FakeSheet:
+        def __init__(self, title: str):
+            self.title = title
+
+        def iter_rows(self, values_only=True):
+            _ = values_only
+            return iter(())
+
+    fake_workbook = SimpleNamespace(
+        worksheets=[_FakeSheet(f"S{index}") for index in range(2000)]
+    )
+    fake_openpyxl = ModuleType("openpyxl")
+    fake_openpyxl.load_workbook = lambda *args, **kwargs: fake_workbook
+
+    with patch.dict(sys.modules, {"openpyxl": fake_openpyxl}):
+        extracted_sheets = office_utils.extract_excel_sheets(Path("empty.xlsx"))
+
+    assert extracted_sheets is not None
+    assert 0 < len(extracted_sheets) < 2000
+    rendered_size = sum(
+        office_utils._rendered_sheet_preview_cost(
+            sheet_name=sheet.name,
+            text=sheet.text,
+        )
+        for sheet in extracted_sheets
+    )
+    assert rendered_size <= office_utils._EXCEL_PREVIEW_MAX_TOTAL_CHARS
+
+
 @pytest.mark.asyncio
 async def test_file_tool_service_read_workbook_truncates_when_total_preview_limit_reached():
     event = _build_event()
@@ -6200,6 +6244,57 @@ async def test_file_tool_service_execute_excel_script_preserves_existing_output_
     assert payload["success"] is False
     assert payload["error"] == "boom"
     assert reloaded.active["A1"].value == "原始"
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_falls_back_to_shutil_move_after_replace_error():
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-local-output-move-fallback",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        delivery_service=delivery_service,
+    ) as managed:
+        output_path = managed.workspace_dir / "report.xlsx"
+        move_calls: list[tuple[str, str]] = []
+        original_replace = Path.replace
+
+        def fake_replace(self: Path, target: Path):
+            if self.name == "report.xlsx" and self.parent.name == "_output":
+                raise OSError("invalid cross-device link")
+            return original_replace(self, target)
+
+        def fake_move(src: str, dst: str):
+            move_calls.append((src, dst))
+            shutil.copy2(src, dst)
+            Path(src).unlink()
+            return dst
+
+        with patch.object(Path, "replace", new=fake_replace):
+            with patch(
+                "astrbot_plugin_office_assistant.services.excel_script_service.shutil.move",
+                side_effect=fake_move,
+            ):
+                result = await managed.service.execute_excel_script(
+                    event,
+                    script=(
+                        "workbook = Workbook()\n"
+                        "worksheet = workbook.active\n"
+                        "worksheet['A1'] = '导出'\n"
+                        "workbook.save(output_path)\n"
+                        ),
+                        output_name="report.xlsx",
+                    )
+                output_exists = output_path.exists()
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert output_exists is True
+    assert move_calls
 
 
 @pytest.mark.asyncio

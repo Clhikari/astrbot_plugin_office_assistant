@@ -122,6 +122,7 @@ _EXCEL_PREVIEW_MAX_ROWS_PER_SHEET = 200
 _EXCEL_PREVIEW_MAX_CHARS_PER_SHEET = 12_000
 _EXCEL_PREVIEW_MAX_TOTAL_CHARS = 24_000
 _EXCEL_PREVIEW_NOTE_RESERVE = 120
+_EXCEL_PREVIEW_SECTION_SEPARATOR_COST = 2
 
 
 def _build_excel_sheet_preview(
@@ -130,8 +131,9 @@ def _build_excel_sheet_preview(
     rows,
     remaining_chars: int,
 ) -> tuple[ExtractedExcelSheet, int, bool]:
+    section_overhead = _minimum_sheet_preview_cost(sheet_name)
     sheet_limit = min(_EXCEL_PREVIEW_MAX_CHARS_PER_SHEET, remaining_chars)
-    content_limit = max(sheet_limit - _EXCEL_PREVIEW_NOTE_RESERVE, 0)
+    content_limit = max(sheet_limit - _EXCEL_PREVIEW_NOTE_RESERVE - section_overhead, 0)
     lines: list[str] = []
     content_chars = 0
     shown_rows = 0
@@ -177,7 +179,7 @@ def _build_excel_sheet_preview(
     text = "\n".join(lines)
     return (
         ExtractedExcelSheet(name=sheet_name, text=text),
-        len(text),
+        _rendered_sheet_preview_cost(sheet_name=sheet_name, text=text),
         workbook_limit_hit,
     )
 
@@ -186,6 +188,20 @@ def _normalize_excel_preview_value(value: object) -> str:
     if value is None:
         return ""
     return re.sub(r"[\r\n\t]+", " ", str(value))
+
+
+def _minimum_sheet_preview_cost(sheet_name: str) -> int:
+    return _rendered_sheet_preview_cost(sheet_name=sheet_name, text="")
+
+
+def _rendered_sheet_preview_cost(*, sheet_name: str, text: str) -> int:
+    rendered_text = text or "[空表]"
+    return (
+        len(f"[Sheet: {sheet_name}]\n{rendered_text}")
+        + _EXCEL_PREVIEW_SECTION_SEPARATOR_COST
+        + len(sheet_name)
+        + 2
+    )
 
 
 def format_extracted_word_content(
@@ -560,7 +576,7 @@ def extract_excel_sheets(file_path: Path) -> list[ExtractedExcelSheet] | None:
         extracted_sheets: list[ExtractedExcelSheet] = []
         remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
         for worksheet in workbook.worksheets:
-            if remaining_chars <= 0:
+            if remaining_chars < _minimum_sheet_preview_cost(worksheet.title):
                 break
             extracted_sheet, consumed_chars, stop_after_sheet = _build_excel_sheet_preview(
                 sheet_name=worksheet.title,
@@ -611,7 +627,7 @@ def _extract_xls_sheets_xlrd(file_path: Path) -> list[ExtractedExcelSheet] | Non
         extracted_sheets: list[ExtractedExcelSheet] = []
         remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
         for sheet in workbook.sheets():
-            if remaining_chars <= 0:
+            if remaining_chars < _minimum_sheet_preview_cost(sheet.name):
                 break
             row_iter = (
                 (cell.value for cell in sheet.row(row_idx))
@@ -644,7 +660,8 @@ def _extract_xls_sheets_win32com(
                 extracted_sheets: list[ExtractedExcelSheet] = []
                 remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
                 for worksheet in workbook.Worksheets:
-                    if remaining_chars <= 0:
+                    worksheet_name = str(worksheet.Name)
+                    if remaining_chars < _minimum_sheet_preview_cost(worksheet_name):
                         break
                     used_range = worksheet.UsedRange
                     row_iter = (
@@ -655,7 +672,7 @@ def _extract_xls_sheets_win32com(
                         for row in used_range.Rows
                     ) if used_range else ()
                     extracted_sheet, consumed_chars, stop_after_sheet = _build_excel_sheet_preview(
-                        sheet_name=str(worksheet.Name),
+                        sheet_name=worksheet_name,
                         rows=row_iter,
                         remaining_chars=remaining_chars,
                     )

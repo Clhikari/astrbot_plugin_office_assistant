@@ -251,7 +251,12 @@ class FileOperationPlugin(Star):
 
         适用场景：
         - 新建包含公式、图表、条件格式、数据验证的复杂 Excel
-        - 修改已有 `.xlsx` / `.xls`
+        - 修改已有 `.xlsx`
+
+        注意：
+        - 现有 `.xls` 不支持此工具修改
+        - 优先使用 `sandbox` runtime
+        - `local` runtime 会在宿主机直接执行脚本，仅适合明确受信任的部署环境
 
         Args:
             script(string): 要执行的 Python 脚本。

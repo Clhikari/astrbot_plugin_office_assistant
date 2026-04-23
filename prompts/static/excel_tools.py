@@ -25,6 +25,7 @@ def build_excel_script_notice() -> str:
         "\n[System Notice] Excel 脚本工具指南\n"
         "- 复杂新建或修改已有 `.xlsx` 时，使用 `execute_excel_script`\n"
         "- 现有 `.xls` 不支持 `execute_excel_script` 修改\n"
+        "- 优先使用 `sandbox` runtime；`local` runtime 会在宿主机直接执行脚本，仅适合受信任环境\n"
         "- 脚本运行环境提供 `openpyxl`、`Workbook`、`load_workbook`、`Path`\n"
         "- 已校验的输入工作簿通过 `input_files` 提供；需要导出文件时写到 `output_path`\n"
         "- 成功时只能二选一：设置 `result_text` 返回文本，或写出 `output_path` 返回文件\n"

@@ -990,14 +990,17 @@ class ExcelScriptService:
                     )
                 try:
                     staged_output_path.replace(output_path)
-                except OSError as exc:
-                    return ScriptProcessResult(
-                        success=False,
-                        mode="error",
-                        error="Excel 脚本结果写入失败",
-                        traceback=str(exc),
-                        script=script,
-                    )
+                except OSError:
+                    try:
+                        shutil.move(str(staged_output_path), str(output_path))
+                    except (OSError, shutil.Error) as move_exc:
+                        return ScriptProcessResult(
+                            success=False,
+                            mode="error",
+                            error="Excel 脚本结果写入失败",
+                            traceback=str(move_exc),
+                            script=script,
+                        )
                 return ScriptProcessResult(
                     success=True,
                     mode="file",

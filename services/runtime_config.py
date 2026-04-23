@@ -1,5 +1,6 @@
 import inspect
 
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 SUPPORTED_COMPUTER_RUNTIME_MODES = frozenset({"local", "sandbox", "none"})
@@ -13,7 +14,8 @@ def _is_call_shape_type_error(exc: TypeError) -> bool:
 def get_session_config(get_config, session_id: str):
     try:
         signature = inspect.signature(get_config)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug(f"[文件管理] get_config 签名解析失败，改用调用探测: {exc}")
         try:
             return get_config(session_id)
         except TypeError as exc:
