@@ -50,6 +50,4 @@ class UploadPromptService:
         if runtime_mode not in {"local", "sandbox"}:
             exposed_tool_names.discard("execute_excel_script")
             return exposed_tool_names
-        if self._auto_block_execution_tools and runtime_mode != "sandbox":
-            exposed_tool_names.discard("execute_excel_script")
         return exposed_tool_names

@@ -3871,7 +3871,7 @@ def test_upload_prompt_service_hides_execute_excel_script_when_runtime_disables_
     assert "先调用 `read_workbook` 读取文件" in prompt_text
 
 
-def test_upload_prompt_service_hides_execute_excel_script_when_auto_block_is_enabled():
+def test_upload_prompt_service_keeps_execute_excel_script_when_auto_block_is_enabled():
     service = UploadPromptService(
         allow_external_input_files=True,
         astrbot_context=_build_astrbot_context(runtime="local"),
@@ -3892,8 +3892,8 @@ def test_upload_prompt_service_hides_execute_excel_script_when_auto_block_is_ena
         event=_build_event(),
     )
 
-    assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
-    assert "先调用 `read_workbook` 读取文件" in prompt_text
+    assert "先调用 `execute_excel_script` 处理文件" in prompt_text
+    assert "先调用 `read_workbook` 读取文件" not in prompt_text
 
 
 def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
@@ -5899,7 +5899,7 @@ async def test_file_tool_service_read_workbook_keeps_prefix_of_long_row_after_he
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_read_workbook_normalizes_newlines_inside_cells():
+async def test_file_tool_service_read_workbook_normalizes_control_chars_inside_cells():
     event = _build_event()
 
     with _managed_file_tool_service(
@@ -5912,15 +5912,16 @@ async def test_file_tool_service_read_workbook_normalizes_newlines_inside_cells(
         worksheet = workbook.active
         worksheet.title = "明细"
         worksheet.append(["名称", "说明"])
-        worksheet.append(["第一项", "第一行\n第二行\r第三行"])
+        worksheet.append(["第一项", "第一行\n第二行\r第三行\t第四段"])
         workbook.save(workbook_path)
 
         result = await managed.service.read_workbook(event, workbook_path.name)
 
     assert result is not None
-    assert "第一项\t第一行 第二行 第三行" in result
+    assert "第一项\t第一行 第二行 第三行 第四段" in result
     assert "第一项\t第一行\n第二行" not in result
     assert "第二行\r第三行" not in result
+    assert "第三行\t第四段" not in result
 
 
 @pytest.mark.asyncio

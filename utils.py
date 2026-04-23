@@ -185,7 +185,7 @@ def _build_excel_sheet_preview(
 def _normalize_excel_preview_value(value: object) -> str:
     if value is None:
         return ""
-    return re.sub(r"[\r\n]+", " ", str(value))
+    return re.sub(r"[\r\n\t]+", " ", str(value))
 
 
 def format_extracted_word_content(
