@@ -3365,6 +3365,20 @@ def test_excel_intent_router_keeps_write_into_existing_filename():
     assert decision.matched_files == ("report.xlsx",)
 
 
+def test_excel_intent_router_keeps_excel_route_for_column_value_conversion():
+    decision = ExcelIntentRouter.decide(
+        request_text="read sales.xlsx and convert a column to USD",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "read_existing"
+    assert decision.requires_script is False
+    assert decision.matched_files == ("sales.xlsx",)
+
+
 @pytest.mark.asyncio
 async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_phrase():
     service = RequestHookService(
@@ -3397,6 +3411,40 @@ async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_p
     ]
     assert "read_workbook" in context.notices[1]
     assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_excel_read_notice_for_column_value_conversion():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="read sales.xlsx and convert a column to USD",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+    ]
+    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
+    assert "read_workbook" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -5851,6 +5899,31 @@ async def test_file_tool_service_read_workbook_keeps_prefix_of_long_row_after_he
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_read_workbook_normalizes_newlines_inside_cells():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="read-workbook-normalize-newlines",
+        office_libs={"openpyxl": object()},
+    ) as managed:
+        openpyxl = pytest.importorskip("openpyxl")
+        workbook_path = managed.workspace_dir / "newline.xlsx"
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = "明细"
+        worksheet.append(["名称", "说明"])
+        worksheet.append(["第一项", "第一行\n第二行\r第三行"])
+        workbook.save(workbook_path)
+
+        result = await managed.service.read_workbook(event, workbook_path.name)
+
+    assert result is not None
+    assert "第一项\t第一行 第二行 第三行" in result
+    assert "第一项\t第一行\n第二行" not in result
+    assert "第二行\r第三行" not in result
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_read_workbook_truncates_when_total_preview_limit_reached():
     event = _build_event()
 
@@ -6047,6 +6120,27 @@ async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
     assert payload["mode"] == "text"
     assert payload["result_text"] == "ok"
     mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_returns_structured_error_for_system_exit():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-system-exit",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+    ) as managed:
+        result = await managed.service.execute_excel_script(
+            event,
+            script="import sys\nsys.exit('bye')",
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert payload["error"] == "bye"
+    assert "SystemExit: bye" in payload["traceback"]
+    assert payload["error"] != "Excel 脚本未返回结果"
 
 
 @pytest.mark.asyncio

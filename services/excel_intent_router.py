@@ -84,7 +84,8 @@ class ExcelIntentRouter:
         r"(导出(?:成|为)?\s*pdf|"
         r"(?:转换|转成|转为|转到).*(?:pdf|word|docx|ppt|pptx)|"
         r"(?:pdf|word|docx|ppt|pptx).*(?:转换|转成|转为|转到)|"
-        r"\bconvert\b)",
+        r"\bconvert\b.{0,64}\b(?:pdf|word|docx|ppt|pptx)\b|"
+        r"\b(?:pdf|word|docx|ppt|pptx)\b.{0,32}\bconvert\b)",
         flags=re.IGNORECASE,
     )
     _DETAIL_RE = re.compile(

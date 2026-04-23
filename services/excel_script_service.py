@@ -1089,10 +1089,10 @@ class ExcelScriptService:
                         "mode": "file",
                         "output_path": str(output_path),
                     }}
-            except Exception as exc:
+            except BaseException as exc:
                 payload = {{
                     "success": False,
-                    "error": str(exc),
+                    "error": str(exc) or type(exc).__name__,
                     "traceback": traceback.format_exc(),
                 }}
 

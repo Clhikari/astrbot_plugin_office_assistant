@@ -144,7 +144,7 @@ def _build_excel_sheet_preview(
             row_limit_hit = True
             break
 
-        row_text = "\t".join("" if value is None else str(value) for value in row)
+        row_text = "\t".join(_normalize_excel_preview_value(value) for value in row)
         line_cost = len(row_text) + (1 if lines else 0)
         if content_chars + line_cost <= content_limit:
             lines.append(row_text)
@@ -180,6 +180,12 @@ def _build_excel_sheet_preview(
         len(text),
         workbook_limit_hit,
     )
+
+
+def _normalize_excel_preview_value(value: object) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"[\r\n]+", " ", str(value))
 
 
 def format_extracted_word_content(
