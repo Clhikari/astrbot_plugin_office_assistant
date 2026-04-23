@@ -105,6 +105,7 @@ def build_plugin_runtime(
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,
+        auto_block_execution_tools=settings.auto_block_execution_tools,
     )
     delivery_service = DeliveryService(
         executor=executor,

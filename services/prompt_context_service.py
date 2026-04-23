@@ -271,8 +271,10 @@ class PromptContextService:
         *,
         upload_infos: list[UploadInfo],
         user_instruction: str,
+        exposed_tool_names: set[str] | None = None,
     ) -> str:
         return build_buffered_upload_prompt(
             upload_infos=upload_infos,
             user_instruction=user_instruction,
+            exposed_tool_names=exposed_tool_names,
         )

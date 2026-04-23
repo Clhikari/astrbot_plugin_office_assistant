@@ -29,6 +29,7 @@ class UploadSessionService:
         extract_upload_source,
         store_uploaded_file,
         allow_external_input_files: bool,
+        auto_block_execution_tools: bool = False,
     ) -> None:
         self._context = context
         self._recent_text_ttl_seconds = recent_text_ttl_seconds
@@ -44,7 +45,9 @@ class UploadSessionService:
         self._store_uploaded_file = store_uploaded_file
         self._allow_external_input_files = allow_external_input_files
         self._prompt_service = UploadPromptService(
-            allow_external_input_files=allow_external_input_files
+            allow_external_input_files=allow_external_input_files,
+            astrbot_context=context,
+            auto_block_execution_tools=auto_block_execution_tools,
         )
         self._recent_text_by_session: dict[tuple[str, str, str], tuple[str, float]] = {}
         self._recent_text_last_cleanup_ts = 0.0
@@ -334,6 +337,7 @@ class UploadSessionService:
         prompt_text = self._prompt_service.build_prompt(
             upload_infos=upload_infos,
             user_instruction=user_instruction,
+            event=event,
         )
         await self._requeue_event(
             event,
@@ -356,6 +360,7 @@ class UploadSessionService:
         prompt_text = self._prompt_service.build_prompt(
             upload_infos=upload_infos,
             user_instruction=user_instruction,
+            event=event,
         )
         await self._requeue_event(
             event,

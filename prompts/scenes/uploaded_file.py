@@ -4,6 +4,13 @@ from ...services.upload_types import UploadInfo
 
 MAX_DETAILED_UPLOAD_INFOS = 3
 _SCRIPT_EDIT_SUFFIXES = frozenset({".xlsx"})
+_DEFAULT_EXCEL_TOOL_NAMES = {
+    "read_workbook",
+    "execute_excel_script",
+    "create_workbook",
+    "write_rows",
+    "export_workbook",
+}
 
 
 def format_minimal_upload_file_info(info: UploadInfo) -> str:
@@ -42,12 +49,14 @@ def build_buffered_upload_prompt(
     *,
     upload_infos: list[UploadInfo],
     user_instruction: str,
+    exposed_tool_names: set[str] | None = None,
 ) -> str:
     file_info_list, omitted_infos = _build_limited_file_info_list(upload_infos)
     has_readable_file = any(info["is_supported"] for info in upload_infos)
     preferred_tool = _preferred_read_tool(
         upload_infos,
         user_instruction=user_instruction,
+        exposed_tool_names=exposed_tool_names,
     )
     preferred_tool_action = _preferred_tool_action(
         preferred_tool,
@@ -126,6 +135,7 @@ def _preferred_read_tool(
     upload_infos: list[UploadInfo],
     *,
     user_instruction: str = "",
+    exposed_tool_names: set[str] | None = None,
 ) -> str:
     readable_infos = [info for info in upload_infos if info.get("is_supported")]
     if not readable_infos:
@@ -135,19 +145,20 @@ def _preferred_read_tool(
         str(info.get("file_suffix", "")).lower() in _SCRIPT_EDIT_SUFFIXES
         for info in readable_infos
     ):
+        available_tool_names = (
+            exposed_tool_names if exposed_tool_names is not None else _DEFAULT_EXCEL_TOOL_NAMES
+        )
         decision = ExcelIntentRouter.decide(
             request_text=user_instruction,
             upload_infos=readable_infos,
             explicit_tool_name=None,
-            exposed_tool_names={
-                "read_workbook",
-                "execute_excel_script",
-                "create_workbook",
-                "write_rows",
-                "export_workbook",
-            },
+            exposed_tool_names=available_tool_names,
         )
-        if decision is not None and decision.requires_script:
+        if (
+            decision is not None
+            and decision.requires_script
+            and decision.should_inject_guide
+        ):
             return "execute_excel_script"
     if all(
         str(info.get("file_suffix", "")).lower() in EXCEL_SUFFIXES

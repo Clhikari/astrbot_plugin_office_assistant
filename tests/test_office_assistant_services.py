@@ -314,6 +314,7 @@ def _build_upload_session_service(
     extract_upload_source=None,
     store_uploaded_file=None,
     allow_external_input_files: bool = False,
+    auto_block_execution_tools: bool = False,
 ):
     return UploadSessionService(
         context=context or MagicMock(),
@@ -325,6 +326,7 @@ def _build_upload_session_service(
         extract_upload_source=extract_upload_source or AsyncMock(),
         store_uploaded_file=store_uploaded_file or MagicMock(),
         allow_external_input_files=allow_external_input_files,
+        auto_block_execution_tools=auto_block_execution_tools,
     )
 
 
@@ -3199,6 +3201,32 @@ def test_excel_intent_router_keeps_output_worded_existing_filename():
     assert decision.matched_files == ("report.xlsx",)
 
 
+def test_excel_intent_router_ignores_unreferenced_uploaded_excel_files():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.docx",
+        upload_infos=[
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "",
+                "is_supported": True,
+            },
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            },
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_file", "read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is None
+
+
 def test_excel_intent_router_keeps_export_purpose_existing_filename():
     decision = ExcelIntentRouter.decide(
         request_text="请读取 report.xlsx 用于导出并总结",
@@ -3384,6 +3412,43 @@ async def test_request_hook_service_treats_explicit_output_xlsx_name_as_new_work
     ]
     assert SECTION_STATIC_EXCEL_READ not in context.section_names
     assert "create_workbook" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_excel_notice_for_unreferenced_uploaded_excel():
+    service = _build_request_hook_service(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.docx",
+                "file_suffix": ".docx",
+                "stored_name": "report_1.docx",
+                "source_path": "",
+                "is_supported": True,
+            },
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            },
+        ],
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        _build_notice_context(
+            _build_provider_request(
+                "请读取 report.docx",
+                tool_names=["read_file", "read_workbook", "execute_excel_script"],
+            )
+        )
+    )
+
+    assert SECTION_STATIC_EXCEL_ROUTING not in context.section_names
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
+    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
 
 
 @pytest.mark.asyncio
@@ -3653,7 +3718,10 @@ def test_upload_prompt_service_prefers_read_workbook_for_excel_uploads():
 
 
 def test_upload_prompt_service_prefers_execute_excel_script_for_excel_modifications():
-    service = UploadPromptService(allow_external_input_files=True)
+    service = UploadPromptService(
+        allow_external_input_files=True,
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+    )
 
     prompt_text = service.build_prompt(
         upload_infos=[
@@ -3666,10 +3734,60 @@ def test_upload_prompt_service_prefers_execute_excel_script_for_excel_modificati
             }
         ],
         user_instruction="增加一列公式并导出新版本",
+        event=_build_event(),
     )
 
     assert "先调用 `execute_excel_script` 处理文件" in prompt_text
     assert "先调用 `read_workbook` 读取文件" not in prompt_text
+
+
+def test_upload_prompt_service_hides_execute_excel_script_when_runtime_disables_it():
+    service = UploadPromptService(
+        allow_external_input_files=True,
+        astrbot_context=_build_astrbot_context(runtime="none"),
+    )
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "/AstrBot/data/temp/sales.xlsx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="增加一列公式并导出新版本",
+        event=_build_event(),
+    )
+
+    assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
+    assert "先调用 `read_workbook` 读取文件" in prompt_text
+
+
+def test_upload_prompt_service_hides_execute_excel_script_when_auto_block_is_enabled():
+    service = UploadPromptService(
+        allow_external_input_files=True,
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=True,
+    )
+
+    prompt_text = service.build_prompt(
+        upload_infos=[
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "/AstrBot/data/temp/sales.xlsx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="增加一列公式并导出新版本",
+        event=_build_event(),
+    )
+
+    assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
+    assert "先调用 `read_workbook` 读取文件" in prompt_text
 
 
 def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
@@ -4404,6 +4522,38 @@ async def test_upload_session_service_requeue_uses_configured_wake_prefix():
     assert queued_event.message_str.startswith("!")
     assert "[用户指令]" in queued_event.message_str
     event_queue.put.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_session_service_requeue_applies_runtime_gated_excel_prompt():
+    context = _build_astrbot_context(runtime="none")
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "wake_prefix": ["/"],
+        "provider_settings": {"computer_use_runtime": "none"},
+    }
+    service = _build_upload_session_service(context=context)
+    event = _build_event(sender_id="user-a")
+    upload_info = {
+        "file_id": "f1",
+        "original_name": "sales.xlsx",
+        "stored_name": "sales_1.xlsx",
+        "source_path": "",
+        "file_suffix": ".xlsx",
+        "type_desc": "Office文档 (Word/Excel/PPT)",
+        "is_supported": True,
+    }
+
+    await service.requeue_upload_request(
+        event,
+        upload_infos=[upload_info],
+        user_instruction="增加一列公式并导出新版本",
+    )
+
+    queued_event = event_queue.put.await_args.args[0]
+    assert "先调用 `execute_excel_script`" not in queued_event.message_str
+    assert "先调用 `read_workbook` 读取文件" in queued_event.message_str
 
 
 @pytest.mark.asyncio

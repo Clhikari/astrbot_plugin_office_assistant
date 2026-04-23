@@ -102,6 +102,7 @@ class ExcelIntentRouter:
         r"\s*(?:是|为)\s*输出(?:文件)?)",
         flags=re.IGNORECASE,
     )
+    _ANY_FILENAME_RE = re.compile(r"([^\s'\"`]+?\.[A-Za-z0-9]+)", flags=re.IGNORECASE)
 
     @classmethod
     def decide(
@@ -201,6 +202,7 @@ class ExcelIntentRouter:
         upload_infos: list[UploadInfo],
     ) -> tuple[str, ...]:
         matched_names: list[str] = []
+        request_mentions_filename = cls._request_mentions_filename(request_text)
 
         for info in upload_infos:
             suffix = str(info.get("file_suffix", "")).lower()
@@ -208,6 +210,12 @@ class ExcelIntentRouter:
                 continue
             stored_name = str(info.get("stored_name", "")).strip()
             original_name = str(info.get("original_name", "")).strip()
+            if request_mentions_filename and not cls._request_references_upload_name(
+                request_text,
+                stored_name=stored_name,
+                original_name=original_name,
+            ):
+                continue
             chosen_name = stored_name or original_name
             if chosen_name and chosen_name not in matched_names:
                 matched_names.append(chosen_name)
@@ -224,6 +232,38 @@ class ExcelIntentRouter:
                 matched_names.append(normalized_match)
 
         return tuple(matched_names)
+
+    @classmethod
+    def _request_mentions_filename(cls, request_text: str) -> bool:
+        for match in cls._ANY_FILENAME_RE.finditer(request_text):
+            if cls._looks_like_output_filename_reference(
+                request_text=request_text,
+                start=match.start(1),
+                end=match.end(1),
+            ):
+                continue
+            return True
+        return False
+
+    @classmethod
+    def _request_references_upload_name(
+        cls,
+        request_text: str,
+        *,
+        stored_name: str,
+        original_name: str,
+    ) -> bool:
+        for candidate in (stored_name, original_name):
+            normalized_candidate = candidate.strip()
+            if not normalized_candidate:
+                continue
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9_.-]){re.escape(normalized_candidate)}(?![A-Za-z0-9_.-])",
+                flags=re.IGNORECASE,
+            )
+            if pattern.search(request_text):
+                return True
+        return False
 
     @classmethod
     def _looks_like_output_filename_reference(
