@@ -1038,8 +1038,11 @@ class ExcelScriptService:
             result_path = Path(json.loads({serialized_result_path!r}))
             script = json.loads({serialized_script!r})
             initial_exists = output_path.exists() if output_path is not None else False
-            initial_size = output_path.stat().st_size if initial_exists else None
-            initial_mtime_ns = output_path.stat().st_mtime_ns if initial_exists else None
+            initial_stat = output_path.stat() if initial_exists else None
+            initial_size = initial_stat.st_size if initial_stat is not None else None
+            initial_mtime_ns = (
+                initial_stat.st_mtime_ns if initial_stat is not None else None
+            )
 
             try:
                 import openpyxl
@@ -1064,9 +1067,10 @@ class ExcelScriptService:
                     if not initial_exists:
                         has_file = True
                     else:
+                        current_stat = output_path.stat()
                         has_file = (
-                            output_path.stat().st_size != initial_size
-                            or output_path.stat().st_mtime_ns != initial_mtime_ns
+                            current_stat.st_size != initial_size
+                            or current_stat.st_mtime_ns != initial_mtime_ns
                         )
                 if has_text and has_file:
                     payload = {{
