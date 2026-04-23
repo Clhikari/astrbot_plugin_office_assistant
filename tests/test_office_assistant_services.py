@@ -152,6 +152,23 @@ def _build_upload_infos(
     ]
 
 
+def _build_excel_upload_infos(
+    *,
+    original_name: str = "sales.xlsx",
+    stored_name: str = "sales_1.xlsx",
+    source_path: str = "",
+    file_suffix: str = ".xlsx",
+):
+    return _build_upload_infos(
+        1,
+        original_name_template=original_name,
+        stored_name_template=stored_name,
+        source_path_template=source_path,
+        file_suffix=file_suffix,
+        type_desc="Excel 工作簿",
+    )
+
+
 def _make_workspace(name: str) -> Path:
     workspace_base = Path(__file__).resolve().parent / ".tmp_services"
     workspace_base.mkdir(parents=True, exist_ok=True)
@@ -3118,375 +3135,316 @@ async def test_request_hook_service_injects_excel_script_notice_for_existing_xls
     assert "execute_excel_script" in context.notices[1]
 
 
+@pytest.mark.parametrize(
+    (
+        "request_text",
+        "upload_infos",
+        "tool_names",
+        "expected_route",
+        "expected_files",
+        "expected_requires_script",
+        "expected_should_inject_guide",
+    ),
+    [
+        pytest.param(
+            "请导出 report.xlsx 的内容并总结",
+            [],
+            ("read_workbook",),
+            "read_existing",
+            ("report.xlsx",),
+            False,
+            None,
+            id="existing-read-export-phrase",
+        ),
+        pytest.param(
+            "请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
+            _build_excel_upload_infos(
+                original_name="input.xlsx",
+                stored_name="input.xlsx",
+            ),
+            ("read_workbook",),
+            "read_existing",
+            ("input.xlsx",),
+            False,
+            None,
+            id="ignore-output-name-when-upload-present",
+        ),
+        pytest.param(
+            "请输出 report.xlsx 的内容并总结",
+            [],
+            ("read_workbook",),
+            "read_existing",
+            ("report.xlsx",),
+            False,
+            None,
+            id="existing-read-output-verb",
+        ),
+        pytest.param(
+            "请读取 report.docx",
+            [
+                {
+                    "original_name": "report.docx",
+                    "file_suffix": ".docx",
+                    "stored_name": "report_1.docx",
+                    "source_path": "",
+                    "is_supported": True,
+                },
+                {
+                    "original_name": "sales.xlsx",
+                    "file_suffix": ".xlsx",
+                    "stored_name": "sales_1.xlsx",
+                    "source_path": "",
+                    "is_supported": True,
+                },
+            ],
+            ("read_file", "read_workbook", "execute_excel_script"),
+            None,
+            (),
+            None,
+            None,
+            id="ignore-unreferenced-uploaded-excel",
+        ),
+        pytest.param(
+            "根据 notes.txt 给这个表新增一列",
+            _build_excel_upload_infos(),
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("sales_1.xlsx",),
+            True,
+            None,
+            id="single-upload-current-table",
+        ),
+        pytest.param(
+            "based on notes.txt add a column to this sheet",
+            _build_excel_upload_infos(),
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("sales_1.xlsx",),
+            True,
+            None,
+            id="single-upload-this-sheet",
+        ),
+        pytest.param(
+            "请读取 report.xlsx 用于导出并总结",
+            [],
+            ("read_workbook",),
+            "read_existing",
+            ("report.xlsx",),
+            False,
+            None,
+            id="existing-read-export-purpose",
+        ),
+        pytest.param(
+            "请读取 report.xlsx 更新记录并总结",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "read_existing",
+            ("report.xlsx",),
+            False,
+            True,
+            id="read-update-record-query",
+        ),
+        pytest.param(
+            "请更新 report.xlsx 中的数据并保存",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("report.xlsx",),
+            True,
+            True,
+            id="modify-existing-update-data-xlsx",
+        ),
+        pytest.param(
+            "请更新 legacy.xls 中的数据并保存",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "read_existing",
+            ("legacy.xls",),
+            False,
+            True,
+            id="modify-xls-falls-back-to-read",
+        ),
+        pytest.param(
+            "read report.xlsx and update formulas",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("report.xlsx",),
+            True,
+            True,
+            id="english-read-update-formulas",
+        ),
+        pytest.param(
+            "read report.xlsx and add a column",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("report.xlsx",),
+            True,
+            True,
+            id="english-read-add-column",
+        ),
+        pytest.param(
+            "read report.xlsx and insert formulas",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("report.xlsx",),
+            True,
+            True,
+            id="english-read-insert-formulas",
+        ),
+        pytest.param(
+            "请把数据写入 report.xlsx 并统计",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "modify_existing",
+            ("report.xlsx",),
+            True,
+            None,
+            id="write-into-existing-xlsx",
+        ),
+        pytest.param(
+            "read sales.xlsx and convert a column to USD",
+            [],
+            ("read_workbook", "execute_excel_script"),
+            "read_existing",
+            ("sales.xlsx",),
+            False,
+            None,
+            id="column-convert-stays-read",
+        ),
+        pytest.param(
+            "read the data and create an Excel saved as sales.xlsx",
+            [],
+            ("read_workbook", "create_workbook", "write_rows", "export_workbook"),
+            "new_primitive",
+            (),
+            False,
+            None,
+            id="saved-as-output-name-only",
+        ),
+    ],
+)
+def test_excel_intent_router_routes_expected_case(
+    request_text,
+    upload_infos,
+    tool_names,
+    expected_route,
+    expected_files,
+    expected_requires_script,
+    expected_should_inject_guide,
+):
+    decision = ExcelIntentRouter.decide(
+        request_text=request_text,
+        upload_infos=[dict(info) for info in upload_infos],
+        explicit_tool_name=None,
+        exposed_tool_names=set(tool_names),
+    )
+
+    if expected_route is None:
+        assert decision is None
+        return
+
+    assert decision is not None
+    assert decision.route == expected_route
+    assert decision.matched_files == expected_files
+    assert decision.requires_script is expected_requires_script
+    if expected_should_inject_guide is not None:
+        assert decision.should_inject_guide is expected_should_inject_guide
+
+
 @pytest.mark.asyncio
-async def test_request_hook_service_injects_excel_script_notice_for_mixed_read_modify_xlsx_requests():
-    service = RequestHookService(
+@pytest.mark.parametrize(
+    (
+        "prompt",
+        "tool_names",
+        "upload_infos",
+        "expected_sections",
+        "absent_sections",
+        "expected_notice_fragment",
+    ),
+    [
+        pytest.param(
+            "请读取这个 xlsx 后新增一列公式并导出新版本",
+            ("execute_excel_script",),
+            _build_excel_upload_infos(),
+            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_SCRIPT],
+            (SECTION_STATIC_EXCEL_READ,),
+            "execute_excel_script",
+            id="hook-script-edit-mixed-read-modify",
+        ),
+        pytest.param(
+            "请读取 report.xlsx 用于导出并总结",
+            ("read_workbook",),
+            [],
+            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_READ],
+            (SECTION_STATIC_WORKBOOK_TOOLS,),
+            "read_workbook",
+            id="hook-read-existing",
+        ),
+        pytest.param(
+            "read sales.xlsx and convert a column to USD",
+            ("read_workbook", "execute_excel_script"),
+            [],
+            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_READ],
+            (SECTION_STATIC_EXCEL_SCRIPT,),
+            "read_workbook",
+            id="hook-column-convert-stays-read",
+        ),
+        pytest.param(
+            "based on notes.txt add a column to this sheet",
+            ("read_workbook", "execute_excel_script"),
+            _build_excel_upload_infos(),
+            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_SCRIPT],
+            (SECTION_STATIC_EXCEL_READ,),
+            "execute_excel_script",
+            id="hook-script-edit-this-sheet",
+        ),
+        pytest.param(
+            "请生成一个 Excel，保存为 sales.xlsx，并汇总 Q1 销售数据",
+            ("read_workbook", "create_workbook", "write_rows", "export_workbook"),
+            [],
+            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_WORKBOOK_TOOLS],
+            (SECTION_STATIC_EXCEL_READ,),
+            "create_workbook",
+            id="hook-new-workbook-output-name",
+        ),
+        pytest.param(
+            "read the data and create an Excel saved as sales.xlsx",
+            ("read_workbook", "create_workbook", "write_rows", "export_workbook"),
+            [],
+            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_WORKBOOK_TOOLS],
+            (SECTION_STATIC_EXCEL_READ,),
+            "create_workbook",
+            id="hook-new-workbook-saved-as",
+        ),
+    ],
+)
+async def test_request_hook_service_injects_expected_excel_notice(
+    prompt,
+    tool_names,
+    upload_infos,
+    expected_sections,
+    absent_sections,
+    expected_notice_fragment,
+):
+    service = _build_request_hook_service(
         auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "",
-                "is_supported": True,
-            }
-        ],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
+        get_cached_upload_infos=lambda _event: [dict(info) for info in upload_infos],
         allow_external_input_files=False,
     )
 
     context = await service.append_document_tool_guide_notice(
-        NoticeBuildContext(
-            event=_build_event(),
-            request=ProviderRequest(
-                prompt="请读取这个 xlsx 后新增一列公式并导出新版本",
-                system_prompt="base",
-                func_tool=ToolSet([_tool("execute_excel_script")]),
-            ),
-            should_expose=True,
-            can_process_upload=True,
-            explicit_tool_name=None,
-            notices=[],
+        _build_notice_context(
+            _build_provider_request(prompt, tool_names=tool_names)
         )
     )
 
-    assert context.section_names == [
-        SECTION_STATIC_EXCEL_ROUTING,
-        SECTION_STATIC_EXCEL_SCRIPT,
-    ]
-    assert SECTION_STATIC_EXCEL_READ not in context.section_names
-    assert "execute_excel_script" in context.notices[1]
-
-def test_excel_intent_router_keeps_export_worded_existing_filename():
-    decision = ExcelIntentRouter.decide(
-        request_text="请导出 report.xlsx 的内容并总结",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.matched_files == ("report.xlsx",)
-
-
-def test_excel_intent_router_ignores_output_filename_when_upload_present():
-    decision = ExcelIntentRouter.decide(
-        request_text="请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
-        upload_infos=[
-            {
-                "original_name": "input.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "input.xlsx",
-                "source_path": "",
-                "is_supported": True,
-            }
-        ],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.matched_files == ("input.xlsx",)
-
-
-def test_excel_intent_router_keeps_output_worded_existing_filename():
-    decision = ExcelIntentRouter.decide(
-        request_text="请输出 report.xlsx 的内容并总结",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.matched_files == ("report.xlsx",)
-
-
-def test_excel_intent_router_ignores_unreferenced_uploaded_excel_files():
-    decision = ExcelIntentRouter.decide(
-        request_text="请读取 report.docx",
-        upload_infos=[
-            {
-                "original_name": "report.docx",
-                "file_suffix": ".docx",
-                "stored_name": "report_1.docx",
-                "source_path": "",
-                "is_supported": True,
-            },
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "",
-                "is_supported": True,
-            },
-        ],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_file", "read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is None
-
-
-def test_excel_intent_router_keeps_single_uploaded_excel_when_request_refs_current_table():
-    decision = ExcelIntentRouter.decide(
-        request_text="根据 notes.txt 给这个表新增一列",
-        upload_infos=[
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "",
-                "is_supported": True,
-            }
-        ],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "modify_existing"
-    assert decision.requires_script is True
-    assert decision.matched_files == ("sales_1.xlsx",)
-
-
-def test_excel_intent_router_keeps_export_purpose_existing_filename():
-    decision = ExcelIntentRouter.decide(
-        request_text="请读取 report.xlsx 用于导出并总结",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.matched_files == ("report.xlsx",)
-
-
-def test_excel_intent_router_prefers_read_for_update_record_query():
-    decision = ExcelIntentRouter.decide(
-        request_text="请读取 report.xlsx 更新记录并总结",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.requires_script is False
-    assert decision.should_inject_guide is True
-
-
-def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
-    decision = ExcelIntentRouter.decide(
-        request_text="请更新 report.xlsx 中的数据并保存",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "modify_existing"
-    assert decision.requires_script is True
-    assert decision.should_inject_guide is True
-
-
-def test_excel_intent_router_falls_back_to_read_for_xls_modify_request():
-    decision = ExcelIntentRouter.decide(
-        request_text="请更新 legacy.xls 中的数据并保存",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.requires_script is False
-    assert decision.should_inject_guide is True
-    assert decision.matched_files == ("legacy.xls",)
-
-
-def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify_existing():
-    decision = ExcelIntentRouter.decide(
-        request_text="read report.xlsx and update formulas",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "modify_existing"
-    assert decision.requires_script is True
-    assert decision.should_inject_guide is True
-
-
-def test_excel_intent_router_treats_english_read_add_column_prompt_as_modify_existing():
-    decision = ExcelIntentRouter.decide(
-        request_text="read report.xlsx and add a column",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "modify_existing"
-    assert decision.requires_script is True
-    assert decision.should_inject_guide is True
-
-
-def test_excel_intent_router_treats_english_read_insert_formulas_prompt_as_modify_existing():
-    decision = ExcelIntentRouter.decide(
-        request_text="read report.xlsx and insert formulas",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "modify_existing"
-    assert decision.requires_script is True
-    assert decision.should_inject_guide is True
-
-
-def test_excel_intent_router_keeps_write_into_existing_filename():
-    decision = ExcelIntentRouter.decide(
-        request_text="请把数据写入 report.xlsx 并统计",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "modify_existing"
-    assert decision.requires_script is True
-    assert decision.matched_files == ("report.xlsx",)
-
-
-def test_excel_intent_router_keeps_excel_route_for_column_value_conversion():
-    decision = ExcelIntentRouter.decide(
-        request_text="read sales.xlsx and convert a column to USD",
-        upload_infos=[],
-        explicit_tool_name=None,
-        exposed_tool_names={"read_workbook", "execute_excel_script"},
-    )
-
-    assert decision is not None
-    assert decision.route == "read_existing"
-    assert decision.requires_script is False
-    assert decision.matched_files == ("sales.xlsx",)
-
-
-@pytest.mark.asyncio
-async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_phrase():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
-    )
-
-    context = await service.append_document_tool_guide_notice(
-        NoticeBuildContext(
-            event=_build_event(),
-            request=ProviderRequest(
-                prompt="请读取 report.xlsx 用于导出并总结",
-                system_prompt="base",
-                func_tool=ToolSet([_tool("read_workbook")]),
-            ),
-            should_expose=True,
-            can_process_upload=True,
-            explicit_tool_name=None,
-            notices=[],
-        )
-    )
-
-    assert context.section_names == [
-        SECTION_STATIC_EXCEL_ROUTING,
-        SECTION_STATIC_EXCEL_READ,
-    ]
-    assert "read_workbook" in context.notices[1]
-    assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
-
-
-@pytest.mark.asyncio
-async def test_request_hook_service_keeps_excel_read_notice_for_column_value_conversion():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
-    )
-
-    context = await service.append_document_tool_guide_notice(
-        NoticeBuildContext(
-            event=_build_event(),
-            request=ProviderRequest(
-                prompt="read sales.xlsx and convert a column to USD",
-                system_prompt="base",
-                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
-            ),
-            should_expose=True,
-            can_process_upload=True,
-            explicit_tool_name=None,
-            notices=[],
-        )
-    )
-
-    assert context.section_names == [
-        SECTION_STATIC_EXCEL_ROUTING,
-        SECTION_STATIC_EXCEL_READ,
-    ]
-    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
-    assert "read_workbook" in context.notices[1]
-
-
-@pytest.mark.asyncio
-async def test_request_hook_service_treats_explicit_output_xlsx_name_as_new_workbook_request():
-    service = RequestHookService(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [],
-        extract_upload_source=AsyncMock(),
-        store_uploaded_file=MagicMock(),
-        consume_session_notice_once=_build_notice_once_callback(),
-        allow_external_input_files=False,
-    )
-
-    context = await service.append_document_tool_guide_notice(
-        NoticeBuildContext(
-            event=_build_event(),
-            request=ProviderRequest(
-                prompt="请生成一个 Excel，保存为 sales.xlsx，并汇总 Q1 销售数据",
-                system_prompt="base",
-                func_tool=ToolSet(
-                    [
-                        _tool("read_workbook"),
-                        _tool("create_workbook"),
-                        _tool("write_rows"),
-                        _tool("export_workbook"),
-                    ]
-                ),
-            ),
-            should_expose=True,
-            can_process_upload=True,
-            explicit_tool_name=None,
-            notices=[],
-        )
-    )
-
-    assert context.section_names == [
-        SECTION_STATIC_EXCEL_ROUTING,
-        SECTION_STATIC_WORKBOOK_TOOLS,
-    ]
-    assert SECTION_STATIC_EXCEL_READ not in context.section_names
-    assert "create_workbook" in context.notices[1]
+    assert context.section_names == expected_sections
+    for section_name in absent_sections:
+        assert section_name not in context.section_names
+    assert expected_notice_fragment in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -3804,97 +3762,81 @@ def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
     assert "读取后按用户指令继续调用工具，不要只回复过渡说明" in prompt_text
 
 
-def test_upload_prompt_service_prefers_read_workbook_for_excel_uploads():
-    service = UploadPromptService(allow_external_input_files=True)
+@pytest.mark.parametrize(
+    (
+        "runtime",
+        "auto_block_execution_tools",
+        "user_instruction",
+        "expected_present",
+        "expected_absent",
+    ),
+    [
+        pytest.param(
+            None,
+            None,
+            "读取内容并汇总华东数据",
+            "先调用 `read_workbook` 读取文件",
+            "先调用 `read_file` 读取文件",
+            id="prompt-read-workbook",
+        ),
+        pytest.param(
+            "sandbox",
+            None,
+            "增加一列公式并导出新版本",
+            "先调用 `execute_excel_script` 处理文件",
+            "先调用 `read_workbook` 读取文件",
+            id="prompt-execute-script",
+        ),
+        pytest.param(
+            "sandbox",
+            None,
+            "based on notes.txt add a column to this sheet",
+            "先调用 `execute_excel_script` 处理文件",
+            "先调用 `read_workbook` 读取文件",
+            id="prompt-execute-script-this-sheet",
+        ),
+        pytest.param(
+            "none",
+            None,
+            "增加一列公式并导出新版本",
+            "先调用 `read_workbook` 读取文件",
+            "先调用 `execute_excel_script` 处理文件",
+            id="prompt-disable-script-runtime",
+        ),
+        pytest.param(
+            "local",
+            True,
+            "增加一列公式并导出新版本",
+            "先调用 `execute_excel_script` 处理文件",
+            "先调用 `read_workbook` 读取文件",
+            id="prompt-local-auto-block-still-script",
+        ),
+    ],
+)
+def test_upload_prompt_service_selects_expected_excel_tool_notice(
+    runtime,
+    auto_block_execution_tools,
+    user_instruction,
+    expected_present,
+    expected_absent,
+):
+    service_kwargs = {"allow_external_input_files": True}
+    if runtime is not None:
+        service_kwargs["astrbot_context"] = _build_astrbot_context(runtime=runtime)
+    if auto_block_execution_tools is not None:
+        service_kwargs["auto_block_execution_tools"] = auto_block_execution_tools
+    service = UploadPromptService(**service_kwargs)
 
     prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "/AstrBot/data/temp/sales.xlsx",
-                "is_supported": True,
-            }
-        ],
-        user_instruction="读取内容并汇总华东数据",
-    )
-
-    assert "先调用 `read_workbook` 读取文件" in prompt_text
-    assert "先调用 `read_file` 读取文件" not in prompt_text
-
-
-def test_upload_prompt_service_prefers_execute_excel_script_for_excel_modifications():
-    service = UploadPromptService(
-        allow_external_input_files=True,
-        astrbot_context=_build_astrbot_context(runtime="sandbox"),
-    )
-
-    prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "/AstrBot/data/temp/sales.xlsx",
-                "is_supported": True,
-            }
-        ],
-        user_instruction="增加一列公式并导出新版本",
+        upload_infos=_build_excel_upload_infos(
+            source_path="/AstrBot/data/temp/sales.xlsx"
+        ),
+        user_instruction=user_instruction,
         event=_build_event(),
     )
 
-    assert "先调用 `execute_excel_script` 处理文件" in prompt_text
-    assert "先调用 `read_workbook` 读取文件" not in prompt_text
-
-
-def test_upload_prompt_service_hides_execute_excel_script_when_runtime_disables_it():
-    service = UploadPromptService(
-        allow_external_input_files=True,
-        astrbot_context=_build_astrbot_context(runtime="none"),
-    )
-
-    prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "/AstrBot/data/temp/sales.xlsx",
-                "is_supported": True,
-            }
-        ],
-        user_instruction="增加一列公式并导出新版本",
-        event=_build_event(),
-    )
-
-    assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
-    assert "先调用 `read_workbook` 读取文件" in prompt_text
-
-
-def test_upload_prompt_service_keeps_execute_excel_script_when_auto_block_is_enabled():
-    service = UploadPromptService(
-        allow_external_input_files=True,
-        astrbot_context=_build_astrbot_context(runtime="local"),
-        auto_block_execution_tools=True,
-    )
-
-    prompt_text = service.build_prompt(
-        upload_infos=[
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "/AstrBot/data/temp/sales.xlsx",
-                "is_supported": True,
-            }
-        ],
-        user_instruction="增加一列公式并导出新版本",
-        event=_build_event(),
-    )
-
-    assert "先调用 `execute_excel_script` 处理文件" in prompt_text
-    assert "先调用 `read_workbook` 读取文件" not in prompt_text
+    assert expected_present in prompt_text
+    assert expected_absent not in prompt_text
 
 
 def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
