@@ -559,21 +559,7 @@ class AddBlocksTool(DocumentToolBase):
                                                             "subtitle": {"type": "string"},
                                                             "details": {
                                                                 "type": "array",
-                                                                "items": {
-                                                                    "anyOf": [
-                                                                        {"type": "string"},
-                                                                        {
-                                                                            "type": "object",
-                                                                            "properties": {
-                                                                                "text": {"type": "string"},
-                                                                                "runs": {
-                                                                                    "type": "array",
-                                                                                    "items": _schema_copy(_INLINE_RUN_SCHEMA),
-                                                                                },
-                                                                            },
-                                                                        },
-                                                                    ]
-                                                                },
+                                                                "items": {"type": "string"},
                                                             },
                                                         },
                                                         "required": ["heading"],
@@ -581,21 +567,7 @@ class AddBlocksTool(DocumentToolBase):
                                                 },
                                                 "lines": {
                                                     "type": "array",
-                                                    "items": {
-                                                        "anyOf": [
-                                                            {"type": "string"},
-                                                            {
-                                                                "type": "object",
-                                                                "properties": {
-                                                                    "text": {"type": "string"},
-                                                                    "runs": {
-                                                                        "type": "array",
-                                                                        "items": _schema_copy(_INLINE_RUN_SCHEMA),
-                                                                    },
-                                                                },
-                                                            },
-                                                        ]
-                                                    },
+                                                    "items": {"type": "string"},
                                                 },
                                             },
                                         },
@@ -622,21 +594,7 @@ class AddBlocksTool(DocumentToolBase):
                             },
                             "items": {
                                 "type": "array",
-                                "items": {
-                                    "anyOf": [
-                                        {"type": "string"},
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "text": {"type": "string"},
-                                                "runs": {
-                                                    "type": "array",
-                                                    "items": _schema_copy(_INLINE_RUN_SCHEMA),
-                                                },
-                                            },
-                                        },
-                                    ]
-                                },
+                                "items": {"type": "string"},
                             },
                             "ordered": {"type": "boolean"},
                             "headers": {
@@ -647,12 +605,7 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "array",
                                 "items": {
                                     "type": "array",
-                                    "items": {
-                                        "anyOf": [
-                                            {"type": "string"},
-                                            _schema_copy(_TABLE_CELL_SCHEMA),
-                                        ]
-                                    },
+                                    "items": {"type": "string"},
                                 },
                             },
                             "header_groups": {
