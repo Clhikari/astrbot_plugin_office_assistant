@@ -202,15 +202,6 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         "properties"
     ]
 
-    def _contains_key(schema: object, key: str) -> bool:
-        if isinstance(schema, dict):
-            return key in schema or any(
-                _contains_key(value, key) for value in schema.values()
-            )
-        if isinstance(schema, list):
-            return any(_contains_key(value, key) for value in schema)
-        return False
-
     assert block_properties["blocks"]["type"] == "array"
     assert block_properties["blocks"]["items"]["type"] == "object"
     assert block_properties["blocks"]["items"]["additionalProperties"] is True
@@ -308,12 +299,23 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["restart_page_numbering"]["type"] == "boolean"
     assert block_properties["page_number_start"]["type"] == "integer"
     assert block_properties["header_footer"]["type"] == "object"
-    assert block_properties["items"]["items"] == {"type": "string"}
+    list_item_schema = block_properties["items"]["items"]
+    assert _schema_type_allows(list_item_schema, "string")
+    assert _schema_type_allows(list_item_schema, "object")
+    assert (
+        list_item_schema["properties"]["runs"]["items"]["properties"]["color"]["type"]
+        == "string"
+    )
     assert block_properties["rows"]["items"]["type"] == "array"
-    assert block_properties["rows"]["items"]["items"] == {"type": "string"}
-    assert not _contains_key(add_blocks_tool.parameters, "anyOf")
-    assert not _contains_key(block_properties["rows"]["items"]["items"], "row_span")
-    assert not _contains_key(block_properties["rows"]["items"]["items"], "col_span")
+    row_cell_schema = block_properties["rows"]["items"]["items"]
+    assert _schema_type_allows(row_cell_schema, "string")
+    assert _schema_type_allows(row_cell_schema, "object")
+    assert row_cell_schema["properties"]["text"]["type"] == "string"
+    assert row_cell_schema["properties"]["fill"]["type"] == "string"
+    assert row_cell_schema["properties"]["border"]["type"] == "object"
+    assert not _schema_contains_key(add_blocks_tool.parameters, "anyOf")
+    assert not _schema_contains_key(row_cell_schema, "row_span")
+    assert not _schema_contains_key(row_cell_schema, "col_span")
     assert block_properties["theme_color"]["type"] == "string"
     assert block_properties["text_color"]["type"] == "string"
     assert block_properties["subtitle_color"]["type"] == "string"

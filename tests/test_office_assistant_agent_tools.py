@@ -1883,22 +1883,21 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
     add_blocks_tool = next(tool for tool in toolset.tools if tool.name == "add_blocks")
     block_schema = add_blocks_tool.parameters["properties"]["blocks"]["items"]
     properties = block_schema["properties"]
+    list_item_schema = properties["items"]["items"]
     row_cell_schema = properties["rows"]["items"]["items"]
 
-    def _contains_key(schema: object, key: str) -> bool:
-        if isinstance(schema, dict):
-            return key in schema or any(
-                _contains_key(value, key) for value in schema.values()
-            )
-        if isinstance(schema, list):
-            return any(_contains_key(value, key) for value in schema)
-        return False
-
-    assert row_cell_schema == {"type": "string"}
-    assert properties["items"]["items"] == {"type": "string"}
-    assert not _contains_key(add_blocks_tool.parameters, "anyOf")
-    assert not _contains_key(row_cell_schema, "row_span")
-    assert not _contains_key(row_cell_schema, "col_span")
+    assert _schema_type_allows(row_cell_schema, "string")
+    assert _schema_type_allows(row_cell_schema, "object")
+    assert _schema_type_allows(list_item_schema, "string")
+    assert _schema_type_allows(list_item_schema, "object")
+    assert list_item_schema["properties"]["runs"]["items"]["properties"]["color"][
+        "type"
+    ] == "string"
+    assert row_cell_schema["properties"]["fill"]["type"] == "string"
+    assert row_cell_schema["properties"]["border"]["type"] == "object"
+    assert not _schema_contains_key(add_blocks_tool.parameters, "anyOf")
+    assert not _schema_contains_key(row_cell_schema, "row_span")
+    assert not _schema_contains_key(row_cell_schema, "col_span")
 
 
 @pytest.mark.asyncio

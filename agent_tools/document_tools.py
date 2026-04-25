@@ -197,6 +197,22 @@ _TABLE_CELL_SCHEMA = {
     },
 }
 
+_LIST_ITEM_PUBLIC_SCHEMA = {
+    "type": ["string", "object"],
+    "properties": {
+        "text": {"type": "string"},
+        "runs": {
+            "type": "array",
+            "items": _schema_copy(_INLINE_RUN_SCHEMA),
+        },
+    },
+}
+
+_TABLE_CELL_PUBLIC_SCHEMA = {
+    **_schema_copy(_TABLE_CELL_SCHEMA),
+    "type": ["string", "object"],
+}
+
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class DocumentToolBase(FunctionTool[AstrAgentContext]):
@@ -559,7 +575,9 @@ class AddBlocksTool(DocumentToolBase):
                                                             "subtitle": {"type": "string"},
                                                             "details": {
                                                                 "type": "array",
-                                                                "items": {"type": "string"},
+                                                                "items": _schema_copy(
+                                                                    _LIST_ITEM_PUBLIC_SCHEMA
+                                                                ),
                                                             },
                                                         },
                                                         "required": ["heading"],
@@ -567,7 +585,9 @@ class AddBlocksTool(DocumentToolBase):
                                                 },
                                                 "lines": {
                                                     "type": "array",
-                                                    "items": {"type": "string"},
+                                                    "items": _schema_copy(
+                                                        _LIST_ITEM_PUBLIC_SCHEMA
+                                                    ),
                                                 },
                                             },
                                         },
@@ -594,7 +614,7 @@ class AddBlocksTool(DocumentToolBase):
                             },
                             "items": {
                                 "type": "array",
-                                "items": {"type": "string"},
+                                "items": _schema_copy(_LIST_ITEM_PUBLIC_SCHEMA),
                             },
                             "ordered": {"type": "boolean"},
                             "headers": {
@@ -605,7 +625,7 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "array",
                                 "items": {
                                     "type": "array",
-                                    "items": {"type": "string"},
+                                    "items": _schema_copy(_TABLE_CELL_PUBLIC_SCHEMA),
                                 },
                             },
                             "header_groups": {
