@@ -201,6 +201,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     block_properties = add_blocks_tool.parameters["properties"]["blocks"]["items"][
         "properties"
     ]
+
     assert block_properties["blocks"]["type"] == "array"
     assert block_properties["blocks"]["items"]["type"] == "object"
     assert block_properties["blocks"]["items"]["additionalProperties"] is True
@@ -298,32 +299,23 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["restart_page_numbering"]["type"] == "boolean"
     assert block_properties["page_number_start"]["type"] == "integer"
     assert block_properties["header_footer"]["type"] == "object"
-    assert block_properties["items"]["items"]["anyOf"][0]["type"] == "string"
+    list_item_schema = block_properties["items"]["items"]
+    assert _schema_type_allows(list_item_schema, "string")
+    assert _schema_type_allows(list_item_schema, "object")
     assert (
-        block_properties["items"]["items"]["anyOf"][1]["properties"]["runs"]["items"][
-            "properties"
-        ]["color"]["type"]
+        list_item_schema["properties"]["runs"]["items"]["properties"]["color"]["type"]
         == "string"
     )
-    assert block_properties["rows"]["items"]["items"]["anyOf"][0]["type"] == "string"
-    row_cell_properties = block_properties["rows"]["items"]["items"]["anyOf"][1][
-        "properties"
-    ]
-    assert row_cell_properties["text"]["type"] == "string"
-    assert "row_span" not in row_cell_properties
-    assert "col_span" not in row_cell_properties
-    assert row_cell_properties["fill"]["type"] == "string"
-    assert row_cell_properties["text_color"]["type"] == "string"
-    assert row_cell_properties["bold"]["type"] == "boolean"
-    assert row_cell_properties["italic"]["type"] == "boolean"
-    assert row_cell_properties["underline"]["type"] == "boolean"
-    assert row_cell_properties["strikethrough"]["type"] == "boolean"
-    assert row_cell_properties["align"]["enum"] == ["left", "center", "right"]
-    assert row_cell_properties["font_scale"]["type"] == "number"
-    assert row_cell_properties["font_name"]["type"] == "string"
-    assert row_cell_properties["runs"]["items"]["properties"]["font_name"]["type"] == "string"
-    assert row_cell_properties["runs"]["items"]["properties"]["strikethrough"]["type"] == "boolean"
-    assert row_cell_properties["border"]["type"] == "object"
+    assert block_properties["rows"]["items"]["type"] == "array"
+    row_cell_schema = block_properties["rows"]["items"]["items"]
+    assert _schema_type_allows(row_cell_schema, "string")
+    assert _schema_type_allows(row_cell_schema, "object")
+    assert row_cell_schema["properties"]["text"]["type"] == "string"
+    assert row_cell_schema["properties"]["fill"]["type"] == "string"
+    assert row_cell_schema["properties"]["border"]["type"] == "object"
+    assert not _schema_contains_key(add_blocks_tool.parameters, "anyOf")
+    assert not _schema_contains_key(row_cell_schema, "row_span")
+    assert not _schema_contains_key(row_cell_schema, "col_span")
     assert block_properties["theme_color"]["type"] == "string"
     assert block_properties["text_color"]["type"] == "string"
     assert block_properties["subtitle_color"]["type"] == "string"

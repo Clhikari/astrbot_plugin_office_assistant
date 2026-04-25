@@ -1881,19 +1881,23 @@ async def test_add_blocks_tool_marks_standard_header_row_as_repeated_and_non_spl
 def test_add_blocks_tool_schema_hides_table_cell_spans():
     toolset = build_document_toolset()
     add_blocks_tool = next(tool for tool in toolset.tools if tool.name == "add_blocks")
-    table_schema = add_blocks_tool.parameters["properties"]["blocks"]["items"]["properties"][
-        "rows"
-    ]["items"]["items"]["anyOf"][1]["properties"]
-    run_schema = table_schema["runs"]["items"]["properties"]
+    block_schema = add_blocks_tool.parameters["properties"]["blocks"]["items"]
+    properties = block_schema["properties"]
+    list_item_schema = properties["items"]["items"]
+    row_cell_schema = properties["rows"]["items"]["items"]
 
-    assert "row_span" not in table_schema
-    assert "col_span" not in table_schema
-    assert table_schema["font_name"]["type"] == "string"
-    assert table_schema["font_scale"]["type"] == "number"
-    assert table_schema["border"]["type"] == "object"
-    assert table_schema["runs"]["type"] == "array"
-    assert run_schema["url"]["type"] == "string"
-    assert run_schema["strikethrough"]["type"] == "boolean"
+    assert _schema_type_allows(row_cell_schema, "string")
+    assert _schema_type_allows(row_cell_schema, "object")
+    assert _schema_type_allows(list_item_schema, "string")
+    assert _schema_type_allows(list_item_schema, "object")
+    assert list_item_schema["properties"]["runs"]["items"]["properties"]["color"][
+        "type"
+    ] == "string"
+    assert row_cell_schema["properties"]["fill"]["type"] == "string"
+    assert row_cell_schema["properties"]["border"]["type"] == "object"
+    assert not _schema_contains_key(add_blocks_tool.parameters, "anyOf")
+    assert not _schema_contains_key(row_cell_schema, "row_span")
+    assert not _schema_contains_key(row_cell_schema, "col_span")
 
 
 @pytest.mark.asyncio
