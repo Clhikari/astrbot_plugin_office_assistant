@@ -452,10 +452,10 @@ def test_excel_script_service_build_sandbox_paths_uses_relative_runtime_paths():
         )
 
     assert paths.exec_dir == ".office_assistant/excel_scripts/run"
-    assert paths.input_files == [
+    assert paths.input_files == ["_inputs/0/source.xlsx"]
+    assert paths.remote_input_files == [
         ".office_assistant/excel_scripts/run/_inputs/0/source.xlsx"
     ]
-    assert paths.remote_input_files == paths.input_files
     assert paths.result_path == ".office_assistant/excel_scripts/run/result.json"
     assert paths.remote_result_path == paths.result_path
     assert (
@@ -1849,6 +1849,34 @@ async def test_request_hook_service_keeps_execute_excel_script_for_local_runtime
     assert "read_workbook" in tool_names
     assert "execute_excel_script" in tool_names
     assert "astrbot_execute_shell" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_excel_tools_for_generic_prompt():
+    request = _build_provider_request(
+        "帮我写一段项目周报",
+        tool_names=[
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "create_workbook" in tool_names
+    assert "write_rows" in tool_names
+    assert "export_workbook" in tool_names
+    assert "execute_excel_script" in tool_names
 
 
 @pytest.mark.asyncio
@@ -3495,6 +3523,23 @@ def test_excel_intent_router_keeps_export_worded_existing_filename():
     assert decision.matched_files == ("report.xlsx",)
 
 
+def test_excel_intent_router_ignores_exposed_excel_tools_without_excel_intent():
+    decision = ExcelIntentRouter.decide(
+        request_text="帮我写一段项目周报",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+        },
+    )
+
+    assert decision is None
+
+
 def test_excel_intent_router_ignores_output_filename_when_upload_present():
     decision = ExcelIntentRouter.decide(
         request_text="请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
@@ -3697,6 +3742,46 @@ async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_p
         SECTION_STATIC_EXCEL_READ,
     ]
     assert "read_workbook" in context.notices[1]
+    assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_skips_excel_guides_for_generic_prompt():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="帮我写一段项目周报",
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("read_workbook"),
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                        _tool("execute_excel_script"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert SECTION_STATIC_EXCEL_ROUTING not in context.section_names
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
+    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
     assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
 
 
@@ -6665,7 +6750,7 @@ async def test_file_tool_service_execute_excel_script_rejects_generated_formula_
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_supports_bare_sandbox_filenames():
+async def test_file_tool_service_execute_excel_script_exposes_relative_input_paths():
     event = _build_event()
     openpyxl = pytest.importorskip("openpyxl")
 
@@ -6687,7 +6772,7 @@ async def test_file_tool_service_execute_excel_script_supports_bare_sandbox_file
             result = await managed.service.execute_excel_script(
                 event,
                 script=(
-                    "workbook = load_workbook('source.xlsx')\n"
+                    "workbook = load_workbook(input_files[0])\n"
                     "worksheet = workbook.active\n"
                     "worksheet['B1'] = '新增'\n"
                     "workbook.save('source-updated.xlsx')\n"

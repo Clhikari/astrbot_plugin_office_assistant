@@ -178,6 +178,247 @@ class GeneratedFileDeliveryService:
         return errors
 
     @classmethod
+    def _build_sheet_quality_summary(
+        cls,
+        worksheet,
+        *,
+        data_row_count: int,
+        chart_count: int,
+        conditional_formatting_count: int,
+    ) -> dict[str, Any]:
+        return {
+            "name": worksheet.title,
+            "rows": worksheet.max_row,
+            "data_rows": data_row_count,
+            "columns": worksheet.max_column,
+            "charts": chart_count,
+            "conditional_formatting_rules": conditional_formatting_count,
+        }
+
+    @staticmethod
+    def _count_sheet_formulas(worksheet) -> int:
+        count = 0
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    count += 1
+        return count
+
+    @staticmethod
+    def _collect_dashboard_warnings(
+        worksheet,
+        *,
+        data_row_count: int,
+        chart_count: int,
+    ) -> list[str]:
+        if worksheet.title.lower() != "dashboard" or data_row_count != 0:
+            return []
+        if chart_count:
+            return ["Dashboard 只有图表，没有数据表或关键指标区"]
+        return ["Dashboard 没有数据行或图表"]
+
+    @classmethod
+    def _collect_cleaned_data_warnings(cls, worksheet, headers: list[Any]) -> list[str]:
+        if worksheet.title.lower() != "cleaneddata":
+            return []
+        key_column = cls._find_header_column(headers, ("OrderID", "Order ID", "ID"))
+        if key_column is None:
+            return []
+
+        blank_keys = 0
+        for row_index in range(2, worksheet.max_row + 1):
+            key_value = worksheet.cell(row=row_index, column=key_column).value
+            if key_value in (None, ""):
+                blank_keys += 1
+        if not blank_keys:
+            return []
+        return [f"CleanedData 有 {blank_keys} 行主键为空"]
+
+    @classmethod
+    def _collect_gross_margin_warnings(
+        cls,
+        worksheet,
+        headers: list[Any],
+        *,
+        conditional_formatting_count: int,
+    ) -> list[str]:
+        gross_margin_column = cls._find_header_column(
+            headers,
+            ("GrossMargin", "Gross Margin"),
+        )
+        if gross_margin_column is None or conditional_formatting_count != 0:
+            return []
+        return [f"{worksheet.title} 包含 GrossMargin 列，但没有条件格式规则"]
+
+    @classmethod
+    def _collect_issues_sheet_state(
+        cls,
+        worksheet,
+        headers: list[Any],
+        *,
+        data_row_count: int,
+    ) -> tuple[int | None, dict[str, int], list[str]]:
+        if worksheet.title.lower() != "issues":
+            return None, {}, []
+
+        warnings: list[str] = []
+        issue_type_counts: dict[str, int] = {}
+        issue_type_column = cls._find_header_column(
+            headers,
+            ("IssueType", "Issue Type", "Type"),
+        )
+        if issue_type_column is not None:
+            for row_index in range(2, worksheet.max_row + 1):
+                issue_type = str(
+                    worksheet.cell(row=row_index, column=issue_type_column).value
+                    or ""
+                ).strip()
+                if issue_type:
+                    issue_type_counts[issue_type] = (
+                        issue_type_counts.get(issue_type, 0) + 1
+                    )
+        elif data_row_count:
+            warnings.append("Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型")
+
+        return data_row_count, issue_type_counts, warnings
+
+    @classmethod
+    def _collect_product_detail_warnings(
+        cls,
+        worksheet,
+        headers: list[Any],
+    ) -> list[str]:
+        if worksheet.title.lower() != "productdetail":
+            return []
+
+        missing_dimensions = [
+            dimension
+            for dimension, aliases in (
+                ("Region", ("Region",)),
+                ("Product", ("Product",)),
+                ("Month", ("Month",)),
+            )
+            if cls._find_header_column(headers, aliases) is None
+        ]
+        if not missing_dimensions:
+            return []
+        return ["ProductDetail 缺少维度列：" + "、".join(missing_dimensions)]
+
+    @classmethod
+    def _collect_inventory_impact_warnings(
+        cls,
+        worksheet,
+        headers: list[Any],
+    ) -> list[str]:
+        if worksheet.title.lower() != "inventoryimpact":
+            return []
+
+        ending_stock_column = cls._find_header_column(
+            headers,
+            ("EndingStock", "Ending Stock"),
+        )
+        if ending_stock_column is None:
+            return []
+        fixed_values = cls._count_non_formula_values(worksheet, ending_stock_column)
+        if not fixed_values:
+            return []
+        return [f"InventoryImpact 有 {fixed_values} 行 EndingStock 不是公式"]
+
+    @classmethod
+    def _collect_summary_sheet_warnings(
+        cls,
+        worksheet,
+        headers: list[Any],
+    ) -> list[str]:
+        if worksheet.title.lower() != "summary":
+            return []
+
+        warnings: list[str] = []
+        for column_name, aliases in (
+            ("CompletionRate", ("CompletionRate", "Completion Rate")),
+            ("Status", ("Status",)),
+        ):
+            formula_column = cls._find_header_column(headers, aliases)
+            if formula_column is None:
+                continue
+            fixed_values = cls._count_non_formula_values(worksheet, formula_column)
+            if fixed_values:
+                warnings.append(
+                    f"Summary 有 {fixed_values} 行 {column_name} 不是公式"
+                )
+
+        target_column = cls._find_header_column(
+            headers,
+            ("TargetAmount", "Target Amount", "Target"),
+        )
+        if target_column is None:
+            return warnings
+
+        actual_column = cls._find_header_column(
+            headers,
+            ("ActualAmount", "Actual Amount", "FinalAmount", "Amount"),
+        )
+        invalid_targets = []
+        for row_index in range(2, worksheet.max_row + 1):
+            target_value = worksheet.cell(row=row_index, column=target_column).value
+            actual_value = (
+                worksheet.cell(row=row_index, column=actual_column).value
+                if actual_column is not None
+                else None
+            )
+            if target_value in (None, "") or (
+                target_value == 0 and actual_value not in (None, "", 0)
+            ):
+                invalid_targets.append(row_index)
+        if invalid_targets:
+            warnings.append(f"Summary 有 {len(invalid_targets)} 行目标为空或 0")
+        return warnings
+
+    @classmethod
+    def _collect_sheet_quality_warnings(
+        cls,
+        worksheet,
+        headers: list[Any],
+        *,
+        data_row_count: int,
+        chart_count: int,
+        conditional_formatting_count: int,
+    ) -> list[str]:
+        warnings: list[str] = []
+        warnings.extend(
+            cls._collect_dashboard_warnings(
+                worksheet,
+                data_row_count=data_row_count,
+                chart_count=chart_count,
+            )
+        )
+
+        repeated_header_rows = cls._count_repeated_header_rows(worksheet, headers)
+        if repeated_header_rows:
+            warnings.append(f"{worksheet.title} 有 {repeated_header_rows} 行疑似重复表头")
+
+        warnings.extend(cls._collect_cleaned_data_warnings(worksheet, headers))
+
+        if cls._sheet_expects_clean_text(worksheet.title):
+            dirty_text_cells = cls._count_cells_with_line_breaks_or_tabs(worksheet)
+            if dirty_text_cells:
+                warnings.append(
+                    f"{worksheet.title} 有 {dirty_text_cells} 个单元格仍包含换行或 Tab"
+                )
+
+        warnings.extend(
+            cls._collect_gross_margin_warnings(
+                worksheet,
+                headers,
+                conditional_formatting_count=conditional_formatting_count,
+            )
+        )
+        warnings.extend(cls._collect_product_detail_warnings(worksheet, headers))
+        warnings.extend(cls._collect_inventory_impact_warnings(worksheet, headers))
+        warnings.extend(cls._collect_summary_sheet_warnings(worksheet, headers))
+        return warnings
+
+    @classmethod
     def _build_excel_quality_summary(cls, output_path: Path) -> dict[str, Any] | None:
         if output_path.suffix.lower() not in cls._EXCEL_FORMULA_SUFFIXES:
             return None
@@ -214,181 +455,38 @@ class GeneratedFileDeliveryService:
                 chart_count += sheet_chart_count
                 conditional_formatting_count += sheet_conditional_formatting_count
                 sheet_summaries.append(
-                    {
-                        "name": worksheet.title,
-                        "rows": worksheet.max_row,
-                        "data_rows": data_row_count,
-                        "columns": worksheet.max_column,
-                        "charts": sheet_chart_count,
-                        "conditional_formatting_rules": (
+                    cls._build_sheet_quality_summary(
+                        worksheet,
+                        data_row_count=data_row_count,
+                        chart_count=sheet_chart_count,
+                        conditional_formatting_count=(
                             sheet_conditional_formatting_count
                         ),
-                    }
+                    )
                 )
-
-                if worksheet.title.lower() == "dashboard" and data_row_count == 0:
-                    if sheet_chart_count:
-                        warnings.append(
-                            "Dashboard 只有图表，没有数据表或关键指标区"
-                        )
-                    else:
-                        warnings.append("Dashboard 没有数据行或图表")
-
-                for row in worksheet.iter_rows():
-                    for cell in row:
-                        if isinstance(cell.value, str) and cell.value.startswith("="):
-                            formula_count += 1
-
-                repeated_header_rows = cls._count_repeated_header_rows(
-                    worksheet,
-                    headers,
+                formula_count += cls._count_sheet_formulas(worksheet)
+                warnings.extend(
+                    cls._collect_sheet_quality_warnings(
+                        worksheet,
+                        headers,
+                        data_row_count=data_row_count,
+                        chart_count=sheet_chart_count,
+                        conditional_formatting_count=(
+                            sheet_conditional_formatting_count
+                        ),
+                    )
                 )
-                if repeated_header_rows:
-                    warnings.append(
-                        f"{worksheet.title} 有 {repeated_header_rows} 行疑似重复表头"
-                    )
-
-                if worksheet.title.lower() == "cleaneddata":
-                    key_column = cls._find_header_column(
+                sheet_issues_rows, sheet_issue_type_counts, issue_warnings = (
+                    cls._collect_issues_sheet_state(
+                        worksheet,
                         headers,
-                        ("OrderID", "Order ID", "ID"),
+                        data_row_count=data_row_count,
                     )
-                    if key_column is not None:
-                        blank_keys = 0
-                        for row_index in range(2, worksheet.max_row + 1):
-                            key_value = worksheet.cell(
-                                row=row_index,
-                                column=key_column,
-                            ).value
-                            if key_value in (None, ""):
-                                blank_keys += 1
-                        if blank_keys:
-                            warnings.append(
-                                f"CleanedData 有 {blank_keys} 行主键为空"
-                            )
-
-                if cls._sheet_expects_clean_text(worksheet.title):
-                    dirty_text_cells = cls._count_cells_with_line_breaks_or_tabs(
-                        worksheet
-                    )
-                    if dirty_text_cells:
-                        warnings.append(
-                            f"{worksheet.title} 有 {dirty_text_cells} 个单元格仍包含换行或 Tab"
-                        )
-
-                gross_margin_column = cls._find_header_column(
-                    headers,
-                    ("GrossMargin", "Gross Margin"),
                 )
-                if (
-                    gross_margin_column is not None
-                    and sheet_conditional_formatting_count == 0
-                ):
-                    warnings.append(
-                        f"{worksheet.title} 包含 GrossMargin 列，但没有条件格式规则"
-                    )
-
-                if worksheet.title.lower() == "issues":
-                    issues_rows = data_row_count
-                    issue_type_column = cls._find_header_column(
-                        headers,
-                        ("IssueType", "Issue Type", "Type"),
-                    )
-                    if issue_type_column is not None:
-                        for row_index in range(2, worksheet.max_row + 1):
-                            issue_type = str(
-                                worksheet.cell(
-                                    row=row_index,
-                                    column=issue_type_column,
-                                ).value
-                                or ""
-                            ).strip()
-                            if issue_type:
-                                issue_type_counts[issue_type] = (
-                                    issue_type_counts.get(issue_type, 0) + 1
-                                )
-                    elif data_row_count:
-                        warnings.append(
-                            "Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型"
-                        )
-
-                if worksheet.title.lower() == "productdetail":
-                    missing_dimensions = [
-                        dimension
-                        for dimension, aliases in (
-                            ("Region", ("Region",)),
-                            ("Product", ("Product",)),
-                            ("Month", ("Month",)),
-                        )
-                        if cls._find_header_column(headers, aliases) is None
-                    ]
-                    if missing_dimensions:
-                        warnings.append(
-                            "ProductDetail 缺少维度列："
-                            + "、".join(missing_dimensions)
-                        )
-
-                if worksheet.title.lower() == "inventoryimpact":
-                    ending_stock_column = cls._find_header_column(
-                        headers,
-                        ("EndingStock", "Ending Stock"),
-                    )
-                    if ending_stock_column is not None:
-                        fixed_values = cls._count_non_formula_values(
-                            worksheet,
-                            ending_stock_column,
-                        )
-                        if fixed_values:
-                            warnings.append(
-                                f"InventoryImpact 有 {fixed_values} 行 EndingStock 不是公式"
-                            )
-
-                if worksheet.title.lower() == "summary":
-                    for column_name, aliases in (
-                        ("CompletionRate", ("CompletionRate", "Completion Rate")),
-                        ("Status", ("Status",)),
-                    ):
-                        formula_column = cls._find_header_column(headers, aliases)
-                        if formula_column is not None:
-                            fixed_values = cls._count_non_formula_values(
-                                worksheet,
-                                formula_column,
-                            )
-                            if fixed_values:
-                                warnings.append(
-                                    f"Summary 有 {fixed_values} 行 {column_name} 不是公式"
-                                )
-
-                    target_column = cls._find_header_column(
-                        headers,
-                        ("TargetAmount", "Target Amount", "Target"),
-                    )
-                    if target_column is not None:
-                        actual_column = cls._find_header_column(
-                            headers,
-                            ("ActualAmount", "Actual Amount", "FinalAmount", "Amount"),
-                        )
-                        invalid_targets = []
-                        for row_index in range(2, worksheet.max_row + 1):
-                            target_value = worksheet.cell(
-                                row=row_index,
-                                column=target_column,
-                            ).value
-                            actual_value = (
-                                worksheet.cell(row=row_index, column=actual_column).value
-                                if actual_column is not None
-                                else None
-                            )
-                            if target_value in (None, "") or (
-                                target_value == 0 and actual_value not in (None, "", 0)
-                            ):
-                                invalid_targets.append(row_index)
-                        if invalid_targets:
-                            warnings.append(
-                                (
-                                    f"Summary 有 {len(invalid_targets)} 行目标为空或 0"
-                                )
-                            )
+                if sheet_issues_rows is not None:
+                    issues_rows = sheet_issues_rows
+                    issue_type_counts.update(sheet_issue_type_counts)
+                    warnings.extend(issue_warnings)
 
             if issues_rows is None:
                 warnings.append("未发现 Issues Sheet")

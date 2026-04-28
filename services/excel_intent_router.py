@@ -101,12 +101,10 @@ class ExcelIntentRouter:
         )
         has_excel_file = bool(matched_files)
         mentions_excel = bool(cls._EXCEL_SUBJECT_RE.search(normalized_text))
-        mentions_excel_tool = bool(
-            cls._WORKBOOK_TOOL_NAMES.union(cls._EXCEL_FILE_TOOL_NAMES).intersection(
-                exposed_tool_names
-            )
+        uses_explicit_excel_tool = explicit_tool_name in (
+            cls._WORKBOOK_TOOL_NAMES | cls._EXCEL_FILE_TOOL_NAMES
         )
-        if not (has_excel_file or mentions_excel or mentions_excel_tool):
+        if not (has_excel_file or mentions_excel or uses_explicit_excel_tool):
             return None
         if cls._CONVERSION_RE.search(normalized_text):
             return None

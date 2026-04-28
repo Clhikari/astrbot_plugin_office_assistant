@@ -488,9 +488,10 @@ class ExcelScriptService:
             relative_input_path = (
                 exec_relative_dir / "_inputs" / str(index) / original_path.name
             )
-            input_path = relative_input_path.as_posix()
-            runtime_input_files.append(input_path)
-            remote_input_files.append(input_path)
+            runtime_input_files.append(
+                relative_input_path.relative_to(exec_relative_dir).as_posix()
+            )
+            remote_input_files.append(relative_input_path.as_posix())
 
         relative_result_path = exec_relative_dir / "result.json"
         runtime_result_path = relative_result_path.as_posix()
@@ -637,7 +638,7 @@ class ExcelScriptService:
                             [
                                 path
                                 for path in [
-                                    *sandbox_paths.input_files,
+                                    *sandbox_paths.remote_input_files,
                                     sandbox_paths.result_path,
                                     sandbox_paths.output_path,
                                 ]
@@ -876,7 +877,10 @@ class ExcelScriptService:
                 self._build_runner_script(
                     script=script,
                     exec_dir=str(temp_root.resolve()),
-                    input_files=[str(path.resolve()) for path in copied_input_files],
+                    input_files=[
+                        path.relative_to(temp_root).as_posix()
+                        for path in copied_input_files
+                    ],
                     output_path=(
                         str(output_path.resolve()) if output_path is not None else None
                     ),
@@ -1021,7 +1025,6 @@ class ExcelScriptService:
             import os
             import shutil
             import traceback
-            from collections import Counter
             from pathlib import Path
 
             workspace_root = Path.cwd()
@@ -1029,10 +1032,12 @@ class ExcelScriptService:
             if not exec_dir.is_absolute():
                 exec_dir = workspace_root / exec_dir
             exec_dir = exec_dir.resolve()
-            input_files = [Path(path) for path in json.loads({serialized_input_files!r})]
+            script_input_files = [
+                Path(path) for path in json.loads({serialized_input_files!r})
+            ]
             input_files = [
-                path if path.is_absolute() else (workspace_root / path).resolve()
-                for path in input_files
+                path if path.is_absolute() else (exec_dir / path).resolve()
+                for path in script_input_files
             ]
             output_path_value = json.loads({serialized_output_path!r})
             reported_output_path = output_path_value
@@ -1050,17 +1055,6 @@ class ExcelScriptService:
             try:
                 import openpyxl
                 from openpyxl import Workbook, load_workbook
-
-                name_counts = Counter(path.name for path in input_files)
-                script_input_files = []
-                for source_path in input_files:
-                    if name_counts[source_path.name] == 1:
-                        alias_path = exec_dir / source_path.name
-                        if alias_path.resolve() != source_path.resolve():
-                            shutil.copy2(source_path, alias_path)
-                        script_input_files.append(Path(source_path.name))
-                    else:
-                        script_input_files.append(source_path)
 
                 namespace = {{
                     "__name__": "__main__",

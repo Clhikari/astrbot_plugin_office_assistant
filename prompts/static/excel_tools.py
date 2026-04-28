@@ -29,7 +29,7 @@ def build_excel_script_notice() -> str:
         "\n[System Notice] Excel 脚本工具指南\n"
         "- 需要公式、图表、条件格式、数据验证、多 Sheet 公式联动、清洗后导出或修改已有 Excel 时，使用 `execute_excel_script`\n"
         "- 脚本运行环境提供 `openpyxl`、`Workbook`、`load_workbook`、`Path`\n"
-        "- 已校验的输入工作簿通过脚本变量 `input_files` 提供；按顺序使用 `input_files[0]`、`input_files[1]`，不要硬写临时文件名\n"
+        "- 已校验的输入工作簿通过脚本变量 `input_files` 提供；其中每个路径都相对于脚本执行目录，按顺序使用 `input_files[0]`、`input_files[1]`，不要硬写临时文件名\n"
         "- 需要导出文件时，必须保存到脚本变量 `output_path`，不要自己另取输出文件名\n"
         "- 不要把 `.xls` 当成可原格式保存的工作簿；只有用户明确要求转换/导出为 `.xlsx` 且说明具体改动时，才用脚本生成 `.xlsx`\n"
         "- 用户只说更新、处理、保存，但没有说明要改哪些单元格、列、公式或备注时，不要自行编造改动规则；先询问用户\n"
