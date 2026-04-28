@@ -105,7 +105,6 @@ def build_plugin_runtime(
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
         allow_external_input_files=settings.allow_external_input_files,
-        auto_block_execution_tools=settings.auto_block_execution_tools,
     )
     delivery_service = DeliveryService(
         executor=executor,
@@ -217,8 +216,8 @@ def _build_document_render_backend_config(
     return DocumentRenderBackendConfig(
         preferred_backend="node",
         fallback_enabled=False,
-        ppt_preferred_backend=settings.ppt_render_backend,
-        excel_preferred_backend=settings.excel_render_backend,
+        ppt_preferred_backend="python",
+        excel_preferred_backend="python",
         node_renderer_entry=settings.js_renderer_entry,
     )
 
@@ -349,6 +348,9 @@ def _build_file_processing_services(
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+        max_excel_preview_rows=settings.max_excel_preview_rows,
+        max_excel_preview_chars=settings.max_excel_preview_chars,
+        max_excel_preview_sheets=settings.max_excel_preview_sheets,
     )
     office_generate_service = OfficeGenerateService(
         workspace_service=workspace_service,
@@ -370,6 +372,7 @@ def _build_file_processing_services(
     )
     file_tool_service = FileToolService(
         astrbot_context=astrbot_context,
+        auto_block_execution_tools=settings.auto_block_execution_tools,
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,
@@ -381,6 +384,9 @@ def _build_file_processing_services(
         enable_docx_image_review=settings.enable_docx_image_review,
         max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
         max_inline_docx_image_count=settings.max_inline_docx_image_count,
+        max_excel_preview_rows=settings.max_excel_preview_rows,
+        max_excel_preview_chars=settings.max_excel_preview_chars,
+        max_excel_preview_sheets=settings.max_excel_preview_sheets,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,

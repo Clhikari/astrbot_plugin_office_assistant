@@ -10,6 +10,11 @@ from typing import Literal
 from astrbot.api import logger
 
 from .compat import _ANTIWORD_AVAILABLE, _IS_WINDOWS, _WIN32COM_AVAILABLE
+from .constants import (
+    DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+    DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+    DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
+)
 
 if _WIN32COM_AVAILABLE:
     import pythoncom
@@ -118,90 +123,15 @@ class ExtractedExcelSheet:
     text: str
 
 
-_EXCEL_PREVIEW_MAX_ROWS_PER_SHEET = 200
-_EXCEL_PREVIEW_MAX_CHARS_PER_SHEET = 12_000
-_EXCEL_PREVIEW_MAX_TOTAL_CHARS = 24_000
-_EXCEL_PREVIEW_NOTE_RESERVE = 120
-_EXCEL_PREVIEW_SECTION_SEPARATOR_COST = 2
-
-
-def _build_excel_sheet_preview(
-    *,
-    sheet_name: str,
-    rows,
-    remaining_chars: int,
-) -> tuple[ExtractedExcelSheet, int, bool]:
-    section_overhead = _minimum_sheet_preview_cost(sheet_name)
-    sheet_limit = min(_EXCEL_PREVIEW_MAX_CHARS_PER_SHEET, remaining_chars)
-    content_limit = max(sheet_limit - _EXCEL_PREVIEW_NOTE_RESERVE - section_overhead, 0)
-    lines: list[str] = []
-    content_chars = 0
-    shown_rows = 0
-    row_limit_hit = False
-    char_limit_hit = False
-    workbook_limit_hit = False
-
-    for row in rows:
-        if shown_rows >= _EXCEL_PREVIEW_MAX_ROWS_PER_SHEET:
-            row_limit_hit = True
-            break
-
-        row_text = "\t".join(_normalize_excel_preview_value(value) for value in row)
-        line_cost = len(row_text) + (1 if lines else 0)
-        if content_chars + line_cost <= content_limit:
-            lines.append(row_text)
-            content_chars += line_cost
-            shown_rows += 1
-            continue
-
-        available_chars = content_limit - content_chars - (1 if lines else 0)
-        if available_chars > 0:
-            truncated_row = row_text[:available_chars].rstrip()
-            if truncated_row:
-                lines.append(truncated_row)
-                content_chars += len(truncated_row) + (1 if len(lines) > 1 else 0)
-                shown_rows += 1
-
-        char_limit_hit = True
-        workbook_limit_hit = sheet_limit < _EXCEL_PREVIEW_MAX_CHARS_PER_SHEET
-        break
-
-    note_parts: list[str] = []
-    if row_limit_hit:
-        note_parts.append(f"仅展示前 {shown_rows} 行")
-    if workbook_limit_hit:
-        note_parts.append("工作簿总预览已达到上限")
-    elif char_limit_hit:
-        note_parts.append("单个 Sheet 预览已达到上限")
-    if note_parts:
-        lines.append(f"[已截断：{'；'.join(note_parts)}]")
-
-    text = "\n".join(lines)
-    return (
-        ExtractedExcelSheet(name=sheet_name, text=text),
-        _rendered_sheet_preview_cost(sheet_name=sheet_name, text=text),
-        workbook_limit_hit,
-    )
-
-
-def _normalize_excel_preview_value(value: object) -> str:
-    if value is None:
-        return ""
-    return re.sub(r"[\r\n\t]+", " ", str(value))
-
-
-def _minimum_sheet_preview_cost(sheet_name: str) -> int:
-    return _rendered_sheet_preview_cost(sheet_name=sheet_name, text="")
-
-
-def _rendered_sheet_preview_cost(*, sheet_name: str, text: str) -> int:
-    rendered_text = text or "[空表]"
-    return (
-        len(f"[Sheet: {sheet_name}]\n{rendered_text}")
-        + _EXCEL_PREVIEW_SECTION_SEPARATOR_COST
-        + len(sheet_name)
-        + 2
-    )
+_MAX_EXCEL_PREVIEW_ROWS = DEFAULT_MAX_EXCEL_PREVIEW_ROWS
+_MAX_EXCEL_PREVIEW_CHARS = DEFAULT_MAX_EXCEL_PREVIEW_CHARS
+_MAX_EXCEL_PREVIEW_SHEETS = DEFAULT_MAX_EXCEL_PREVIEW_SHEETS
+_EXCEL_PREVIEW_TRUNCATION_NOTICE = (
+    "[内容已截断，最多展示前 {rows} 行或 {chars} 个字符]"
+)
+_EXCEL_PREVIEW_SHEET_TRUNCATION_NOTICE = (
+    "[其余 {count} 个 Sheet 未展示，最多展示前 {sheets} 个 Sheet]"
+)
 
 
 def format_extracted_word_content(
@@ -551,16 +481,32 @@ def extract_excel_text(file_path: Path) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-def extract_excel_sheets(file_path: Path) -> list[ExtractedExcelSheet] | None:
+def extract_excel_sheets(
+    file_path: Path,
+    *,
+    max_rows: int | None = None,
+    max_chars: int | None = None,
+    max_sheets: int | None = None,
+) -> list[ExtractedExcelSheet] | None:
     """提取 Excel 工作簿中每个 Sheet 的文本内容。"""
     suffix = file_path.suffix.lower()
 
     if suffix == ".xls":
-        extracted_sheets = _extract_xls_sheets_xlrd(file_path)
+        extracted_sheets = _extract_xls_sheets_xlrd(
+            file_path,
+            max_rows=max_rows,
+            max_chars=max_chars,
+            max_sheets=max_sheets,
+        )
         if extracted_sheets is not None:
             return extracted_sheets
         if _WIN32COM_AVAILABLE:
-            return _extract_xls_sheets_win32com(file_path)
+            return _extract_xls_sheets_win32com(
+                file_path,
+                max_rows=max_rows,
+                max_chars=max_chars,
+                max_sheets=max_sheets,
+            )
         if not _IS_WINDOWS:
             logger.warning("读取 .xls 文件需要 xlrd，请安装: pip install xlrd")
         else:
@@ -574,25 +520,122 @@ def extract_excel_sheets(file_path: Path) -> list[ExtractedExcelSheet] | None:
 
         workbook = load_workbook(file_path, read_only=True, data_only=True)
         extracted_sheets: list[ExtractedExcelSheet] = []
-        remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
-        for worksheet in workbook.worksheets:
-            if remaining_chars < _minimum_sheet_preview_cost(worksheet.title):
+        worksheet_count = len(workbook.worksheets)
+        sheet_limit = _resolve_excel_preview_limit(
+            max_sheets,
+            _MAX_EXCEL_PREVIEW_SHEETS,
+        )
+        for sheet_index, worksheet in enumerate(workbook.worksheets, start=1):
+            if sheet_limit and sheet_index > sheet_limit:
+                extracted_sheets.append(
+                    _build_omitted_excel_sheets_notice(
+                        omitted_count=worksheet_count - sheet_limit,
+                        max_sheets=sheet_limit,
+                    )
+                )
                 break
-            extracted_sheet, consumed_chars, stop_after_sheet = _build_excel_sheet_preview(
-                sheet_name=worksheet.title,
-                rows=worksheet.iter_rows(values_only=True),
-                remaining_chars=remaining_chars,
+            extracted_sheets.append(
+                ExtractedExcelSheet(
+                    name=worksheet.title,
+                    text=_extract_openpyxl_sheet_preview(
+                        worksheet,
+                        max_rows=max_rows,
+                        max_chars=max_chars,
+                    ),
+                )
             )
-            extracted_sheets.append(extracted_sheet)
-            remaining_chars = max(remaining_chars - consumed_chars, 0)
-            if stop_after_sheet:
-                break
         return extracted_sheets
     except ImportError:
         return None
     except Exception as e:
         logger.warning(f"Excel 文本提取失败: {e}", exc_info=True)
         return None
+
+
+def _resolve_excel_preview_limit(value: int | None, default: int) -> int:
+    if value is None:
+        value = default
+    return max(0, int(value))
+
+
+def _build_omitted_excel_sheets_notice(
+    *,
+    omitted_count: int,
+    max_sheets: int,
+) -> ExtractedExcelSheet:
+    return ExtractedExcelSheet(
+        name="[其余 Sheet]",
+        text=_EXCEL_PREVIEW_SHEET_TRUNCATION_NOTICE.format(
+            count=omitted_count,
+            sheets=max_sheets,
+        ),
+    )
+
+
+def _format_excel_preview_limit(value: int) -> str:
+    return str(value) if value else "不限制"
+
+
+def _format_excel_cell_preview(value) -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\t", "\\t").replace("\n", "\\n")
+
+
+def _extract_openpyxl_sheet_preview(
+    worksheet,
+    *,
+    max_rows: int | None = None,
+    max_chars: int | None = None,
+) -> str:
+    return _build_excel_sheet_preview(
+        (
+            [_format_excel_cell_preview(value) for value in row]
+            for row in worksheet.iter_rows(values_only=True)
+        ),
+        max_rows=max_rows,
+        max_chars=max_chars,
+    )
+
+
+def _build_excel_sheet_preview(
+    rows,
+    *,
+    max_rows: int | None = None,
+    max_chars: int | None = None,
+) -> str:
+    lines: list[str] = []
+    total_chars = 0
+    truncated = False
+    row_limit = _resolve_excel_preview_limit(max_rows, _MAX_EXCEL_PREVIEW_ROWS)
+    char_limit = _resolve_excel_preview_limit(max_chars, _MAX_EXCEL_PREVIEW_CHARS)
+
+    for row_index, row in enumerate(rows, start=1):
+        if row_limit and row_index > row_limit:
+            truncated = True
+            break
+
+        line = "\t".join(_format_excel_cell_preview(value) for value in row)
+        newline_cost = 1 if lines else 0
+        remaining_chars = char_limit - total_chars - newline_cost
+        if char_limit and remaining_chars < len(line):
+            if remaining_chars > 0:
+                lines.append(line[:remaining_chars])
+                total_chars += newline_cost + remaining_chars
+            truncated = True
+            break
+
+        lines.append(line)
+        total_chars += newline_cost + len(line)
+
+    if truncated:
+        lines.append(
+            _EXCEL_PREVIEW_TRUNCATION_NOTICE.format(
+                rows=_format_excel_preview_limit(row_limit),
+                chars=_format_excel_preview_limit(char_limit),
+            )
+        )
+    return "\n".join(lines)
 
 
 def _extract_xls_text_xlrd(file_path: Path) -> str | None:
@@ -619,29 +662,48 @@ def _extract_xls_text_win32com(file_path: Path) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-def _extract_xls_sheets_xlrd(file_path: Path) -> list[ExtractedExcelSheet] | None:
+def _extract_xls_sheets_xlrd(
+    file_path: Path,
+    *,
+    max_rows: int | None = None,
+    max_chars: int | None = None,
+    max_sheets: int | None = None,
+) -> list[ExtractedExcelSheet] | None:
     try:
         import xlrd
 
         workbook = xlrd.open_workbook(str(file_path))
         extracted_sheets: list[ExtractedExcelSheet] = []
-        remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
-        for sheet in workbook.sheets():
-            if remaining_chars < _minimum_sheet_preview_cost(sheet.name):
+        sheets = workbook.sheets()
+        sheet_limit = _resolve_excel_preview_limit(
+            max_sheets,
+            _MAX_EXCEL_PREVIEW_SHEETS,
+        )
+        for sheet_index, sheet in enumerate(sheets, start=1):
+            if sheet_limit and sheet_index > sheet_limit:
+                extracted_sheets.append(
+                    _build_omitted_excel_sheets_notice(
+                        omitted_count=len(sheets) - sheet_limit,
+                        max_sheets=sheet_limit,
+                    )
+                )
                 break
-            row_iter = (
-                (cell.value for cell in sheet.row(row_idx))
-                for row_idx in range(sheet.nrows)
+            extracted_sheets.append(
+                ExtractedExcelSheet(
+                    name=sheet.name,
+                    text=_build_excel_sheet_preview(
+                        (
+                            [
+                                _format_excel_cell_preview(cell.value)
+                                for cell in sheet.row(row_idx)
+                            ]
+                            for row_idx in range(sheet.nrows)
+                        ),
+                        max_rows=max_rows,
+                        max_chars=max_chars,
+                    ),
+                )
             )
-            extracted_sheet, consumed_chars, stop_after_sheet = _build_excel_sheet_preview(
-                sheet_name=sheet.name,
-                rows=row_iter,
-                remaining_chars=remaining_chars,
-            )
-            extracted_sheets.append(extracted_sheet)
-            remaining_chars = max(remaining_chars - consumed_chars, 0)
-            if stop_after_sheet:
-                break
         return extracted_sheets
     except ImportError:
         return None
@@ -652,34 +714,50 @@ def _extract_xls_sheets_xlrd(file_path: Path) -> list[ExtractedExcelSheet] | Non
 
 def _extract_xls_sheets_win32com(
     file_path: Path,
+    *,
+    max_rows: int | None = None,
+    max_chars: int | None = None,
+    max_sheets: int | None = None,
 ) -> list[ExtractedExcelSheet] | None:
     try:
         with com_application("Excel.Application") as app:
             workbook = app.Workbooks.Open(str(file_path.resolve()))
             try:
                 extracted_sheets: list[ExtractedExcelSheet] = []
-                remaining_chars = _EXCEL_PREVIEW_MAX_TOTAL_CHARS
-                for worksheet in workbook.Worksheets:
-                    worksheet_name = str(worksheet.Name)
-                    if remaining_chars < _minimum_sheet_preview_cost(worksheet_name):
+                worksheet_count = workbook.Worksheets.Count
+                sheet_limit = _resolve_excel_preview_limit(
+                    max_sheets,
+                    _MAX_EXCEL_PREVIEW_SHEETS,
+                )
+                for sheet_index, worksheet in enumerate(workbook.Worksheets, start=1):
+                    if sheet_limit and sheet_index > sheet_limit:
+                        extracted_sheets.append(
+                            _build_omitted_excel_sheets_notice(
+                                omitted_count=worksheet_count - sheet_limit,
+                                max_sheets=sheet_limit,
+                            )
+                        )
                         break
                     used_range = worksheet.UsedRange
-                    row_iter = (
-                        (
-                            cell.Value
-                            for cell in row.Cells
+                    rows = []
+                    if used_range:
+                        for row in used_range.Rows:
+                            rows.append(
+                                [
+                                    _format_excel_cell_preview(cell.Value)
+                                    for cell in row.Cells
+                                ]
+                            )
+                    extracted_sheets.append(
+                        ExtractedExcelSheet(
+                            name=str(worksheet.Name),
+                            text=_build_excel_sheet_preview(
+                                rows,
+                                max_rows=max_rows,
+                                max_chars=max_chars,
+                            ),
                         )
-                        for row in used_range.Rows
-                    ) if used_range else ()
-                    extracted_sheet, consumed_chars, stop_after_sheet = _build_excel_sheet_preview(
-                        sheet_name=worksheet_name,
-                        rows=row_iter,
-                        remaining_chars=remaining_chars,
                     )
-                    extracted_sheets.append(extracted_sheet)
-                    remaining_chars = max(remaining_chars - consumed_chars, 0)
-                    if stop_after_sheet:
-                        break
                 return extracted_sheets
             finally:
                 with suppress(Exception):

@@ -1,6 +1,7 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -8,15 +9,405 @@ from astrbot.api.event import AstrMessageEvent
 
 @dataclass(slots=True)
 class GeneratedFileDeliveryResult:
-    status: Literal["sent", "missing", "oversized"]
+    status: Literal["sent", "missing", "oversized", "invalid"]
     file_size: int = 0
     max_size: int = 0
+    validation_errors: list[str] | None = None
+    quality_summary: dict[str, Any] | None = None
 
 
 class GeneratedFileDeliveryService:
+    _EXCEL_FORMULA_SUFFIXES = {".xlsx", ".xlsm"}
+    _FORMULA_DIVISOR_RE = re.compile(r"/\s*(\$?[A-Z]{1,3}\$?\d+)")
+    _MAX_VALIDATION_ERRORS = 8
+    _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
+
     def __init__(self, *, workspace_service, delivery_service) -> None:
         self._workspace_service = workspace_service
         self._delivery_service = delivery_service
+
+    @classmethod
+    def _normalize_cell_reference(cls, cell_reference: str) -> str:
+        return cell_reference.replace("$", "").upper()
+
+    @staticmethod
+    def _normalize_header(header: Any) -> str:
+        return re.sub(r"[\s_]+", "", str(header or "").strip().lower())
+
+    @classmethod
+    def _find_header_column(
+        cls,
+        headers: list[Any],
+        aliases: tuple[str, ...],
+    ) -> int | None:
+        normalized_aliases = {cls._normalize_header(alias) for alias in aliases}
+        for index, header in enumerate(headers, start=1):
+            if cls._normalize_header(header) in normalized_aliases:
+                return index
+        return None
+
+    @classmethod
+    def _count_repeated_header_rows(cls, worksheet, headers: list[Any]) -> int:
+        normalized_headers = [cls._normalize_header(header) for header in headers]
+        repeated_rows = 0
+        for row_index in range(2, worksheet.max_row + 1):
+            normalized_values = [
+                cls._normalize_header(
+                    worksheet.cell(row=row_index, column=column).value
+                )
+                for column in range(1, worksheet.max_column + 1)
+            ]
+            if not normalized_values or normalized_values[0] != normalized_headers[0]:
+                continue
+            matched_cells = sum(
+                1
+                for value, header in zip(normalized_values, normalized_headers)
+                if value and value == header
+            )
+            if matched_cells >= 3:
+                repeated_rows += 1
+        return repeated_rows
+
+    @classmethod
+    def _count_non_formula_values(cls, worksheet, column: int) -> int:
+        count = 0
+        for row_index in range(2, worksheet.max_row + 1):
+            value = worksheet.cell(row=row_index, column=column).value
+            if value in (None, ""):
+                continue
+            if not (isinstance(value, str) and value.startswith("=")):
+                count += 1
+        return count
+
+    @classmethod
+    def _count_cells_with_line_breaks_or_tabs(cls, worksheet) -> int:
+        count = 0
+        for row in worksheet.iter_rows(min_row=2):
+            for cell in row:
+                value = cell.value
+                if not isinstance(value, str):
+                    continue
+                if "\n" in value or "\r" in value or "\t" in value:
+                    count += 1
+        return count
+
+    @classmethod
+    def _sheet_expects_clean_text(cls, sheet_name: str) -> bool:
+        normalized_name = cls._normalize_header(sheet_name)
+        return any(
+            marker in normalized_name
+            for marker in cls._CLEAN_TEXT_SHEET_MARKERS
+        )
+
+    @staticmethod
+    def _count_conditional_formatting_rules(worksheet) -> int:
+        conditional_formatting = getattr(worksheet, "conditional_formatting", None)
+        if conditional_formatting is None:
+            return 0
+
+        rule_map = getattr(conditional_formatting, "_cf_rules", None)
+        if rule_map is not None:
+            try:
+                return sum(len(rules) for rules in rule_map.values())
+            except TypeError:
+                pass
+
+        try:
+            return sum(
+                len(getattr(item, "rules", ()) or ())
+                for item in conditional_formatting
+            )
+        except TypeError:
+            pass
+
+        try:
+            return len(conditional_formatting)
+        except TypeError:
+            return 0
+
+    @classmethod
+    def _formula_guards_divisor(cls, formula: str, cell_reference: str) -> bool:
+        reference = cls._normalize_cell_reference(cell_reference)
+        normalized = formula.upper().replace("$", "").replace(" ", "")
+        return (
+            f"{reference}=0" in normalized
+            or f'{reference}=""' in normalized
+            or f"ISBLANK({reference})" in normalized
+            or f"IFERROR(" in normalized
+        )
+
+    @classmethod
+    def _validate_excel_formula_risks(cls, output_path: Path) -> list[str]:
+        if output_path.suffix.lower() not in cls._EXCEL_FORMULA_SUFFIXES:
+            return []
+
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            return []
+
+        try:
+            workbook = load_workbook(output_path, data_only=False, read_only=False)
+        except Exception as exc:
+            return [f"无法打开生成的 Excel 文件进行校验：{exc}"]
+
+        errors: list[str] = []
+        try:
+            for worksheet in workbook.worksheets:
+                for row in worksheet.iter_rows():
+                    for cell in row:
+                        formula = cell.value
+                        if not isinstance(formula, str) or not formula.startswith("="):
+                            continue
+                        for match in cls._FORMULA_DIVISOR_RE.finditer(formula):
+                            divisor_ref = cls._normalize_cell_reference(match.group(1))
+                            if cls._formula_guards_divisor(formula, divisor_ref):
+                                continue
+                            divisor_value = worksheet[divisor_ref].value
+                            if divisor_value in (None, "", 0):
+                                errors.append(
+                                    (
+                                        f"{worksheet.title}!{cell.coordinate} 公式 "
+                                        f"{formula} 的分母 {divisor_ref} 为空或 0"
+                                    )
+                                )
+                                if len(errors) >= cls._MAX_VALIDATION_ERRORS:
+                                    return errors
+        finally:
+            workbook.close()
+        return errors
+
+    @classmethod
+    def _build_excel_quality_summary(cls, output_path: Path) -> dict[str, Any] | None:
+        if output_path.suffix.lower() not in cls._EXCEL_FORMULA_SUFFIXES:
+            return None
+
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            return None
+
+        try:
+            workbook = load_workbook(output_path, data_only=False, read_only=False)
+        except Exception as exc:
+            return {"file_type": "excel", "warnings": [f"无法读取质量摘要：{exc}"]}
+
+        try:
+            sheet_summaries: list[dict[str, Any]] = []
+            formula_count = 0
+            chart_count = 0
+            conditional_formatting_count = 0
+            warnings: list[str] = []
+            issues_rows: int | None = None
+            issue_type_counts: dict[str, int] = {}
+
+            for worksheet in workbook.worksheets:
+                headers = [
+                    worksheet.cell(row=1, column=column).value
+                    for column in range(1, worksheet.max_column + 1)
+                ]
+                data_row_count = max(worksheet.max_row - 1, 0)
+                sheet_chart_count = len(getattr(worksheet, "_charts", []))
+                sheet_conditional_formatting_count = (
+                    cls._count_conditional_formatting_rules(worksheet)
+                )
+                chart_count += sheet_chart_count
+                conditional_formatting_count += sheet_conditional_formatting_count
+                sheet_summaries.append(
+                    {
+                        "name": worksheet.title,
+                        "rows": worksheet.max_row,
+                        "data_rows": data_row_count,
+                        "columns": worksheet.max_column,
+                        "charts": sheet_chart_count,
+                        "conditional_formatting_rules": (
+                            sheet_conditional_formatting_count
+                        ),
+                    }
+                )
+
+                if worksheet.title.lower() == "dashboard" and data_row_count == 0:
+                    if sheet_chart_count:
+                        warnings.append(
+                            "Dashboard 只有图表，没有数据表或关键指标区"
+                        )
+                    else:
+                        warnings.append("Dashboard 没有数据行或图表")
+
+                for row in worksheet.iter_rows():
+                    for cell in row:
+                        if isinstance(cell.value, str) and cell.value.startswith("="):
+                            formula_count += 1
+
+                repeated_header_rows = cls._count_repeated_header_rows(
+                    worksheet,
+                    headers,
+                )
+                if repeated_header_rows:
+                    warnings.append(
+                        f"{worksheet.title} 有 {repeated_header_rows} 行疑似重复表头"
+                    )
+
+                if worksheet.title.lower() == "cleaneddata":
+                    key_column = cls._find_header_column(
+                        headers,
+                        ("OrderID", "Order ID", "ID"),
+                    )
+                    if key_column is not None:
+                        blank_keys = 0
+                        for row_index in range(2, worksheet.max_row + 1):
+                            key_value = worksheet.cell(
+                                row=row_index,
+                                column=key_column,
+                            ).value
+                            if key_value in (None, ""):
+                                blank_keys += 1
+                        if blank_keys:
+                            warnings.append(
+                                f"CleanedData 有 {blank_keys} 行主键为空"
+                            )
+
+                if cls._sheet_expects_clean_text(worksheet.title):
+                    dirty_text_cells = cls._count_cells_with_line_breaks_or_tabs(
+                        worksheet
+                    )
+                    if dirty_text_cells:
+                        warnings.append(
+                            f"{worksheet.title} 有 {dirty_text_cells} 个单元格仍包含换行或 Tab"
+                        )
+
+                gross_margin_column = cls._find_header_column(
+                    headers,
+                    ("GrossMargin", "Gross Margin"),
+                )
+                if (
+                    gross_margin_column is not None
+                    and sheet_conditional_formatting_count == 0
+                ):
+                    warnings.append(
+                        f"{worksheet.title} 包含 GrossMargin 列，但没有条件格式规则"
+                    )
+
+                if worksheet.title.lower() == "issues":
+                    issues_rows = data_row_count
+                    issue_type_column = cls._find_header_column(
+                        headers,
+                        ("IssueType", "Issue Type", "Type"),
+                    )
+                    if issue_type_column is not None:
+                        for row_index in range(2, worksheet.max_row + 1):
+                            issue_type = str(
+                                worksheet.cell(
+                                    row=row_index,
+                                    column=issue_type_column,
+                                ).value
+                                or ""
+                            ).strip()
+                            if issue_type:
+                                issue_type_counts[issue_type] = (
+                                    issue_type_counts.get(issue_type, 0) + 1
+                                )
+                    elif data_row_count:
+                        warnings.append(
+                            "Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型"
+                        )
+
+                if worksheet.title.lower() == "productdetail":
+                    missing_dimensions = [
+                        dimension
+                        for dimension, aliases in (
+                            ("Region", ("Region",)),
+                            ("Product", ("Product",)),
+                            ("Month", ("Month",)),
+                        )
+                        if cls._find_header_column(headers, aliases) is None
+                    ]
+                    if missing_dimensions:
+                        warnings.append(
+                            "ProductDetail 缺少维度列："
+                            + "、".join(missing_dimensions)
+                        )
+
+                if worksheet.title.lower() == "inventoryimpact":
+                    ending_stock_column = cls._find_header_column(
+                        headers,
+                        ("EndingStock", "Ending Stock"),
+                    )
+                    if ending_stock_column is not None:
+                        fixed_values = cls._count_non_formula_values(
+                            worksheet,
+                            ending_stock_column,
+                        )
+                        if fixed_values:
+                            warnings.append(
+                                f"InventoryImpact 有 {fixed_values} 行 EndingStock 不是公式"
+                            )
+
+                if worksheet.title.lower() == "summary":
+                    for column_name, aliases in (
+                        ("CompletionRate", ("CompletionRate", "Completion Rate")),
+                        ("Status", ("Status",)),
+                    ):
+                        formula_column = cls._find_header_column(headers, aliases)
+                        if formula_column is not None:
+                            fixed_values = cls._count_non_formula_values(
+                                worksheet,
+                                formula_column,
+                            )
+                            if fixed_values:
+                                warnings.append(
+                                    f"Summary 有 {fixed_values} 行 {column_name} 不是公式"
+                                )
+
+                    target_column = cls._find_header_column(
+                        headers,
+                        ("TargetAmount", "Target Amount", "Target"),
+                    )
+                    if target_column is not None:
+                        actual_column = cls._find_header_column(
+                            headers,
+                            ("ActualAmount", "Actual Amount", "FinalAmount", "Amount"),
+                        )
+                        invalid_targets = []
+                        for row_index in range(2, worksheet.max_row + 1):
+                            target_value = worksheet.cell(
+                                row=row_index,
+                                column=target_column,
+                            ).value
+                            actual_value = (
+                                worksheet.cell(row=row_index, column=actual_column).value
+                                if actual_column is not None
+                                else None
+                            )
+                            if target_value in (None, "") or (
+                                target_value == 0 and actual_value not in (None, "", 0)
+                            ):
+                                invalid_targets.append(row_index)
+                        if invalid_targets:
+                            warnings.append(
+                                (
+                                    f"Summary 有 {len(invalid_targets)} 行目标为空或 0"
+                                )
+                            )
+
+            if issues_rows is None:
+                warnings.append("未发现 Issues Sheet")
+            elif issues_rows == 0:
+                warnings.append("Issues Sheet 没有数据行")
+
+            return {
+                "file_type": "excel",
+                "sheet_count": len(workbook.worksheets),
+                "sheets": sheet_summaries,
+                "formula_count": formula_count,
+                "chart_count": chart_count,
+                "conditional_formatting_count": conditional_formatting_count,
+                "issues_rows": issues_rows,
+                "issue_type_counts": issue_type_counts,
+                "warnings": warnings,
+            }
+        finally:
+            workbook.close()
 
     async def deliver_generated_file(
         self,
@@ -45,6 +436,17 @@ class GeneratedFileDeliveryService:
                 max_size=max_size,
             )
 
+        validation_errors = self._validate_excel_formula_risks(output_path)
+        if validation_errors:
+            return GeneratedFileDeliveryResult(
+                status="invalid",
+                file_size=file_size,
+                max_size=max_size,
+                validation_errors=validation_errors,
+            )
+
+        quality_summary = self._build_excel_quality_summary(output_path)
+
         if success_message is None:
             await self._delivery_service.send_file_with_preview(event, output_path)
         else:
@@ -57,4 +459,5 @@ class GeneratedFileDeliveryService:
             status="sent",
             file_size=file_size,
             max_size=max_size,
+            quality_summary=quality_summary,
         )

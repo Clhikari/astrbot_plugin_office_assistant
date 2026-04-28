@@ -2,13 +2,13 @@ import base64
 import contextlib
 import json
 import io
+import os
 import shutil
-import sys
 import traceback
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path, PurePosixPath
-from types import ModuleType, SimpleNamespace
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -67,6 +67,7 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_STATIC_EXCEL_READ,
     SECTION_STATIC_EXCEL_ROUTING,
     SECTION_STATIC_EXCEL_SCRIPT,
+    SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE,
     SECTION_STATIC_WORKBOOK_TOOLS,
     SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
     PromptContextService,
@@ -77,10 +78,6 @@ from astrbot_plugin_office_assistant.services.runtime_config import (
 )
 from astrbot_plugin_office_assistant.services.excel_script_service import (
     ExcelScriptService,
-)
-from astrbot_plugin_office_assistant.prompts.static.excel_tools import (
-    build_excel_routing_notice,
-    build_excel_script_notice,
 )
 from astrbot_plugin_office_assistant.utils import (
     ExtractedWordContent,
@@ -150,23 +147,6 @@ def _build_upload_infos(
         }
         for idx in range(count)
     ]
-
-
-def _build_excel_upload_infos(
-    *,
-    original_name: str = "sales.xlsx",
-    stored_name: str = "sales_1.xlsx",
-    source_path: str = "",
-    file_suffix: str = ".xlsx",
-):
-    return _build_upload_infos(
-        1,
-        original_name_template=original_name,
-        stored_name_template=stored_name,
-        source_path_template=source_path,
-        file_suffix=file_suffix,
-        type_desc="Excel 工作簿",
-    )
 
 
 def _make_workspace(name: str) -> Path:
@@ -303,6 +283,7 @@ def _managed_file_tool_service(
     workspace_office_libs=None,
     max_file_size: int = 1024 * 1024,
     feature_settings=None,
+    auto_block_execution_tools: bool = True,
     **service_kwargs,
 ):
     effective_office_libs = office_libs or {}
@@ -316,6 +297,7 @@ def _managed_file_tool_service(
         service = _build_file_tool_service(
             workspace_service=managed.workspace_service,
             office_libs=effective_office_libs,
+            auto_block_execution_tools=auto_block_execution_tools,
             **service_kwargs,
         )
         yield SimpleNamespace(
@@ -336,7 +318,6 @@ def _build_upload_session_service(
     extract_upload_source=None,
     store_uploaded_file=None,
     allow_external_input_files: bool = False,
-    auto_block_execution_tools: bool = False,
 ):
     return UploadSessionService(
         context=context or MagicMock(),
@@ -348,7 +329,6 @@ def _build_upload_session_service(
         extract_upload_source=extract_upload_source or AsyncMock(),
         store_uploaded_file=store_uploaded_file or MagicMock(),
         allow_external_input_files=allow_external_input_files,
-        auto_block_execution_tools=auto_block_execution_tools,
     )
 
 
@@ -426,10 +406,13 @@ def test_get_session_config_reraises_internal_typeerror_when_signature_unavailab
         calls.append(session_id)
         raise TypeError("backend exploded")
 
-    with patch(
-        "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
-        side_effect=ValueError("signature unavailable"),
-    ), pytest.raises(TypeError, match="backend exploded"):
+    with (
+        patch(
+            "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
+            side_effect=ValueError("signature unavailable"),
+        ),
+        pytest.raises(TypeError, match="backend exploded"),
+    ):
         get_session_config(_get_config, "session-1")
 
     assert calls == ["session-1"]
@@ -457,13 +440,29 @@ def test_resolve_computer_runtime_mode_marks_non_string_or_empty_values_invalid(
     assert resolve_computer_runtime_mode(context, event) == expected
 
 
-def test_excel_script_service_join_sandbox_path_uses_windows_path_semantics():
-    joined = ExcelScriptService._join_sandbox_path(
-        "C:\\sandbox",
-        PurePosixPath(".office_assistant/excel_scripts/run/result.json"),
-    )
+def test_excel_script_service_build_sandbox_paths_uses_relative_runtime_paths():
+    with patch(
+        "astrbot_plugin_office_assistant.services.excel_script_service.uuid4",
+        return_value=SimpleNamespace(hex="run"),
+    ):
+        paths = ExcelScriptService._build_sandbox_paths(
+            SimpleNamespace(workspace_root="/workspace"),
+            input_files=[Path("source.xlsx")],
+            output_path=Path("Q1经营复盘.xlsx"),
+        )
 
-    assert joined == "C:\\sandbox\\.office_assistant\\excel_scripts\\run\\result.json"
+    assert paths.exec_dir == ".office_assistant/excel_scripts/run"
+    assert paths.input_files == [
+        ".office_assistant/excel_scripts/run/_inputs/0/source.xlsx"
+    ]
+    assert paths.remote_input_files == paths.input_files
+    assert paths.result_path == ".office_assistant/excel_scripts/run/result.json"
+    assert paths.remote_result_path == paths.result_path
+    assert (
+        paths.output_path == ".office_assistant/excel_scripts/run/_output/output.xlsx"
+    )
+    assert paths.remote_output_path == paths.output_path
+    assert "Q1经营复盘" not in paths.remote_output_path
 
 
 def test_excel_script_service_build_prepare_script_uses_file_parent_in_sandbox():
@@ -495,11 +494,16 @@ class _FakeSandboxPython:
         globals_dict = {"__name__": "__main__"}
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
+        current_dir = Path.cwd()
         try:
-            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
-                stderr_buffer
+            os.chdir(self._workspace_root)
+            with (
+                contextlib.redirect_stdout(stdout_buffer),
+                contextlib.redirect_stderr(stderr_buffer),
             ):
-                exec(compile(code, "<fake-sandbox>", "exec"), globals_dict, globals_dict)
+                exec(
+                    compile(code, "<fake-sandbox>", "exec"), globals_dict, globals_dict
+                )
         except Exception:
             if not stderr_buffer.getvalue():
                 stderr_buffer.write(traceback.format_exc())
@@ -513,6 +517,8 @@ class _FakeSandboxPython:
                     "error": error_text,
                 },
             }
+        finally:
+            os.chdir(current_dir)
 
         output_text = "" if silent else stdout_buffer.getvalue()
         return {
@@ -563,6 +569,40 @@ class _FakeSandboxBooter:
         shutil.copy2(source, destination)
 
 
+class _FakeRelativeSandboxBooter:
+    def __init__(
+        self,
+        workspace_root: Path,
+        *,
+        capabilities: tuple[str, ...] = ("python", "filesystem"),
+    ):
+        self._workspace_root = workspace_root
+        self.capabilities = capabilities
+        self.python = _FakeSandboxPython(workspace_root)
+
+    def _resolve_remote_path(self, path: str) -> Path:
+        return self._workspace_root / Path(path.lstrip("/\\"))
+
+    async def upload_file(self, path: str, file_name: str) -> dict[str, object]:
+        source = Path(path)
+        destination = self._resolve_remote_path(file_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return {
+            "success": True,
+            "message": "uploaded",
+            "file_path": file_name.lstrip("/\\"),
+        }
+
+    async def download_file(self, remote_path: str, local_path: str) -> None:
+        source = self._resolve_remote_path(remote_path)
+        if not source.exists():
+            raise FileNotFoundError(remote_path)
+        destination = Path(local_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
 def _patch_excel_sandbox(booter):
     return patch(
         "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
@@ -601,6 +641,7 @@ def _node_render_backend_config_for_tests() -> DocumentRenderBackendConfig:
 def _build_file_tool_service(
     *,
     astrbot_context=None,
+    auto_block_execution_tools: bool = True,
     workspace_service,
     office_generator=None,
     pdf_converter=None,
@@ -610,6 +651,9 @@ def _build_file_tool_service(
     enable_docx_image_review: bool = True,
     max_inline_docx_image_bytes: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_MB * 1024 * 1024,
     max_inline_docx_image_count: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+    max_excel_preview_rows: int = 2000,
+    max_excel_preview_chars: int = 200_000,
+    max_excel_preview_sheets: int = 0,
     is_group_feature_enabled=None,
     check_permission=None,
     group_feature_disabled_error=None,
@@ -618,6 +662,7 @@ def _build_file_tool_service(
     astrbot_context = astrbot_context or _build_astrbot_context()
     return FileToolService(
         astrbot_context=astrbot_context,
+        auto_block_execution_tools=auto_block_execution_tools,
         workspace_service=workspace_service,
         office_generator=office_generator or MagicMock(),
         pdf_converter=pdf_converter or MagicMock(),
@@ -637,6 +682,9 @@ def _build_file_tool_service(
         enable_docx_image_review=enable_docx_image_review,
         max_inline_docx_image_bytes=max_inline_docx_image_bytes,
         max_inline_docx_image_count=max_inline_docx_image_count,
+        max_excel_preview_rows=max_excel_preview_rows,
+        max_excel_preview_chars=max_excel_preview_chars,
+        max_excel_preview_sheets=max_excel_preview_sheets,
         is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
         check_permission=check_permission or (lambda _event: True),
         group_feature_disabled_error=group_feature_disabled_error
@@ -951,11 +999,18 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         "file_settings": {
             "auto_delete_files": True,
             "max_file_size_mb": 8,
+        },
+        "upload_session_settings": {
+            "message_buffer_seconds": 4,
+            "upload_session_ttl_seconds": 600,
+        },
+        "read_settings": {
             "enable_docx_image_review": False,
             "max_inline_docx_image_mb": 3,
             "max_inline_docx_image_count": 4,
-            "message_buffer_seconds": 4,
-            "upload_session_ttl_seconds": 600,
+            "max_excel_preview_rows": 123,
+            "max_excel_preview_chars": 4567,
+            "max_excel_preview_sheets": 8,
         },
         "trigger_settings": {
             "reply_to_user": True,
@@ -966,9 +1021,6 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         "preview_settings": {
             "enable": False,
             "dpi": 150,
-        },
-        "path_settings": {
-            "allow_external_input_files": False,
         },
         "permission_settings": {
             "whitelist_users": ["user-1"],
@@ -990,12 +1042,16 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.enable_docx_image_review is False
         assert runtime.settings.max_inline_docx_image_bytes == 3 * 1024 * 1024
         assert runtime.settings.max_inline_docx_image_count == 4
+        assert runtime.settings.max_excel_preview_rows == 123
+        assert runtime.settings.max_excel_preview_chars == 4567
+        assert runtime.settings.max_excel_preview_sheets == 8
+        assert runtime.file_read_service._max_excel_preview_rows == 123
+        assert runtime.file_read_service._max_excel_preview_chars == 4567
+        assert runtime.file_read_service._max_excel_preview_sheets == 8
         assert runtime.settings.recent_text_ttl_seconds == 20
         assert runtime.settings.upload_session_ttl_seconds == 600
         assert runtime.settings.recent_text_cleanup_interval_seconds == 20
         assert runtime.settings.upload_session_cleanup_interval_seconds == 300
-        assert runtime.settings.ppt_render_backend == "node"
-        assert runtime.settings.excel_render_backend == "python"
         assert runtime.settings.js_renderer_entry == ""
         export_tool = next(
             tool
@@ -1045,8 +1101,6 @@ def test_build_plugin_runtime_ignores_legacy_word_render_settings():
             for tool in runtime.document_toolset.tools
             if getattr(tool, "name", "") == "export_document"
         )
-        assert runtime.settings.ppt_render_backend == "node"
-        assert runtime.settings.excel_render_backend == "python"
         assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
     finally:
@@ -1254,11 +1308,19 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         "file_settings": {
             "auto_delete_files": False,
             "max_file_size_mb": 16,
-            "max_inline_docx_image_mb": 5,
-            "max_inline_docx_image_count": 6,
+        },
+        "upload_session_settings": {
             "message_buffer_seconds": 7,
             "recent_text_ttl_seconds": 45,
             "upload_session_ttl_seconds": 900,
+        },
+        "read_settings": {
+            "allow_external_input_files": True,
+            "max_inline_docx_image_mb": 5,
+            "max_inline_docx_image_count": 6,
+            "max_excel_preview_rows": 0,
+            "max_excel_preview_chars": 0,
+            "max_excel_preview_sheets": 0,
         },
         "trigger_settings": {
             "reply_to_user": False,
@@ -1269,9 +1331,6 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         "preview_settings": {
             "enable": True,
             "dpi": 180,
-        },
-        "path_settings": {
-            "allow_external_input_files": True,
         },
         "permission_settings": {
             "whitelist_users": ["user-2"],
@@ -1307,6 +1366,9 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.max_file_size == 16 * 1024 * 1024
         assert runtime.settings.max_inline_docx_image_bytes == 5 * 1024 * 1024
         assert runtime.settings.max_inline_docx_image_count == 6
+        assert runtime.settings.max_excel_preview_rows == 0
+        assert runtime.settings.max_excel_preview_chars == 0
+        assert runtime.settings.max_excel_preview_sheets == 0
         assert runtime.settings.reply_to_user is False
         assert runtime.settings.require_at_in_group is False
         assert runtime.settings.enable_features_in_group is True
@@ -1737,6 +1799,154 @@ async def test_request_hook_service_hides_execute_excel_script_for_false_runtime
     assert "read_workbook" in tool_names
     assert "execute_excel_script" not in tool_names
     assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_local_runtime_when_execution_tools_are_blocked():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=True,
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_execute_excel_script_for_local_runtime_when_execution_tools_are_allowed():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" in tool_names
+    assert "astrbot_execute_shell" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_execute_excel_script_for_simple_uploaded_summary_filter():
+    request = _build_provider_request(
+        (
+            "我上传了 sales_records.xlsx。请生成「销售汇总筛选.xlsx」："
+            "按 Region、Department、Month 汇总 SalesAmount，输出 Summary；"
+            "找出 SalesAmount 超过 100000 的记录，输出 HighValueRecords。"
+        ),
+        tool_names=[
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "sales_records.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_records.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "create_workbook" in tool_names
+    assert "write_rows" in tool_names
+    assert "export_workbook" in tool_names
+    assert "execute_excel_script" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_execute_excel_script_for_formula_workbook_request():
+    request = _build_provider_request(
+        "请生成一个带公式和条件格式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "execute_excel_script" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_execute_excel_script_for_cleaning_request():
+    request = _build_provider_request(
+        "我上传了客户表，请清洗空行、重复表头和异常手机号，并导出新 Excel",
+        tool_names=[
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "customers.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "customers.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "execute_excel_script" in tool_names
 
 
 @pytest.mark.asyncio
@@ -2359,7 +2569,10 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_finali
 
     assert context.section_names == [SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP]
     assert "下一步只能调用 `export_document`" in context.notices[0]
-    assert "不要再调用 `add_blocks`、`finalize_document` 或 `create_document`" in context.notices[0]
+    assert (
+        "不要再调用 `add_blocks`、`finalize_document` 或 `create_document`"
+        in context.notices[0]
+    )
 
 
 @pytest.mark.asyncio
@@ -2963,7 +3176,9 @@ async def test_request_hook_service_prefers_excel_read_notice_for_update_record_
             request=ProviderRequest(
                 prompt="请读取 report.xlsx 更新记录并总结",
                 system_prompt="base",
-                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
+                func_tool=ToolSet(
+                    [_tool("read_workbook"), _tool("execute_excel_script")]
+                ),
             ),
             should_expose=True,
             can_process_upload=True,
@@ -2976,12 +3191,11 @@ async def test_request_hook_service_prefers_excel_read_notice_for_update_record_
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_READ,
     ]
-    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
     assert "read_workbook" in context.notices[1]
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_prefers_excel_script_notice_for_update_data_query():
+async def test_request_hook_service_prefers_excel_read_notice_for_update_data_query():
     service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [
@@ -3005,7 +3219,9 @@ async def test_request_hook_service_prefers_excel_script_notice_for_update_data_
             request=ProviderRequest(
                 prompt="请更新 report.xlsx 中的数据并保存",
                 system_prompt="base",
-                func_tool=ToolSet([_tool("read_workbook"), _tool("execute_excel_script")]),
+                func_tool=ToolSet(
+                    [_tool("read_workbook"), _tool("execute_excel_script")]
+                ),
             ),
             should_expose=True,
             can_process_upload=True,
@@ -3016,10 +3232,96 @@ async def test_request_hook_service_prefers_excel_script_notice_for_update_data_
 
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
-        SECTION_STATIC_EXCEL_SCRIPT,
+        SECTION_STATIC_EXCEL_READ,
     ]
-    assert SECTION_STATIC_EXCEL_READ not in context.section_names
-    assert "execute_excel_script" in context.notices[1]
+    assert "read_workbook" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_unavailable_notice_for_formula_export_without_script_tool():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "report.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "report_2.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="给这个表新增一列公式并导出新版本",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE,
+    ]
+    assert "Excel 脚本工具当前不可用" in context.notices[2]
+    assert "先调用 `read_workbook` 读取内容" in context.notices[2]
+    assert "不要承诺稍后可以导出文件" in context.notices[2]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_prefers_excel_read_notice_for_ambiguous_xls_update():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "legacy.xls",
+                "file_suffix": ".xls",
+                "stored_name": "legacy.xls",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请更新这个 xls 中的数据并保存",
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [_tool("read_workbook"), _tool("execute_excel_script")]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+    ]
+    assert "转换为 `.xlsx`" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -3091,6 +3393,9 @@ async def test_request_hook_service_injects_excel_script_notice_for_complex_exce
     assert "execute_excel_script" in context.notices[0]
     assert "execute_excel_script" in context.notices[1]
     assert "create_workbook" not in context.notices[1]
+    assert "assistant content 必须为空" in context.notices[1]
+    assert "脚本正文只能放在 tool arguments" in context.notices[1]
+    assert "Dashboard 不能只是空白图表容器" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -3135,358 +3440,9 @@ async def test_request_hook_service_injects_excel_script_notice_for_existing_xls
     assert "execute_excel_script" in context.notices[1]
 
 
-@pytest.mark.parametrize(
-    (
-        "request_text",
-        "upload_infos",
-        "tool_names",
-        "expected_route",
-        "expected_files",
-        "expected_requires_script",
-        "expected_should_inject_guide",
-    ),
-    [
-        pytest.param(
-            "请导出 report.xlsx 的内容并总结",
-            [],
-            ("read_workbook",),
-            "read_existing",
-            ("report.xlsx",),
-            False,
-            None,
-            id="existing-read-export-phrase",
-        ),
-        pytest.param(
-            "请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
-            _build_excel_upload_infos(
-                original_name="input.xlsx",
-                stored_name="input.xlsx",
-            ),
-            ("read_workbook",),
-            "read_existing",
-            ("input.xlsx",),
-            False,
-            None,
-            id="ignore-output-name-when-upload-present",
-        ),
-        pytest.param(
-            "请输出 report.xlsx 的内容并总结",
-            [],
-            ("read_workbook",),
-            "read_existing",
-            ("report.xlsx",),
-            False,
-            None,
-            id="existing-read-output-verb",
-        ),
-        pytest.param(
-            "请读取 report.docx",
-            [
-                {
-                    "original_name": "report.docx",
-                    "file_suffix": ".docx",
-                    "stored_name": "report_1.docx",
-                    "source_path": "",
-                    "is_supported": True,
-                },
-                {
-                    "original_name": "sales.xlsx",
-                    "file_suffix": ".xlsx",
-                    "stored_name": "sales_1.xlsx",
-                    "source_path": "",
-                    "is_supported": True,
-                },
-            ],
-            ("read_file", "read_workbook", "execute_excel_script"),
-            None,
-            (),
-            None,
-            None,
-            id="ignore-unreferenced-uploaded-excel",
-        ),
-        pytest.param(
-            "根据 notes.txt 给这个表新增一列",
-            _build_excel_upload_infos(),
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("sales_1.xlsx",),
-            True,
-            None,
-            id="single-upload-current-table",
-        ),
-        pytest.param(
-            "based on notes.txt add a column to this sheet",
-            _build_excel_upload_infos(),
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("sales_1.xlsx",),
-            True,
-            None,
-            id="single-upload-this-sheet",
-        ),
-        pytest.param(
-            "请读取 report.xlsx 用于导出并总结",
-            [],
-            ("read_workbook",),
-            "read_existing",
-            ("report.xlsx",),
-            False,
-            None,
-            id="existing-read-export-purpose",
-        ),
-        pytest.param(
-            "请读取 report.xlsx 更新记录并总结",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "read_existing",
-            ("report.xlsx",),
-            False,
-            True,
-            id="read-update-record-query",
-        ),
-        pytest.param(
-            "请更新 report.xlsx 中的数据并保存",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("report.xlsx",),
-            True,
-            True,
-            id="modify-existing-update-data-xlsx",
-        ),
-        pytest.param(
-            "请更新 legacy.xls 中的数据并保存",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "read_existing",
-            ("legacy.xls",),
-            False,
-            True,
-            id="modify-xls-falls-back-to-read",
-        ),
-        pytest.param(
-            "read report.xlsx and update formulas",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("report.xlsx",),
-            True,
-            True,
-            id="english-read-update-formulas",
-        ),
-        pytest.param(
-            "read report.xlsx and add a column",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("report.xlsx",),
-            True,
-            True,
-            id="english-read-add-column",
-        ),
-        pytest.param(
-            "read report.xlsx and insert formulas",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("report.xlsx",),
-            True,
-            True,
-            id="english-read-insert-formulas",
-        ),
-        pytest.param(
-            "请把数据写入 report.xlsx 并统计",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "modify_existing",
-            ("report.xlsx",),
-            True,
-            None,
-            id="write-into-existing-xlsx",
-        ),
-        pytest.param(
-            "read sales.xlsx and convert a column to USD",
-            [],
-            ("read_workbook", "execute_excel_script"),
-            "read_existing",
-            ("sales.xlsx",),
-            False,
-            None,
-            id="column-convert-stays-read",
-        ),
-        pytest.param(
-            "read the data and create an Excel saved as sales.xlsx",
-            [],
-            ("read_workbook", "create_workbook", "write_rows", "export_workbook"),
-            "new_primitive",
-            (),
-            False,
-            None,
-            id="saved-as-output-name-only",
-        ),
-    ],
-)
-def test_excel_intent_router_routes_expected_case(
-    request_text,
-    upload_infos,
-    tool_names,
-    expected_route,
-    expected_files,
-    expected_requires_script,
-    expected_should_inject_guide,
-):
-    decision = ExcelIntentRouter.decide(
-        request_text=request_text,
-        upload_infos=[dict(info) for info in upload_infos],
-        explicit_tool_name=None,
-        exposed_tool_names=set(tool_names),
-    )
-
-    if expected_route is None:
-        assert decision is None
-        return
-
-    assert decision is not None
-    assert decision.route == expected_route
-    assert decision.matched_files == expected_files
-    assert decision.requires_script is expected_requires_script
-    if expected_should_inject_guide is not None:
-        assert decision.should_inject_guide is expected_should_inject_guide
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    (
-        "prompt",
-        "tool_names",
-        "upload_infos",
-        "expected_sections",
-        "absent_sections",
-        "expected_notice_fragment",
-    ),
-    [
-        pytest.param(
-            "请读取这个 xlsx 后新增一列公式并导出新版本",
-            ("execute_excel_script",),
-            _build_excel_upload_infos(),
-            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_SCRIPT],
-            (SECTION_STATIC_EXCEL_READ,),
-            "execute_excel_script",
-            id="hook-script-edit-mixed-read-modify",
-        ),
-        pytest.param(
-            "请读取 report.xlsx 用于导出并总结",
-            ("read_workbook",),
-            [],
-            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_READ],
-            (SECTION_STATIC_WORKBOOK_TOOLS,),
-            "read_workbook",
-            id="hook-read-existing",
-        ),
-        pytest.param(
-            "read sales.xlsx and convert a column to USD",
-            ("read_workbook", "execute_excel_script"),
-            [],
-            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_READ],
-            (SECTION_STATIC_EXCEL_SCRIPT,),
-            "read_workbook",
-            id="hook-column-convert-stays-read",
-        ),
-        pytest.param(
-            "based on notes.txt add a column to this sheet",
-            ("read_workbook", "execute_excel_script"),
-            _build_excel_upload_infos(),
-            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_EXCEL_SCRIPT],
-            (SECTION_STATIC_EXCEL_READ,),
-            "execute_excel_script",
-            id="hook-script-edit-this-sheet",
-        ),
-        pytest.param(
-            "请生成一个 Excel，保存为 sales.xlsx，并汇总 Q1 销售数据",
-            ("read_workbook", "create_workbook", "write_rows", "export_workbook"),
-            [],
-            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_WORKBOOK_TOOLS],
-            (SECTION_STATIC_EXCEL_READ,),
-            "create_workbook",
-            id="hook-new-workbook-output-name",
-        ),
-        pytest.param(
-            "read the data and create an Excel saved as sales.xlsx",
-            ("read_workbook", "create_workbook", "write_rows", "export_workbook"),
-            [],
-            [SECTION_STATIC_EXCEL_ROUTING, SECTION_STATIC_WORKBOOK_TOOLS],
-            (SECTION_STATIC_EXCEL_READ,),
-            "create_workbook",
-            id="hook-new-workbook-saved-as",
-        ),
-    ],
-)
-async def test_request_hook_service_injects_expected_excel_notice(
-    prompt,
-    tool_names,
-    upload_infos,
-    expected_sections,
-    absent_sections,
-    expected_notice_fragment,
-):
-    service = _build_request_hook_service(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [dict(info) for info in upload_infos],
-        allow_external_input_files=False,
-    )
-
-    context = await service.append_document_tool_guide_notice(
-        _build_notice_context(
-            _build_provider_request(prompt, tool_names=tool_names)
-        )
-    )
-
-    assert context.section_names == expected_sections
-    for section_name in absent_sections:
-        assert section_name not in context.section_names
-    assert expected_notice_fragment in context.notices[1]
-
-
-@pytest.mark.asyncio
-async def test_request_hook_service_skips_excel_notice_for_unreferenced_uploaded_excel():
-    service = _build_request_hook_service(
-        auto_block_execution_tools=True,
-        get_cached_upload_infos=lambda _event: [
-            {
-                "original_name": "report.docx",
-                "file_suffix": ".docx",
-                "stored_name": "report_1.docx",
-                "source_path": "",
-                "is_supported": True,
-            },
-            {
-                "original_name": "sales.xlsx",
-                "file_suffix": ".xlsx",
-                "stored_name": "sales_1.xlsx",
-                "source_path": "",
-                "is_supported": True,
-            },
-        ],
-        allow_external_input_files=False,
-    )
-
-    context = await service.append_document_tool_guide_notice(
-        _build_notice_context(
-            _build_provider_request(
-                "请读取 report.docx",
-                tool_names=["read_file", "read_workbook", "execute_excel_script"],
-            )
-        )
-    )
-
-    assert SECTION_STATIC_EXCEL_ROUTING not in context.section_names
-    assert SECTION_STATIC_EXCEL_READ not in context.section_names
-    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
-
-
-@pytest.mark.asyncio
-async def test_request_hook_service_keeps_excel_script_notice_when_current_table_is_referenced():
-    service = _build_request_hook_service(
+async def test_request_hook_service_injects_excel_script_notice_for_mixed_read_modify_xlsx_requests():
+    service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [
             {
@@ -3497,15 +3453,24 @@ async def test_request_hook_service_keeps_excel_script_notice_when_current_table
                 "is_supported": True,
             }
         ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
         allow_external_input_files=False,
     )
 
     context = await service.append_document_tool_guide_notice(
-        _build_notice_context(
-            _build_provider_request(
-                "根据 notes.txt 给这个表新增一列",
-                tool_names=["read_workbook", "execute_excel_script"],
-            )
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取这个 xlsx 后新增一列公式并导出新版本",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
         )
     )
 
@@ -3513,7 +3478,368 @@ async def test_request_hook_service_keeps_excel_script_notice_when_current_table
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_SCRIPT,
     ]
+    assert SECTION_STATIC_EXCEL_READ not in context.section_names
     assert "execute_excel_script" in context.notices[1]
+
+
+def test_excel_intent_router_keeps_export_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请导出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_ignores_output_filename_when_upload_present():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 input.xlsx 并生成 result.xlsx 作为输出文件",
+        upload_infos=[
+            {
+                "original_name": "input.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "input.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.matched_files == ("input.xlsx",)
+
+
+def test_excel_intent_router_keeps_output_worded_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请输出 report.xlsx 的内容并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_keeps_export_purpose_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 用于导出并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+def test_excel_intent_router_prefers_read_for_update_record_query():
+    decision = ExcelIntentRouter.decide(
+        request_text="请读取 report.xlsx 更新记录并总结",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="请更新 report.xlsx 中的数据并保存",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_prefers_read_for_ambiguous_xls_update():
+    decision = ExcelIntentRouter.decide(
+        request_text="请更新这个 xls 中的数据并保存",
+        upload_infos=[
+            {
+                "original_name": "legacy.xls",
+                "file_suffix": ".xls",
+                "stored_name": "legacy.xls",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_allows_xls_script_when_xlsx_conversion_is_explicit():
+    decision = ExcelIntentRouter.decide(
+        request_text="请把 legacy.xls 导出为 xlsx，并新增一列备注",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and update formulas",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_add_column_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and add a column",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_treats_english_read_insert_formulas_prompt_as_modify_existing():
+    decision = ExcelIntentRouter.decide(
+        request_text="read report.xlsx and insert formulas",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={"read_workbook", "execute_excel_script"},
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.requires_script is False
+    assert decision.should_inject_guide is True
+
+
+def test_excel_intent_router_keeps_write_into_existing_filename():
+    decision = ExcelIntentRouter.decide(
+        request_text="请把数据写入 report.xlsx 并统计",
+        upload_infos=[],
+        explicit_tool_name=None,
+        exposed_tool_names={
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+        },
+    )
+
+    assert decision is not None
+    assert decision.route == "excel_context"
+    assert decision.matched_files == ("report.xlsx",)
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_excel_read_notice_for_export_purpose_phrase():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请读取 report.xlsx 用于导出并总结",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("read_workbook")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+    ]
+    assert "read_workbook" in context.notices[1]
+    assert SECTION_STATIC_WORKBOOK_TOOLS not in context.section_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_treats_explicit_output_xlsx_name_as_new_workbook_request():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请生成一个 Excel，保存为 sales.xlsx，并汇总 Q1 销售数据",
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("read_workbook"),
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_WORKBOOK_TOOLS,
+    ]
+    assert "read_workbook" in context.notices[1]
+    assert "create_workbook" in context.notices[2]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_uses_workbook_guide_for_plain_entry_template():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt=(
+                    "请生成「日常录入模板.xlsx」，需要 Personnel、Inventory、"
+                    "Schedule、Reimbursement 四个 Sheet，每个 Sheet 两行示例数据"
+                ),
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                        _tool("execute_excel_script"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_WORKBOOK_TOOLS,
+    ]
+    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
+    assert "create_workbook" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_uses_workbook_guide_for_simple_uploaded_summary_filter():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "sales_records.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_records.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt=(
+                    "我上传了 sales_records.xlsx。请生成「销售汇总筛选.xlsx」："
+                    "按 Region、Department、Month 汇总 SalesAmount，输出 Summary；"
+                    "找出 SalesAmount 超过 100000 的记录，输出 HighValueRecords。"
+                ),
+                system_prompt="base",
+                func_tool=ToolSet(
+                    [
+                        _tool("read_workbook"),
+                        _tool("create_workbook"),
+                        _tool("write_rows"),
+                        _tool("export_workbook"),
+                        _tool("execute_excel_script"),
+                    ]
+                ),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_WORKBOOK_TOOLS,
+    ]
+    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
+    assert "read_workbook" in context.notices[1]
+    assert "create_workbook" in context.notices[2]
 
 
 @pytest.mark.asyncio
@@ -3759,87 +4085,30 @@ def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
     assert "工作区文件名: report_1.docx" in prompt_text
     assert "外部绝对路径" not in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
-    assert "读取后按用户指令继续调用工具，不要只回复过渡说明" in prompt_text
+    assert "读取后如果用户已明确说明具体改动，再继续调用工具" in prompt_text
 
 
-@pytest.mark.parametrize(
-    (
-        "runtime",
-        "auto_block_execution_tools",
-        "user_instruction",
-        "expected_present",
-        "expected_absent",
-    ),
-    [
-        pytest.param(
-            None,
-            None,
-            "读取内容并汇总华东数据",
-            "先调用 `read_workbook` 读取文件",
-            "先调用 `read_file` 读取文件",
-            id="prompt-read-workbook",
-        ),
-        pytest.param(
-            "sandbox",
-            None,
-            "增加一列公式并导出新版本",
-            "先调用 `execute_excel_script` 处理文件",
-            "先调用 `read_workbook` 读取文件",
-            id="prompt-execute-script",
-        ),
-        pytest.param(
-            "sandbox",
-            None,
-            "based on notes.txt add a column to this sheet",
-            "先调用 `execute_excel_script` 处理文件",
-            "先调用 `read_workbook` 读取文件",
-            id="prompt-execute-script-this-sheet",
-        ),
-        pytest.param(
-            "none",
-            None,
-            "增加一列公式并导出新版本",
-            "先调用 `read_workbook` 读取文件",
-            "先调用 `execute_excel_script` 处理文件",
-            id="prompt-disable-script-runtime",
-        ),
-        pytest.param(
-            "local",
-            True,
-            "增加一列公式并导出新版本",
-            "先调用 `execute_excel_script` 处理文件",
-            "先调用 `read_workbook` 读取文件",
-            id="prompt-local-auto-block-still-script",
-        ),
-    ],
-)
-def test_upload_prompt_service_selects_expected_excel_tool_notice(
-    runtime,
-    auto_block_execution_tools,
-    user_instruction,
-    expected_present,
-    expected_absent,
-):
-    service_kwargs = {"allow_external_input_files": True}
-    if runtime is not None:
-        service_kwargs["astrbot_context"] = _build_astrbot_context(runtime=runtime)
-    if auto_block_execution_tools is not None:
-        service_kwargs["auto_block_execution_tools"] = auto_block_execution_tools
-    service = UploadPromptService(**service_kwargs)
+def test_upload_prompt_service_prefers_read_workbook_for_excel_uploads():
+    service = UploadPromptService(allow_external_input_files=True)
 
     prompt_text = service.build_prompt(
-        upload_infos=_build_excel_upload_infos(
-            source_path="/AstrBot/data/temp/sales.xlsx"
-        ),
-        user_instruction=user_instruction,
-        event=_build_event(),
+        upload_infos=[
+            {
+                "original_name": "sales.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "sales_1.xlsx",
+                "source_path": "/AstrBot/data/temp/sales.xlsx",
+                "is_supported": True,
+            }
+        ],
+        user_instruction="读取内容并汇总华东数据",
     )
 
-    assert expected_present in prompt_text
-    assert expected_absent not in prompt_text
+    assert "先调用 `read_workbook` 读取文件" in prompt_text
+    assert "先调用 `read_file` 读取文件" not in prompt_text
 
 
-def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
+def test_upload_prompt_service_warns_before_script_modifying_xls_uploads():
     service = UploadPromptService(allow_external_input_files=True)
 
     prompt_text = service.build_prompt(
@@ -3847,26 +4116,16 @@ def test_upload_prompt_service_keeps_read_workbook_for_xls_modifications():
             {
                 "original_name": "legacy.xls",
                 "file_suffix": ".xls",
-                "stored_name": "legacy_1.xls",
+                "stored_name": "legacy.xls",
                 "source_path": "/AstrBot/data/temp/legacy.xls",
                 "is_supported": True,
             }
         ],
-        user_instruction="更新这个表里的数据并保存",
+        user_instruction="请更新这个 xls 中的数据并保存",
     )
 
     assert "先调用 `read_workbook` 读取文件" in prompt_text
-    assert "先调用 `execute_excel_script` 处理文件" not in prompt_text
-
-
-def test_excel_tool_notices_do_not_advertise_xls_script_modification():
-    routing_notice = build_excel_routing_notice()
-    script_notice = build_excel_script_notice()
-
-    assert "修改已有 `.xlsx` -> `execute_excel_script`" in routing_notice
-    assert "修改已有 `.xlsx/.xls` -> `execute_excel_script`" not in routing_notice
-    assert "现有 `.xls` 不支持 `execute_excel_script` 修改" in script_notice
-    assert "优先使用 `sandbox` runtime" in script_notice
+    assert "除非用户明确要求导出为 `.xlsx` 并说明具体改动" in prompt_text
 
 
 def test_upload_prompt_service_builds_notice_for_readable_files_without_instruction():
@@ -3934,7 +4193,7 @@ def test_upload_prompt_service_handles_mixed_readable_and_unreadable_files():
     assert "工作区文件名: readable_1.txt" in prompt_text
     assert "工作区文件名: unreadable_1.bin" in prompt_text
     assert "外部绝对路径" not in prompt_text
-    assert "先调用 `read_file` 依次读取这些文件" in prompt_text
+    assert "先调用 `read_file` 读取文件" in prompt_text
 
 
 def test_upload_prompt_service_limits_file_details_for_many_uploads():
@@ -4584,38 +4843,6 @@ async def test_upload_session_service_requeue_uses_configured_wake_prefix():
 
 
 @pytest.mark.asyncio
-async def test_upload_session_service_requeue_applies_runtime_gated_excel_prompt():
-    context = _build_astrbot_context(runtime="none")
-    event_queue = AsyncMock()
-    context.get_event_queue.return_value = event_queue
-    context.get_config.side_effect = lambda *args, **kwargs: {
-        "wake_prefix": ["/"],
-        "provider_settings": {"computer_use_runtime": "none"},
-    }
-    service = _build_upload_session_service(context=context)
-    event = _build_event(sender_id="user-a")
-    upload_info = {
-        "file_id": "f1",
-        "original_name": "sales.xlsx",
-        "stored_name": "sales_1.xlsx",
-        "source_path": "",
-        "file_suffix": ".xlsx",
-        "type_desc": "Office文档 (Word/Excel/PPT)",
-        "is_supported": True,
-    }
-
-    await service.requeue_upload_request(
-        event,
-        upload_infos=[upload_info],
-        user_instruction="增加一列公式并导出新版本",
-    )
-
-    queued_event = event_queue.put.await_args.args[0]
-    assert "先调用 `execute_excel_script`" not in queued_event.message_str
-    assert "先调用 `read_workbook` 读取文件" in queued_event.message_str
-
-
-@pytest.mark.asyncio
 async def test_upload_session_service_requeues_buffered_upload_without_command_prefix():
     context = MagicMock()
     event_queue = AsyncMock()
@@ -4854,6 +5081,8 @@ async def test_generated_file_delivery_service_sends_existing_output_with_expect
     assert result_with_message.file_size == file_size
     assert result_without_message.max_size == 64
     assert result_with_message.max_size == 64
+    assert result_without_message.quality_summary is None
+    assert result_with_message.quality_summary is None
     assert delivery_service.send_file_with_preview.await_count == 2
     assert delivery_service.send_file_with_preview.await_args_list[0].args == (
         event,
@@ -4864,6 +5093,329 @@ async def test_generated_file_delivery_service_sends_existing_output_with_expect
         output_path,
         "✅ 已发送",
     )
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_rejects_unsafe_excel_formula():
+    workspace_dir = _make_workspace("generated-file-delivery-invalid-formula")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    openpyxl = pytest.importorskip("openpyxl")
+    output_path = workspace_dir / "formula-risk.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Summary"
+    worksheet["A1"] = 100
+    worksheet["B1"] = None
+    worksheet["C1"] = "=A1/B1"
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "invalid"
+    assert result.validation_errors is not None
+    assert "Summary!C1" in result.validation_errors[0]
+    assert "B1" in result.validation_errors[0]
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_allows_guarded_excel_formula():
+    workspace_dir = _make_workspace("generated-file-delivery-guarded-formula")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    openpyxl = pytest.importorskip("openpyxl")
+    output_path = workspace_dir / "formula-guarded.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Summary"
+    worksheet["A1"] = 100
+    worksheet["B1"] = None
+    worksheet["C1"] = '=IF(OR(B1="",B1=0),"",A1/B1)'
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_builds_excel_quality_summary():
+    workspace_dir = _make_workspace("generated-file-delivery-quality-summary")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    openpyxl = pytest.importorskip("openpyxl")
+    output_path = workspace_dir / "review.xlsx"
+    workbook = openpyxl.Workbook()
+    summary = workbook.active
+    summary.title = "Summary"
+    summary.append(["Region", "Actual Amount", "Target", "CompletionRate"])
+    summary.append(["North", 120, 100, '=IF(OR(C2="",C2=0),"",B2/C2)'])
+    summary.append(["Central", 80, 0, '=IF(OR(C3="",C3=0),"",B3/C3)'])
+    issues = workbook.create_sheet("Issues")
+    issues.append(["OrderID", "Type"])
+    issues.append(["A-001", "Missing target"])
+    issues.append(["A-002", "Orphan adjustment"])
+    issues.append(["A-003", "Missing target"])
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    assert result.quality_summary is not None
+    assert result.quality_summary["sheet_count"] == 2
+    assert result.quality_summary["formula_count"] == 2
+    assert result.quality_summary["chart_count"] == 0
+    assert result.quality_summary["conditional_formatting_count"] == 0
+    assert result.quality_summary["issues_rows"] == 3
+    assert result.quality_summary["issue_type_counts"] == {
+        "Missing target": 2,
+        "Orphan adjustment": 1,
+    }
+    assert result.quality_summary["sheets"] == [
+        {
+            "name": "Summary",
+            "rows": 3,
+            "data_rows": 2,
+            "columns": 4,
+            "charts": 0,
+            "conditional_formatting_rules": 0,
+        },
+        {
+            "name": "Issues",
+            "rows": 4,
+            "data_rows": 3,
+            "columns": 2,
+            "charts": 0,
+            "conditional_formatting_rules": 0,
+        },
+    ]
+    assert result.quality_summary["warnings"] == [
+        "Summary 有 1 行目标为空或 0",
+    ]
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_summarizes_excel_dashboard_charts_and_conditional_formatting():
+    workspace_dir = _make_workspace("generated-file-delivery-dashboard-charts")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    pytest.importorskip("openpyxl")
+    from openpyxl import Workbook
+    from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.styles import PatternFill
+
+    output_path = workspace_dir / "monthly-chart-report.xlsx"
+    workbook = Workbook()
+    metrics = workbook.active
+    metrics.title = "Metrics"
+    metrics.append(
+        ["Month", "Revenue", "Cost", "North", "South", "East", "GrossMargin"]
+    )
+    metrics.append(
+        ["Jan", 120000, 78000, 42000, 38000, 40000, "=IFERROR((B2-C2)/B2,0)"]
+    )
+    metrics.append(
+        ["Feb", 130000, 82000, 46000, 40000, 44000, "=IFERROR((B3-C3)/B3,0)"]
+    )
+    metrics.conditional_formatting.add(
+        "G2:G3",
+        CellIsRule(
+            operator="lessThan",
+            formula=["0.35"],
+            fill=PatternFill(
+                start_color="FFFF0000",
+                end_color="FFFF0000",
+                fill_type="solid",
+            ),
+        ),
+    )
+
+    dashboard = workbook.create_sheet("Dashboard", 0)
+    categories = Reference(metrics, min_col=1, min_row=2, max_row=3)
+
+    line = LineChart()
+    line.add_data(
+        Reference(metrics, min_col=2, min_row=1, max_row=3),
+        titles_from_data=True,
+    )
+    line.set_categories(categories)
+    dashboard.add_chart(line, "A2")
+
+    bar = BarChart()
+    bar.add_data(
+        Reference(metrics, min_col=4, max_col=6, min_row=1, max_row=3),
+        titles_from_data=True,
+    )
+    bar.set_categories(categories)
+    dashboard.add_chart(bar, "J2")
+
+    pie = PieChart()
+    pie.add_data(Reference(metrics, min_col=4, max_col=6, min_row=3))
+    pie.set_categories(Reference(metrics, min_col=4, max_col=6, min_row=1))
+    dashboard.add_chart(pie, "A18")
+
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    assert result.quality_summary is not None
+    assert result.quality_summary["chart_count"] == 3
+    assert result.quality_summary["conditional_formatting_count"] == 1
+    assert result.quality_summary["sheets"][0]["name"] == "Dashboard"
+    assert result.quality_summary["sheets"][0]["charts"] == 3
+    assert result.quality_summary["sheets"][0]["data_rows"] == 0
+    assert result.quality_summary["sheets"][1]["conditional_formatting_rules"] == 1
+    assert "Dashboard 只有图表，没有数据表或关键指标区" in result.quality_summary[
+        "warnings"
+    ]
+    assert "未发现 Issues Sheet" in result.quality_summary["warnings"]
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_flags_excel_quality_anomalies():
+    workspace_dir = _make_workspace("generated-file-delivery-quality-anomalies")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    openpyxl = pytest.importorskip("openpyxl")
+    output_path = workspace_dir / "review-anomalies.xlsx"
+    workbook = openpyxl.Workbook()
+    cleaned = workbook.active
+    cleaned.title = "CleanedData"
+    cleaned.append(["OrderID", "Date", "Amount"])
+    cleaned.append(["OrderID", "Date", "Amount"])
+    cleaned.append([None, None, 0])
+    cleaned.append(["ORD-001", "2026-01-01", 100])
+    cleaned_contacts = workbook.create_sheet("CleanedContacts")
+    cleaned_contacts.append(["CustomerID", "Phone_Cleaned", "Note"])
+    cleaned_contacts.append(["C001", "138-0000-0001", "line1\nline2"])
+    cleaned_contacts.append(["C002", "13800000002", "contains\ttab"])
+    summary = workbook.create_sheet("Summary")
+    summary.append(["Region", "Month", "ActualAmount", "Target", "CompletionRate"])
+    summary.append(["Central", "Jan", 100, 0, 0])
+    issues = workbook.create_sheet("Issues")
+    issues.append(["OrderID", "Reason"])
+    issues.append(["ORD-999", "Missing order"])
+    product_detail = workbook.create_sheet("ProductDetail")
+    product_detail.append(["Product", "Units", "ActualAmount", "Target"])
+    product_detail.append(["Camera", 5, 100, 80])
+    inventory_impact = workbook.create_sheet("InventoryImpact")
+    inventory_impact.append(
+        ["Product", "StartingStock", "Inbound", "ManualAdjust", "Units", "EndingStock"]
+    )
+    inventory_impact.append(["Camera", 10, 2, 0, 5, 7])
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    assert result.quality_summary is not None
+    assert result.quality_summary["warnings"] == [
+        "CleanedData 有 1 行疑似重复表头",
+        "CleanedData 有 1 行主键为空",
+        "CleanedContacts 有 2 个单元格仍包含换行或 Tab",
+        "Summary 有 1 行 CompletionRate 不是公式",
+        "Summary 有 1 行目标为空或 0",
+        "Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型",
+        "ProductDetail 缺少维度列：Region、Month",
+        "InventoryImpact 有 1 行 EndingStock 不是公式",
+    ]
+    delivery_service.send_file_with_preview.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -5250,7 +5802,9 @@ def test_workspace_service_extract_office_text_reads_legacy_doc(
     with _managed_workspace_service(name="workspace-legacy-doc") as managed:
         doc_path = managed.workspace_dir / "legacy.doc"
         doc_path.write_bytes(b"legacy")
-        extracted = managed.workspace_service.extract_office_text(doc_path, OfficeType.WORD)
+        extracted = managed.workspace_service.extract_office_text(
+            doc_path, OfficeType.WORD
+        )
 
     assert extracted == "Legacy document text"
 
@@ -5789,163 +6343,118 @@ async def test_file_tool_service_reads_workbook_with_sheet_sections():
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_read_workbook_escapes_cell_newlines_and_tabs():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="read-workbook-weird-cells",
+        office_libs={"openpyxl": object()},
+    ) as managed:
+        openpyxl = pytest.importorskip("openpyxl")
+        workbook_path = managed.workspace_dir / "weird_cells.xlsx"
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "OddCells"
+        sheet.append(["ID", "Text", "Note"])
+        sheet.append([1, "Line one\nLine two\nLine three", "contains newlines"])
+        sheet.append([2, "Column\tinside\tcell", "contains tabs"])
+        workbook.save(workbook_path)
+
+        result = await managed.service.read_workbook(event, workbook_path.name)
+
+    assert result is not None
+    assert "1\tLine one\\nLine two\\nLine three\tcontains newlines" in result
+    assert "2\tColumn\\tinside\\tcell\tcontains tabs" in result
+    assert "Line one\nLine two" not in result
+    assert "Column\tinside\tcell" not in result
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_read_workbook_truncates_large_sheet_preview():
     event = _build_event()
 
     with _managed_file_tool_service(
-        workspace_name="read-workbook-truncated-sheet",
+        workspace_name="read-workbook-row-truncation",
         office_libs={"openpyxl": object()},
+        max_excel_preview_rows=2,
+        max_excel_preview_chars=1000,
     ) as managed:
         openpyxl = pytest.importorskip("openpyxl")
         workbook_path = managed.workspace_dir / "large.xlsx"
         workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        worksheet.title = "明细"
-        worksheet.append(["序号", "内容"])
-        for index in range(220):
-            worksheet.append([index, f"第{index:03d}行"])
+        sheet = workbook.active
+        sheet.title = "总表"
+        sheet.append(["行", "值"])
+        sheet.append(["1", "A"])
+        sheet.append(["2", "B"])
+        sheet.append(["3", "C"])
         workbook.save(workbook_path)
 
         result = await managed.service.read_workbook(event, workbook_path.name)
 
     assert result is not None
-    assert "[Sheet: 明细]" in result
-    assert "第000行" in result
-    assert "第198行" in result
-    assert "第199行" not in result
-    assert "[已截断：仅展示前 200 行]" in result
+    assert "行\t值" in result
+    assert "1\tA" in result
+    assert "2\tB" not in result
+    assert "[内容已截断，最多展示前 2 行或 1000 个字符]" in result
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_read_workbook_keeps_prefix_of_long_row_after_header():
+async def test_file_tool_service_read_workbook_truncates_long_sheet_text():
     event = _build_event()
 
     with _managed_file_tool_service(
-        workspace_name="read-workbook-long-row",
+        workspace_name="read-workbook-char-truncation",
         office_libs={"openpyxl": object()},
+        max_excel_preview_rows=1000,
+        max_excel_preview_chars=8,
     ) as managed:
         openpyxl = pytest.importorskip("openpyxl")
-        workbook_path = managed.workspace_dir / "long-row.xlsx"
+        workbook_path = managed.workspace_dir / "long.xlsx"
         workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        worksheet.title = "明细"
-        worksheet.append(["列名"])
-        worksheet.append(["A" * 15_000])
+        sheet = workbook.active
+        sheet.title = "总表"
+        sheet.append(["1234567890"])
         workbook.save(workbook_path)
 
         result = await managed.service.read_workbook(event, workbook_path.name)
 
     assert result is not None
-    assert "[Sheet: 明细]" in result
-    assert "列名" in result
-    assert "AAAA" in result
-    assert "[已截断：单个 Sheet 预览已达到上限]" in result
+    assert "12345678" in result
+    assert "1234567890" not in result
+    assert "[内容已截断，最多展示前 1000 行或 8 个字符]" in result
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_read_workbook_normalizes_control_chars_inside_cells():
+async def test_file_tool_service_read_workbook_supports_unlimited_rows_and_chars_with_sheet_limit():
     event = _build_event()
 
     with _managed_file_tool_service(
-        workspace_name="read-workbook-normalize-newlines",
+        workspace_name="read-workbook-sheet-limit",
         office_libs={"openpyxl": object()},
+        max_excel_preview_rows=0,
+        max_excel_preview_chars=0,
+        max_excel_preview_sheets=1,
     ) as managed:
         openpyxl = pytest.importorskip("openpyxl")
-        workbook_path = managed.workspace_dir / "newline.xlsx"
+        workbook_path = managed.workspace_dir / "limited.xlsx"
         workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        worksheet.title = "明细"
-        worksheet.append(["名称", "说明"])
-        worksheet.append(["第一项", "第一行\n第二行\r第三行\t第四段"])
+        sheet = workbook.active
+        sheet.title = "展示"
+        sheet.append(["1234567890"])
+        sheet.append(["abcdefghij"])
+        hidden_sheet = workbook.create_sheet("未展示")
+        hidden_sheet.append(["不会出现在预览里"])
         workbook.save(workbook_path)
 
         result = await managed.service.read_workbook(event, workbook_path.name)
 
     assert result is not None
-    assert "第一项\t第一行 第二行 第三行 第四段" in result
-    assert "第一项\t第一行\n第二行" not in result
-    assert "第二行\r第三行" not in result
-    assert "第三行\t第四段" not in result
-
-
-def test_excel_sheet_preview_empty_sheet_consumes_render_budget():
-    extracted_sheet, consumed_chars, stop_after_sheet = office_utils._build_excel_sheet_preview(
-        sheet_name="空表",
-        rows=(),
-        remaining_chars=office_utils._EXCEL_PREVIEW_MAX_TOTAL_CHARS,
-    )
-
-    assert extracted_sheet.text == ""
-    assert consumed_chars >= len("[Sheet: 空表]\n[空表]")
-    assert stop_after_sheet is False
-
-
-def test_extract_excel_sheets_limits_empty_sheet_count_by_render_budget():
-    class _FakeSheet:
-        def __init__(self, title: str):
-            self.title = title
-
-        def iter_rows(self, values_only=True):
-            _ = values_only
-            return iter(())
-
-    fake_workbook = SimpleNamespace(
-        worksheets=[_FakeSheet(f"S{index}") for index in range(2000)]
-    )
-    fake_openpyxl = ModuleType("openpyxl")
-    fake_openpyxl.load_workbook = lambda *args, **kwargs: fake_workbook
-
-    with patch.dict(sys.modules, {"openpyxl": fake_openpyxl}):
-        extracted_sheets = office_utils.extract_excel_sheets(Path("empty.xlsx"))
-
-    assert extracted_sheets is not None
-    assert 0 < len(extracted_sheets) < 2000
-    rendered_size = sum(
-        office_utils._rendered_sheet_preview_cost(
-            sheet_name=sheet.name,
-            text=sheet.text,
-        )
-        for sheet in extracted_sheets
-    )
-    assert rendered_size <= office_utils._EXCEL_PREVIEW_MAX_TOTAL_CHARS
-
-
-@pytest.mark.asyncio
-async def test_file_tool_service_read_workbook_truncates_when_total_preview_limit_reached():
-    event = _build_event()
-
-    with _managed_file_tool_service(
-        workspace_name="read-workbook-total-limit",
-        office_libs={"openpyxl": object()},
-    ) as managed:
-        openpyxl = pytest.importorskip("openpyxl")
-        workbook_path = managed.workspace_dir / "huge.xlsx"
-        workbook = openpyxl.Workbook()
-        first_sheet = workbook.active
-        first_sheet.title = "Sheet1"
-        first_sheet.append(["内容"])
-        first_sheet.append(["A" * 11_000])
-
-        second_sheet = workbook.create_sheet("Sheet2")
-        second_sheet.append(["内容"])
-        second_sheet.append(["B" * 11_000])
-
-        third_sheet = workbook.create_sheet("Sheet3")
-        third_sheet.append(["内容"])
-        third_sheet.append(["C" * 5_000])
-
-        fourth_sheet = workbook.create_sheet("Sheet4")
-        fourth_sheet.append(["内容"])
-        fourth_sheet.append(["D" * 5_000])
-        workbook.save(workbook_path)
-
-        result = await managed.service.read_workbook(event, workbook_path.name)
-
-    assert result is not None
-    assert "[Sheet 列表] Sheet1, Sheet2, Sheet3" in result
-    assert "[Sheet: Sheet3]" in result
-    assert "[Sheet: Sheet4]" not in result
-    assert "工作簿总预览已达到上限" in result
+    assert "1234567890" in result
+    assert "abcdefghij" in result
+    assert "[Sheet: 展示]" in result
+    assert "[Sheet: 未展示]" not in result
+    assert "[其余 1 个 Sheet 未展示，最多展示前 1 个 Sheet]" in result
 
 
 @pytest.mark.asyncio
@@ -6031,6 +6540,166 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
     assert payload["success"] is True
     assert payload["mode"] == "file"
     assert payload["output_name"] == "script-output.xlsx"
+    assert payload["quality_summary"]["file_type"] == "excel"
+    assert payload["quality_summary"]["sheet_count"] == 1
+    assert payload["quality_summary"]["formula_count"] == 0
+    assert payload["quality_summary"]["warnings"] == ["未发现 Issues Sheet"]
+    assert "requires_review" not in payload
+    assert "quality_warnings" not in payload
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_promotes_quality_warnings():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-quality-warning",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = 'Summary'\n"
+                    "worksheet.append(['Region', 'ActualAmount', 'Target'])\n"
+                    "worksheet.append(['Central', 100, 0])\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="quality-warning.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["requires_review"] is True
+    assert payload["quality_warnings"] == ["Summary 有 1 行目标为空或 0"]
+    assert "逐条列出" in payload["message"]
+    assert "不要遗漏" in payload["message"]
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_promotes_dashboard_chart_warning():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-dashboard-chart-warning",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "from openpyxl.chart import LineChart, Reference\n"
+                    "workbook = Workbook()\n"
+                    "metrics = workbook.active\n"
+                    "metrics.title = 'Metrics'\n"
+                    "metrics.append(['Month', 'Revenue'])\n"
+                    "metrics.append(['Jan', 120000])\n"
+                    "dashboard = workbook.create_sheet('Dashboard', 0)\n"
+                    "chart = LineChart()\n"
+                    "chart.add_data("
+                    "Reference(metrics, min_col=2, min_row=1, max_row=2), "
+                    "titles_from_data=True)\n"
+                    "dashboard.add_chart(chart, 'A2')\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="dashboard-chart-warning.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["quality_summary"]["chart_count"] == 1
+    assert payload["requires_review"] is True
+    assert payload["quality_warnings"] == [
+        "Dashboard 只有图表，没有数据表或关键指标区"
+    ]
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_generated_formula_risks():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-formula-risk",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = 'Summary'\n"
+                    "worksheet['A1'] = 100\n"
+                    "worksheet['B1'] = None\n"
+                    "worksheet['C1'] = '=A1/B1'\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="formula-risk.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "明显公式风险" in payload["error"]
+    assert "Summary!C1" in payload["error"]
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_supports_bare_sandbox_filenames():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-bare-sandbox-filenames",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        source_path = managed.workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "原始"
+        workbook.save(source_path)
+
+        sandbox_dir = managed.workspace_dir / "fake-neo-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeRelativeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = load_workbook('source.xlsx')\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet['B1'] = '新增'\n"
+                    "workbook.save('source-updated.xlsx')\n"
+                ),
+                input_files=[source_path.name],
+                output_name="source-updated.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["output_name"] == "source-updated.xlsx"
     delivery_service.send_file_with_preview.assert_awaited_once()
 
 
@@ -6091,6 +6760,7 @@ async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
         workspace_name="execute-excel-script-local-runtime",
         office_libs={"openpyxl": object()},
         astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
     ) as managed:
         service = managed.service
         with patch(
@@ -6110,133 +6780,35 @@ async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_returns_structured_error_for_system_exit():
+async def test_file_tool_service_execute_excel_script_rejects_local_runtime_when_execution_tools_are_blocked():
     event = _build_event()
 
     with _managed_file_tool_service(
-        workspace_name="execute-excel-script-system-exit",
+        workspace_name="execute-excel-script-local-runtime-blocked",
         office_libs={"openpyxl": object()},
         astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=True,
     ) as managed:
-        result = await managed.service.execute_excel_script(
-            event,
-            script="import sys\nsys.exit('bye')",
-        )
+        service = managed.service
+        runner = AsyncMock()
+        service._excel_script_service._run_script_process = runner
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
 
     payload = json.loads(result)
     assert payload["success"] is False
-    assert payload["error"] == "bye"
-    assert "SystemExit: bye" in payload["traceback"]
-    assert payload["error"] != "Excel 脚本未返回结果"
-
-
-@pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_rejects_xls_inputs():
-    event = _build_event()
-
-    with _managed_file_tool_service(
-        workspace_name="execute-excel-script-xls-input",
-        office_libs={"openpyxl": object()},
-        astrbot_context=_build_astrbot_context(runtime="local"),
-    ) as managed:
-        source_path = managed.workspace_dir / "legacy.xls"
-        source_path.write_text("legacy", encoding="utf-8")
-
-        result = await managed.service.execute_excel_script(
-            event,
-            script="result_text = 'ok'",
-            input_files=[source_path.name],
-        )
-
-    payload = json.loads(result)
-    assert payload["success"] is False
-    assert "错误：不支持的文件格式 '.xls'" in payload["error"]
-    assert ".xlsx" in payload["error"]
-
-
-@pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_preserves_existing_output_on_local_failure():
-    event = _build_event()
-
-    with _managed_file_tool_service(
-        workspace_name="execute-excel-script-local-output-staging",
-        office_libs={"openpyxl": object()},
-        astrbot_context=_build_astrbot_context(runtime="local"),
-    ) as managed:
-        openpyxl = pytest.importorskip("openpyxl")
-        output_path = managed.workspace_dir / "report.xlsx"
-        workbook = openpyxl.Workbook()
-        workbook.active["A1"] = "原始"
-        workbook.save(output_path)
-
-        result = await managed.service.execute_excel_script(
-            event,
-            script=(
-                "workbook = Workbook()\n"
-                "worksheet = workbook.active\n"
-                "worksheet['A1'] = '新值'\n"
-                "workbook.save(output_path)\n"
-                "raise RuntimeError('boom')\n"
-            ),
-            output_name=output_path.name,
-        )
-        reloaded = openpyxl.load_workbook(output_path)
-
-    payload = json.loads(result)
-    assert payload["success"] is False
-    assert payload["error"] == "boom"
-    assert reloaded.active["A1"].value == "原始"
-
-
-@pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_falls_back_to_shutil_move_after_replace_error():
-    event = _build_event()
-    delivery_service = MagicMock()
-    delivery_service.send_file_with_preview = AsyncMock()
-
-    with _managed_file_tool_service(
-        workspace_name="execute-excel-script-local-output-move-fallback",
-        office_libs={"openpyxl": object()},
-        astrbot_context=_build_astrbot_context(runtime="local"),
-        delivery_service=delivery_service,
-    ) as managed:
-        output_path = managed.workspace_dir / "report.xlsx"
-        move_calls: list[tuple[str, str]] = []
-        original_replace = Path.replace
-
-        def fake_replace(self: Path, target: Path):
-            if self.name == "report.xlsx" and self.parent.name == "_output":
-                raise OSError("invalid cross-device link")
-            return original_replace(self, target)
-
-        def fake_move(src: str, dst: str):
-            move_calls.append((src, dst))
-            shutil.copy2(src, dst)
-            Path(src).unlink()
-            return dst
-
-        with patch.object(Path, "replace", new=fake_replace):
-            with patch(
-                "astrbot_plugin_office_assistant.services.excel_script_service.shutil.move",
-                side_effect=fake_move,
-            ):
-                result = await managed.service.execute_excel_script(
-                    event,
-                    script=(
-                        "workbook = Workbook()\n"
-                        "worksheet = workbook.active\n"
-                        "worksheet['A1'] = '导出'\n"
-                        "workbook.save(output_path)\n"
-                        ),
-                        output_name="report.xlsx",
-                    )
-                output_exists = output_path.exists()
-
-    payload = json.loads(result)
-    assert payload["success"] is True
-    assert payload["mode"] == "file"
-    assert output_exists is True
-    assert move_calls
+    assert "仅允许在 sandbox runtime 下执行" in payload["error"]
+    assert payload["retry_count"] == 0
+    assert payload["retry_exhausted"] is True
+    runner.assert_not_awaited()
+    mocked_get_booter.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -6425,7 +6997,9 @@ async def test_file_tool_service_execute_excel_script_accepts_legacy_sandbox_run
 
         with patch(
             "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
-            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+            new=AsyncMock(
+                return_value=MagicMock(capabilities=("python", "filesystem"))
+            ),
         ) as mocked_get_booter:
             result = await service.execute_excel_script(
                 event,
@@ -6466,7 +7040,9 @@ async def test_file_tool_service_execute_excel_script_accepts_positional_session
 
         with patch(
             "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
-            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
+            new=AsyncMock(
+                return_value=MagicMock(capabilities=("python", "filesystem"))
+            ),
         ) as mocked_get_booter:
             result = await service.execute_excel_script(
                 event,
@@ -6504,13 +7080,18 @@ async def test_file_tool_service_execute_excel_script_accepts_noarg_session_conf
             )
         )
 
-        with patch(
-            "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
-            side_effect=ValueError("signature unavailable"),
-        ), patch(
-            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
-            new=AsyncMock(return_value=MagicMock(capabilities=("python", "filesystem"))),
-        ) as mocked_get_booter:
+        with (
+            patch(
+                "astrbot_plugin_office_assistant.services.runtime_config.inspect.signature",
+                side_effect=ValueError("signature unavailable"),
+            ),
+            patch(
+                "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+                new=AsyncMock(
+                    return_value=MagicMock(capabilities=("python", "filesystem"))
+                ),
+            ) as mocked_get_booter,
+        ):
             result = await service.execute_excel_script(
                 event,
                 script="result_text = 'ok'",
@@ -7225,7 +7806,9 @@ async def test_file_tool_service_execute_excel_script_marks_retry_exhausted_afte
                 script="raise ValueError('boom')",
             )
         )
-        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._run_script_process = AsyncMock(
+            side_effect=runner
+        )
         service._excel_script_service._acquire_sandbox_booter = AsyncMock(
             return_value=(MagicMock(capabilities=("python", "filesystem")), None)
         )
@@ -7248,6 +7831,12 @@ async def test_file_tool_service_execute_excel_script_marks_retry_exhausted_afte
                 script="raise ValueError('boom')",
             )
         )
+        fourth = json.loads(
+            await service.execute_excel_script(
+                event,
+                script="raise ValueError('boom')",
+            )
+        )
     finally:
         executor.shutdown(wait=False)
         shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -7260,9 +7849,12 @@ async def test_file_tool_service_execute_excel_script_marks_retry_exhausted_afte
     assert second["retry_exhausted"] is False
     assert third["success"] is False
     assert third["retry_count"] == 2
-    assert third["retry_exhausted"] is True
-    assert "已超过最多 2 次脚本重试" in third["error"]
-    assert runner.call_count == 3
+    assert third["retry_exhausted"] is False
+    assert fourth["success"] is False
+    assert fourth["retry_count"] == 3
+    assert fourth["retry_exhausted"] is True
+    assert "已超过最多 3 次脚本重试" in fourth["error"]
+    assert runner.call_count == 4
 
 
 @pytest.mark.asyncio
@@ -7292,12 +7884,14 @@ async def test_file_tool_service_execute_excel_script_stops_running_after_retry_
                 script="raise ValueError('boom')",
             )
         )
-        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._run_script_process = AsyncMock(
+            side_effect=runner
+        )
         service._excel_script_service._acquire_sandbox_booter = AsyncMock(
             return_value=(MagicMock(capabilities=("python", "filesystem")), None)
         )
 
-        for _ in range(3):
+        for _ in range(4):
             await service.execute_excel_script(
                 event,
                 script="raise ValueError('boom')",
@@ -7313,10 +7907,10 @@ async def test_file_tool_service_execute_excel_script_stops_running_after_retry_
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
     assert fourth["success"] is False
-    assert fourth["retry_count"] == 2
+    assert fourth["retry_count"] == 3
     assert fourth["retry_exhausted"] is True
     assert "脚本重试次数已用尽" in fourth["error"]
-    assert runner.call_count == 3
+    assert runner.call_count == 4
 
 
 @pytest.mark.asyncio
@@ -7361,7 +7955,9 @@ async def test_file_tool_service_execute_excel_script_resets_retry_count_after_s
                 ),
             ]
         )
-        service._excel_script_service._run_script_process = AsyncMock(side_effect=runner)
+        service._excel_script_service._run_script_process = AsyncMock(
+            side_effect=runner
+        )
         service._excel_script_service._acquire_sandbox_booter = AsyncMock(
             return_value=(MagicMock(capabilities=("python", "filesystem")), None)
         )
@@ -7464,7 +8060,7 @@ async def test_file_tool_service_create_office_file_exports_word_via_node_backen
                                 "title_space_after": 4,
                                 "list_space_after": 8,
                             }
-                        }
+                        },
                     },
                     "blocks": [
                         {"type": "heading", "text": "一、经营总览", "level": 1},
@@ -7488,12 +8084,15 @@ async def test_file_tool_service_create_office_file_exports_word_via_node_backen
             )
             assert result is None
             delivery_service.send_file_with_preview.assert_awaited_once()
-            delivered_path = Path(delivery_service.send_file_with_preview.await_args.args[1])
+            delivered_path = Path(
+                delivery_service.send_file_with_preview.await_args.args[1]
+            )
             loaded_doc = docx.Document(delivered_path)
             table = loaded_doc.tables[0]
 
             assert any(
-                paragraph.text == "Node Legacy Entry" for paragraph in loaded_doc.paragraphs
+                paragraph.text == "Node Legacy Entry"
+                for paragraph in loaded_doc.paragraphs
             )
             assert any(
                 paragraph.text == "一、经营总览" for paragraph in loaded_doc.paragraphs
@@ -7504,9 +8103,15 @@ async def test_file_tool_service_create_office_file_exports_word_via_node_backen
             summary_item = _find_paragraph(loaded_doc, "• Stable revenue")
             assert summary_title.alignment == WD_ALIGN_PARAGRAPH.CENTER
             assert summary_title.runs[0].bold is True
-            assert summary_title.paragraph_format.space_before.pt == pytest.approx(12, abs=0.5)
-            assert summary_title.paragraph_format.space_after.pt == pytest.approx(4, abs=0.5)
-            assert summary_item.paragraph_format.space_after.pt == pytest.approx(8, abs=0.5)
+            assert summary_title.paragraph_format.space_before.pt == pytest.approx(
+                12, abs=0.5
+            )
+            assert summary_title.paragraph_format.space_after.pt == pytest.approx(
+                4, abs=0.5
+            )
+            assert summary_item.paragraph_format.space_after.pt == pytest.approx(
+                8, abs=0.5
+            )
             assert table.rows[0].cells[0].text == "日期"
             assert len(table.rows) >= 3
     finally:

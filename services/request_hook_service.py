@@ -109,6 +109,7 @@ class RequestHookService:
     _EXCEL_ROUTING_NOTICE_KEY = "excel_routing_guide"
     _EXCEL_READ_NOTICE_KEY = "excel_read_guide"
     _EXCEL_SCRIPT_NOTICE_KEY = "excel_script_guide"
+    _EXCEL_SCRIPT_UNAVAILABLE_NOTICE_KEY = "excel_script_unavailable_guide"
     _WORKBOOK_CORE_NOTICE_KEY = "workbook_core_guide"
     _WORKBOOK_DETAIL_NOTICE_KEY = "workbook_detail_guide"
 
@@ -151,6 +152,7 @@ class RequestHookService:
         self._tool_exposure_hooks = [
             self.apply_execution_tool_block,
             self.apply_excel_script_runtime_restriction,
+            self.apply_excel_script_scope_restriction,
             self.apply_explicit_file_tool_restriction,
         ]
 
@@ -306,7 +308,10 @@ class RequestHookService:
             explicit_tool_name=context.explicit_tool_name,
             exposed_tool_names=exposed_tool_names,
         )
-        if excel_route is None or not excel_route.should_inject_guide:
+        if excel_route is None:
+            return
+
+        if not excel_route.should_inject_guide:
             return
 
         if self._consume_session_notice_once(
@@ -317,7 +322,33 @@ class RequestHookService:
                 self.prompt_context_service.build_excel_routing_section(),
             )
 
-        if excel_route.route == "read_existing":
+        read_tool_available = (
+            "read_workbook" in exposed_tool_names
+            and context.explicit_tool_name in (None, "read_workbook")
+        )
+        script_tool_available = (
+            "execute_excel_script" in exposed_tool_names
+            and context.explicit_tool_name in (None, "execute_excel_script")
+        )
+        should_include_script_guide = script_tool_available and (
+            context.explicit_tool_name == "execute_excel_script"
+            or ExcelIntentRouter.mentions_script_feature(request_text)
+        )
+        workbook_tools_available = (
+            self._has_full_workbook_toolset_available(
+                exposed_tool_names=exposed_tool_names
+            )
+            and (
+                context.explicit_tool_name is None
+                or context.explicit_tool_name in self._WORKBOOK_TOOL_NAMES
+            )
+            and (
+                context.explicit_tool_name in self._WORKBOOK_TOOL_NAMES
+                or ExcelIntentRouter.mentions_workbook_action(request_text)
+            )
+        )
+
+        if read_tool_available:
             if self._consume_session_notice_once(
                 context.event, self._EXCEL_READ_NOTICE_KEY
             ):
@@ -325,9 +356,8 @@ class RequestHookService:
                     context,
                     self.prompt_context_service.build_excel_read_section(),
                 )
-            return
 
-        if excel_route.requires_script:
+        if should_include_script_guide:
             if self._consume_session_notice_once(
                 context.event, self._EXCEL_SCRIPT_NOTICE_KEY
             ):
@@ -335,15 +365,28 @@ class RequestHookService:
                     context,
                     self.prompt_context_service.build_excel_script_section(),
                 )
-            return
+        elif ExcelIntentRouter.mentions_script_feature(request_text):
+            if self._consume_session_notice_once(
+                context.event, self._EXCEL_SCRIPT_UNAVAILABLE_NOTICE_KEY
+            ):
+                self._append_notice_section(
+                    context,
+                    self.prompt_context_service.build_excel_script_unavailable_section(),
+                )
 
-        if self._consume_session_notice_once(context.event, self._WORKBOOK_CORE_NOTICE_KEY):
+        if workbook_tools_available and self._consume_session_notice_once(
+            context.event, self._WORKBOOK_CORE_NOTICE_KEY
+        ):
             self._append_notice_section(
                 context,
                 self.prompt_context_service.build_workbook_tool_guide_section(),
             )
-        if excel_route.should_inject_detail and self._consume_session_notice_once(
-            context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
+        if (
+            workbook_tools_available
+            and excel_route.should_inject_detail
+            and self._consume_session_notice_once(
+                context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
+            )
         ):
             self._append_notice_section(
                 context,
@@ -686,7 +729,16 @@ class RequestHookService:
                 f"[文件管理] 读取 Excel runtime 配置失败，跳过 execute_excel_script 显隐控制: {exc}"
             )
             return context
-        if runtime_mode in {"local", "sandbox"}:
+        if self._auto_block_execution_tools:
+            if runtime_mode == "sandbox":
+                return context
+            context.request.func_tool.remove_tool("execute_excel_script")
+            if runtime_mode == "local":
+                logger.info(
+                    "[文件管理] 已启用执行类工具自动屏蔽，当前 computer runtime 为 local，已隐藏 execute_excel_script"
+                )
+                return context
+        elif runtime_mode in {"local", "sandbox"}:
             return context
         context.request.func_tool.remove_tool("execute_excel_script")
         if runtime_mode == "none":
@@ -696,6 +748,40 @@ class RequestHookService:
             logger.warning(
                 f"[文件管理] 当前 computer runtime 配置不受支持：{runtime_mode}，已隐藏 execute_excel_script"
             )
+        return context
+
+    async def apply_excel_script_scope_restriction(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        if not (context.should_expose and context.request.func_tool):
+            return context
+        exposed_tool_names = self._get_exposed_tool_names(context.request.func_tool)
+        if "execute_excel_script" not in exposed_tool_names:
+            return context
+        if context.explicit_tool_name == "execute_excel_script":
+            return context
+        if not self._has_full_workbook_toolset_available(
+            exposed_tool_names=exposed_tool_names
+        ):
+            return context
+
+        request_text = self._extract_prompt_text(str(context.request.prompt or ""))
+        excel_route = ExcelIntentRouter.decide(
+            request_text=request_text,
+            upload_infos=self._get_cached_upload_infos(context.event),
+            explicit_tool_name=context.explicit_tool_name,
+            exposed_tool_names=exposed_tool_names,
+        )
+        if excel_route is None:
+            return context
+        if ExcelIntentRouter.mentions_script_feature(request_text):
+            return context
+
+        context.request.func_tool.remove_tool("execute_excel_script")
+        logger.info(
+            "[文件管理] 当前 Excel 请求可由原语工具处理，已隐藏 execute_excel_script"
+        )
         return context
 
     async def apply_explicit_file_tool_restriction(

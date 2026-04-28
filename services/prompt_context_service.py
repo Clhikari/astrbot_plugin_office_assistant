@@ -15,6 +15,7 @@ from ..prompts.static import (
     build_excel_read_notice,
     build_excel_routing_notice,
     build_excel_script_notice,
+    build_excel_script_unavailable_notice,
     build_tools_denied_notice,
     build_workbook_follow_up_missing_notice,
     build_workbook_follow_up_notice,
@@ -29,6 +30,7 @@ SECTION_STATIC_DOCUMENT_TOOLS_DETAIL = "static_document_tools_detail"
 SECTION_STATIC_EXCEL_ROUTING = "static_excel_routing"
 SECTION_STATIC_EXCEL_READ = "static_excel_read"
 SECTION_STATIC_EXCEL_SCRIPT = "static_excel_script"
+SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE = "static_excel_script_unavailable"
 SECTION_STATIC_WORKBOOK_TOOLS = "static_workbook_tools"
 SECTION_STATIC_WORKBOOK_TOOLS_DETAIL = "static_workbook_tools_detail"
 SECTION_SCENE_UPLOADED_CONTEXT = "scene_uploaded_context"
@@ -179,6 +181,13 @@ class PromptContextService:
             target="prompt_suffix",
         )
 
+    def build_excel_script_unavailable_section(self) -> PromptSection:
+        return PromptSection(
+            name=SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE,
+            content=build_excel_script_unavailable_notice(),
+            target="prompt_suffix",
+        )
+
     def build_workbook_tool_guide_section(self) -> PromptSection:
         return PromptSection(
             name=SECTION_STATIC_WORKBOOK_TOOLS,
@@ -271,10 +280,8 @@ class PromptContextService:
         *,
         upload_infos: list[UploadInfo],
         user_instruction: str,
-        exposed_tool_names: set[str] | None = None,
     ) -> str:
         return build_buffered_upload_prompt(
             upload_infos=upload_infos,
             user_instruction=user_instruction,
-            exposed_tool_names=exposed_tool_names,
         )

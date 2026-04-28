@@ -293,7 +293,37 @@ async def test_before_llm_chat_hides_execute_excel_script_when_runtime_is_none()
         assert "existing_tool" in tool_names
         assert "astrbot_execute_shell" not in tool_names
         assert "execute_excel_script" not in tool_names
-        assert "execute_excel_script" not in req.prompt
+        assert "Excel 脚本工具当前不可用" in req.prompt
+        assert "无法完成新增公式或导出新版本" in req.prompt
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_hides_execute_excel_script_when_runtime_is_local_and_execution_tools_are_blocked():
+    context = MagicMock()
+    context.get_config.side_effect = lambda *args, **kwargs: {
+        "provider_settings": {"computer_use_runtime": "local"}
+    }
+    async with _managed_plugin(context=context) as managed:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        req = _build_provider_request(
+            "请生成一个带公式和条件格式的 Excel 报表",
+            tool_names=[
+                "existing_tool",
+                "execute_excel_script",
+                "astrbot_execute_shell",
+            ],
+        )
+
+        await managed.plugin.before_llm_chat(event, req)
+
+        tool_names = set(req.func_tool.names())
+        assert "existing_tool" in tool_names
+        assert "astrbot_execute_shell" not in tool_names
+        assert "execute_excel_script" not in tool_names
+        assert "Excel 脚本工具当前不可用" in req.prompt
+        assert "无法完成新增公式或导出新版本" in req.prompt
 
 
 @pytest.mark.asyncio
@@ -1215,7 +1245,7 @@ async def test_buffered_upload_with_prompt_uses_structured_notice_and_follow_thr
     assert "外部绝对路径:" not in prompt_text
     assert "先调用 `read_file` 读取文件" in prompt_text
     assert "不要猜文件名，不要列目录，不要调用 shell" in prompt_text
-    assert "读取后按用户指令继续调用工具，不要只回复过渡说明" in prompt_text
+    assert "读取后如果用户已明确说明具体改动，再继续调用工具" in prompt_text
     assert not queued_event.message_str.startswith("/")
     assert queued_event.message_str.endswith(prompt_text.strip())
     event_queue.put.assert_awaited_once()

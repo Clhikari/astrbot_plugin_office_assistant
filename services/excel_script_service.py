@@ -8,7 +8,7 @@ import sys
 import tempfile
 import textwrap
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from astrbot.api import logger
@@ -53,17 +53,16 @@ class SandboxScriptPaths:
 
 class ExcelScriptService:
     _EXCEL_SUFFIXES = EXCEL_SUFFIXES
-    _SCRIPT_EDIT_SUFFIXES = frozenset({".xlsx"})
-    _MAX_SCRIPT_RETRIES = 2
+    _MAX_SCRIPT_RETRIES = 3
     _RETRY_COUNT_EVENT_KEY = "office_assistant_excel_script_retry_failures"
     _SCRIPT_TIMEOUT_SECONDS = 30
-    _SANDBOX_WORKSPACE_ROOT = "/workspace"
     _SANDBOX_EXEC_ROOT = PurePosixPath(".office_assistant") / "excel_scripts"
 
     def __init__(
         self,
         *,
         astrbot_context=None,
+        auto_block_execution_tools: bool = False,
         workspace_service,
         file_delivery_service,
         allow_external_input_files: bool,
@@ -72,6 +71,7 @@ class ExcelScriptService:
         group_feature_disabled_error,
     ) -> None:
         self._astrbot_context = astrbot_context
+        self._auto_block_execution_tools = auto_block_execution_tools
         self._workspace_service = workspace_service
         self._file_delivery_service = file_delivery_service
         self._allow_external_input_files = allow_external_input_files
@@ -238,7 +238,7 @@ class ExcelScriptService:
                 event,
                 filename,
                 require_exists=True,
-                allowed_suffixes=self._SCRIPT_EDIT_SUFFIXES,
+                allowed_suffixes=self._EXCEL_SUFFIXES,
                 allow_external_path=self._allow_external_input_files,
                 is_group_feature_enabled=self._is_group_feature_enabled,
                 check_permission_fn=self._check_permission,
@@ -264,7 +264,7 @@ class ExcelScriptService:
                 event,
                 output_name,
                 require_exists=False,
-                allowed_suffixes=self._SCRIPT_EDIT_SUFFIXES,
+                allowed_suffixes=self._EXCEL_SUFFIXES,
                 allow_external_path=False,
                 is_group_feature_enabled=self._is_group_feature_enabled,
                 check_permission_fn=self._check_permission,
@@ -313,6 +313,16 @@ class ExcelScriptService:
                 error=(
                     "错误：当前 computer runtime 为 none，无法执行 Excel 脚本，"
                     "请启用 local 或 sandbox，或改走原语路径"
+                ),
+                retry_exhausted=True,
+            )
+        if self._auto_block_execution_tools and runtime_mode != "sandbox":
+            return self._build_non_retry_result(
+                event,
+                script=normalized_script,
+                error=(
+                    "错误：当前已启用执行类工具自动屏蔽，"
+                    "execute_excel_script 仅允许在 sandbox runtime 下执行"
                 ),
                 retry_exhausted=True,
             )
@@ -366,7 +376,10 @@ class ExcelScriptService:
                 ensure_ascii=False,
             )
 
-        delivery_error = await self._file_delivery_service.deliver_generated_file(
+        (
+            delivery_error,
+            delivery_result,
+        ) = await self._file_delivery_service.deliver_generated_file_with_result(
             event,
             process_result.output_path,
             missing_message="错误：Excel 脚本执行成功，但未找到生成的文件",
@@ -382,14 +395,29 @@ class ExcelScriptService:
             )
 
         self._reset_failure_count(event)
+        success_payload = {
+            "success": True,
+            "mode": "file",
+            "output_name": process_result.output_path.name
+            if process_result.output_path is not None
+            else "",
+        }
+        if delivery_result.quality_summary is not None:
+            success_payload["quality_summary"] = delivery_result.quality_summary
+            quality_warnings = [
+                warning
+                for warning in delivery_result.quality_summary.get("warnings", [])
+                if warning not in {"未发现 Issues Sheet", "Issues Sheet 没有数据行"}
+            ]
+            if quality_warnings:
+                success_payload["requires_review"] = True
+                success_payload["quality_warnings"] = quality_warnings
+                success_payload["message"] = (
+                    "文件已生成并发送，但质量摘要存在警告；回复用户时必须逐条列出 "
+                    "quality_warnings 中的每一条，不要遗漏，也不要表述为完全完成。"
+                )
         return json.dumps(
-            {
-                "success": True,
-                "mode": "file",
-                "output_name": process_result.output_path.name
-                if process_result.output_path is not None
-                else "",
-            },
+            success_payload,
             ensure_ascii=False,
         )
 
@@ -446,23 +474,13 @@ class ExcelScriptService:
         return booter, None
 
     @classmethod
-    def _join_sandbox_path(cls, workspace_root: str, relative_path: PurePosixPath) -> str:
-        if (len(workspace_root) >= 2 and workspace_root[1] == ":") or "\\" in workspace_root:
-            return str(PureWindowsPath(workspace_root) / relative_path.as_posix())
-        return str(PurePosixPath(workspace_root or cls._SANDBOX_WORKSPACE_ROOT) / relative_path)
-
-    @classmethod
     def _build_sandbox_paths(
         cls,
-        booter,
+        _booter,
         *,
         input_files: list[Path],
         output_path: Path | None,
     ) -> SandboxScriptPaths:
-        workspace_root = str(
-            getattr(booter, "workspace_root", cls._SANDBOX_WORKSPACE_ROOT)
-            or cls._SANDBOX_WORKSPACE_ROOT
-        )
         exec_relative_dir = cls._SANDBOX_EXEC_ROOT / uuid4().hex
         runtime_input_files: list[str] = []
         remote_input_files: list[str] = []
@@ -470,26 +488,22 @@ class ExcelScriptService:
             relative_input_path = (
                 exec_relative_dir / "_inputs" / str(index) / original_path.name
             )
-            runtime_input_files.append(
-                cls._join_sandbox_path(workspace_root, relative_input_path)
-            )
-            remote_input_files.append(relative_input_path.as_posix())
+            input_path = relative_input_path.as_posix()
+            runtime_input_files.append(input_path)
+            remote_input_files.append(input_path)
 
         relative_result_path = exec_relative_dir / "result.json"
-        runtime_result_path = cls._join_sandbox_path(workspace_root, relative_result_path)
+        runtime_result_path = relative_result_path.as_posix()
 
         runtime_output_path: str | None = None
         remote_output_path: str | None = None
         if output_path is not None:
-            relative_output_path = exec_relative_dir / "_output" / output_path.name
-            runtime_output_path = cls._join_sandbox_path(
-                workspace_root,
-                relative_output_path,
-            )
-            remote_output_path = relative_output_path.as_posix()
+            relative_output_path = exec_relative_dir / "_output" / "output.xlsx"
+            runtime_output_path = relative_output_path.as_posix()
+            remote_output_path = runtime_output_path
 
         return SandboxScriptPaths(
-            exec_dir=cls._join_sandbox_path(workspace_root, exec_relative_dir),
+            exec_dir=exec_relative_dir.as_posix(),
             result_path=runtime_result_path,
             remote_result_path=relative_result_path.as_posix(),
             input_files=runtime_input_files,
@@ -682,6 +696,7 @@ class ExcelScriptService:
                     exec_result = await booter.python.exec(
                         self._build_runner_script(
                             script=script,
+                            exec_dir=sandbox_paths.exec_dir,
                             input_files=sandbox_paths.input_files,
                             output_path=sandbox_paths.output_path,
                             result_path=sandbox_paths.result_path,
@@ -845,7 +860,6 @@ class ExcelScriptService:
             dir=str(workspace_root),
         ) as temp_dir:
             temp_root = Path(temp_dir)
-            staged_output_path: Path | None = None
             copied_input_files: list[Path] = []
             inputs_root = temp_root / "_inputs"
             inputs_root.mkdir()
@@ -856,21 +870,15 @@ class ExcelScriptService:
                 shutil.copy2(original_path, copied_path)
                 copied_input_files.append(copied_path)
 
-            if output_path is not None:
-                output_root = temp_root / "_output"
-                output_root.mkdir()
-                staged_output_path = output_root / output_path.name
-
             runner_path = temp_root / "runner.py"
             result_path = temp_root / "result.json"
             runner_path.write_text(
                 self._build_runner_script(
                     script=script,
+                    exec_dir=str(temp_root.resolve()),
                     input_files=[str(path.resolve()) for path in copied_input_files],
                     output_path=(
-                        str(staged_output_path.resolve())
-                        if staged_output_path is not None
-                        else None
+                        str(output_path.resolve()) if output_path is not None else None
                     ),
                     result_path=str(result_path.resolve()),
                 ),
@@ -963,15 +971,7 @@ class ExcelScriptService:
                         traceback="",
                         script=script,
                     )
-                if staged_output_path is None:
-                    return ScriptProcessResult(
-                        success=False,
-                        mode="error",
-                        error="脚本返回了 file 模式，但当前请求未提供 output_path",
-                        traceback="",
-                        script=script,
-                    )
-                expected_output_path = str(staged_output_path.resolve())
+                expected_output_path = str(output_path.resolve())
                 if output_path_value != expected_output_path:
                     return ScriptProcessResult(
                         success=False,
@@ -980,7 +980,7 @@ class ExcelScriptService:
                         traceback=f"Unexpected output_path: {output_path_value}",
                         script=script,
                     )
-                if not staged_output_path.exists():
+                if not output_path.exists():
                     return ScriptProcessResult(
                         success=False,
                         mode="error",
@@ -988,19 +988,6 @@ class ExcelScriptService:
                         traceback="",
                         script=script,
                     )
-                try:
-                    staged_output_path.replace(output_path)
-                except OSError:
-                    try:
-                        shutil.move(str(staged_output_path), str(output_path))
-                    except (OSError, shutil.Error) as move_exc:
-                        return ScriptProcessResult(
-                            success=False,
-                            mode="error",
-                            error="Excel 脚本结果写入失败",
-                            traceback=str(move_exc),
-                            script=script,
-                        )
                 return ScriptProcessResult(
                     success=True,
                     mode="file",
@@ -1018,10 +1005,12 @@ class ExcelScriptService:
     def _build_runner_script(
         *,
         script: str,
+        exec_dir: str,
         input_files: list[str],
         output_path: str | None,
         result_path: str,
     ) -> str:
+        serialized_exec_dir = json.dumps(exec_dir, ensure_ascii=False)
         serialized_input_files = json.dumps(input_files, ensure_ascii=False)
         serialized_output_path = json.dumps(output_path, ensure_ascii=False)
         serialized_result_path = json.dumps(result_path, ensure_ascii=False)
@@ -1029,24 +1018,49 @@ class ExcelScriptService:
         return textwrap.dedent(
             f"""
             import json
+            import os
+            import shutil
             import traceback
+            from collections import Counter
             from pathlib import Path
 
+            workspace_root = Path.cwd()
+            exec_dir = Path(json.loads({serialized_exec_dir!r}))
+            if not exec_dir.is_absolute():
+                exec_dir = workspace_root / exec_dir
+            exec_dir = exec_dir.resolve()
             input_files = [Path(path) for path in json.loads({serialized_input_files!r})]
+            input_files = [
+                path if path.is_absolute() else (workspace_root / path).resolve()
+                for path in input_files
+            ]
             output_path_value = json.loads({serialized_output_path!r})
+            reported_output_path = output_path_value
             output_path = Path(output_path_value) if output_path_value else None
+            if output_path is not None and not output_path.is_absolute():
+                output_path = (workspace_root / output_path).resolve()
             result_path = Path(json.loads({serialized_result_path!r}))
+            if not result_path.is_absolute():
+                result_path = (workspace_root / result_path).resolve()
             script = json.loads({serialized_script!r})
             initial_exists = output_path.exists() if output_path is not None else False
-            initial_stat = output_path.stat() if initial_exists else None
-            initial_size = initial_stat.st_size if initial_stat is not None else None
-            initial_mtime_ns = (
-                initial_stat.st_mtime_ns if initial_stat is not None else None
-            )
+            initial_size = output_path.stat().st_size if initial_exists else None
+            initial_mtime_ns = output_path.stat().st_mtime_ns if initial_exists else None
 
             try:
                 import openpyxl
                 from openpyxl import Workbook, load_workbook
+
+                name_counts = Counter(path.name for path in input_files)
+                script_input_files = []
+                for source_path in input_files:
+                    if name_counts[source_path.name] == 1:
+                        alias_path = exec_dir / source_path.name
+                        if alias_path.resolve() != source_path.resolve():
+                            shutil.copy2(source_path, alias_path)
+                        script_input_files.append(Path(source_path.name))
+                    else:
+                        script_input_files.append(source_path)
 
                 namespace = {{
                     "__name__": "__main__",
@@ -1054,12 +1068,43 @@ class ExcelScriptService:
                     "Workbook": Workbook,
                     "load_workbook": load_workbook,
                     "Path": Path,
-                    "input_files": input_files,
+                    "input_files": script_input_files,
                     "output_path": output_path,
                     "result_text": None,
                 }}
 
-                exec(script, namespace, namespace)
+                original_cwd = Path.cwd()
+                try:
+                    os.chdir(exec_dir)
+                    exec(script, namespace, namespace)
+                finally:
+                    os.chdir(original_cwd)
+
+                if output_path is not None and not output_path.exists():
+                    output_alias_path = exec_dir / output_path.name
+                    if output_alias_path.exists():
+                        shutil.copy2(output_alias_path, output_path)
+                if output_path is not None and not output_path.exists():
+                    output_dir = output_path.parent
+                    known_input_names = {{path.name for path in input_files}}
+                    candidates = []
+                    for search_dir in (exec_dir, output_dir):
+                        if not search_dir.exists():
+                            continue
+                        for candidate in search_dir.iterdir():
+                            if not candidate.is_file():
+                                continue
+                            if candidate.resolve() == result_path.resolve():
+                                continue
+                            if candidate.resolve() == output_path.resolve():
+                                continue
+                            if candidate.name in known_input_names:
+                                continue
+                            if candidate.suffix.lower() in {{".xlsx", ".xlsm", ".xls"}}:
+                                candidates.append(candidate)
+                    if len(candidates) == 1:
+                        shutil.copy2(candidates[0], output_path)
+
                 result_text = namespace.get("result_text")
                 has_text = result_text is not None
                 has_file = False
@@ -1067,10 +1112,9 @@ class ExcelScriptService:
                     if not initial_exists:
                         has_file = True
                     else:
-                        current_stat = output_path.stat()
                         has_file = (
-                            current_stat.st_size != initial_size
-                            or current_stat.st_mtime_ns != initial_mtime_ns
+                            output_path.stat().st_size != initial_size
+                            or output_path.stat().st_mtime_ns != initial_mtime_ns
                         )
                 if has_text and has_file:
                     payload = {{
@@ -1094,12 +1138,12 @@ class ExcelScriptService:
                     payload = {{
                         "success": True,
                         "mode": "file",
-                        "output_path": str(output_path),
+                        "output_path": reported_output_path,
                     }}
-            except BaseException as exc:
+            except Exception as exc:
                 payload = {{
                     "success": False,
-                    "error": str(exc) or type(exc).__name__,
+                    "error": str(exc),
                     "traceback": traceback.format_exc(),
                 }}
 

@@ -12,6 +12,9 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..constants import (
+    DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+    DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+    DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
     EXCEL_SUFFIXES,
     PDF_SUFFIX,
     SUFFIX_TO_OFFICE_TYPE,
@@ -45,6 +48,9 @@ class FileReadService:
         is_group_feature_enabled: Callable[[AstrMessageEvent], bool],
         check_permission: Callable[[AstrMessageEvent], bool],
         group_feature_disabled_error: Callable[[], str],
+        max_excel_preview_rows: int = DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+        max_excel_preview_chars: int = DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+        max_excel_preview_sheets: int = DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
     ) -> None:
         self._workspace_service = workspace_service
         self._word_read_service = word_read_service
@@ -52,6 +58,9 @@ class FileReadService:
         self._is_group_feature_enabled = is_group_feature_enabled
         self._check_permission = check_permission
         self._group_feature_disabled_error = group_feature_disabled_error
+        self._max_excel_preview_rows = max(0, int(max_excel_preview_rows))
+        self._max_excel_preview_chars = max(0, int(max_excel_preview_chars))
+        self._max_excel_preview_sheets = max(0, int(max_excel_preview_sheets))
 
     async def _prepare_read_target(
         self,
@@ -202,6 +211,9 @@ class FileReadService:
             extracted_sheets = await asyncio.to_thread(
                 extract_excel_sheets,
                 target.resolved_path,
+                max_rows=self._max_excel_preview_rows,
+                max_chars=self._max_excel_preview_chars,
+                max_sheets=self._max_excel_preview_sheets,
             )
             if not extracted_sheets:
                 yield (

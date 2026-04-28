@@ -5,6 +5,9 @@ import mcp
 from astrbot.api.event import AstrMessageEvent
 
 from ..constants import (
+    DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+    DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+    DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
 )
@@ -43,6 +46,7 @@ class FileToolService:
         self,
         *,
         astrbot_context=None,
+        auto_block_execution_tools: bool = False,
         workspace_service=None,
         office_generator=None,
         pdf_converter=None,
@@ -56,6 +60,9 @@ class FileToolService:
         * 1024
         * 1024,
         max_inline_docx_image_count: int = DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+        max_excel_preview_rows: int = DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+        max_excel_preview_chars: int = DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+        max_excel_preview_sheets: int = DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
         is_group_feature_enabled=None,
         check_permission=None,
         group_feature_disabled_error=None,
@@ -118,11 +125,15 @@ class FileToolService:
             is_group_feature_enabled=is_group_feature_enabled,
             check_permission=check_permission,
             group_feature_disabled_error=group_feature_disabled_error,
+            max_excel_preview_rows=max_excel_preview_rows,
+            max_excel_preview_chars=max_excel_preview_chars,
+            max_excel_preview_sheets=max_excel_preview_sheets,
         )
         self._excel_script_service = excel_script_service
         if self._excel_script_service is None and workspace_service is not None:
             self._excel_script_service = ExcelScriptService(
                 astrbot_context=astrbot_context,
+                auto_block_execution_tools=auto_block_execution_tools,
                 workspace_service=workspace_service,
                 file_delivery_service=generated_output_delivery_service,
                 allow_external_input_files=allow_external_input_files,
