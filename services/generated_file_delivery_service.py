@@ -129,10 +129,21 @@ class GeneratedFileDeliveryService:
     def _formula_guards_divisor(cls, formula: str, cell_reference: str) -> bool:
         reference = cls._normalize_cell_reference(cell_reference)
         normalized = formula.upper().replace("$", "").replace(" ", "")
+        non_zero_checks = (
+            f"{reference}<>0",
+            f"0<>{reference}",
+            f"{reference}!=0",
+            f"0!={reference}",
+            f"{reference}>0",
+            f"0<{reference}",
+            f"{reference}<0",
+            f"0>{reference}",
+        )
         return (
             f"{reference}=0" in normalized
             or f'{reference}=""' in normalized
             or f"ISBLANK({reference})" in normalized
+            or any(check in normalized for check in non_zero_checks)
             or f"IFERROR(" in normalized
         )
 

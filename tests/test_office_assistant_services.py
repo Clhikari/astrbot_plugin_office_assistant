@@ -399,6 +399,19 @@ def test_get_session_config_accepts_positional_with_var_keyword():
     assert calls == [("session-1", {})]
 
 
+def test_get_session_config_accepts_keyword_only_session_id():
+    calls: list[str] = []
+
+    def _get_config(*, session_id):
+        calls.append(session_id)
+        return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    result = get_session_config(_get_config, "session-1")
+
+    assert result == {"provider_settings": {"computer_use_runtime": "sandbox"}}
+    assert calls == ["session-1"]
+
+
 def test_get_session_config_reraises_internal_typeerror_when_signature_unavailable():
     calls: list[str] = []
 
@@ -6750,6 +6763,40 @@ async def test_file_tool_service_execute_excel_script_rejects_generated_formula_
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_guarded_divisor_formula():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-guarded-formula",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = 'Summary'\n"
+                    "worksheet['A1'] = 100\n"
+                    "worksheet['B1'] = 0\n"
+                    "worksheet['C1'] = '=IF(B1>0,A1/B1,0)'\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="guarded-formula.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_exposes_relative_input_paths():
     event = _build_event()
     openpyxl = pytest.importorskip("openpyxl")
@@ -7112,6 +7159,49 @@ async def test_file_tool_service_execute_excel_script_accepts_positional_session
         workspace_name="execute-excel-script-positional-config",
         office_libs={"openpyxl": object()},
         astrbot_context=_PositionalSessionContext(),
+    ) as managed:
+        service = managed.service
+        service._excel_script_service._run_script_process = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                mode="text",
+                result_text="ok",
+                output_path=None,
+            )
+        )
+
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(
+                return_value=MagicMock(capabilities=("python", "filesystem"))
+            ),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_keyword_only_session_config():
+    class _KeywordOnlySessionContext:
+        @staticmethod
+        def get_config(*, session_id):
+            assert session_id == "session-1"
+            return {"provider_settings": {"computer_use_runtime": "sandbox"}}
+
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-keyword-only-config",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_KeywordOnlySessionContext(),
     ) as managed:
         service = managed.service
         service._excel_script_service._run_script_process = AsyncMock(

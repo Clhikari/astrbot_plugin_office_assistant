@@ -3,6 +3,11 @@ import inspect
 from astrbot.api.event import AstrMessageEvent
 
 SUPPORTED_COMPUTER_RUNTIME_MODES = frozenset({"local", "sandbox", "none"})
+_SESSION_CONFIG_KEYWORD_NAMES = (
+    "umo",
+    "session_id",
+    "unified_msg_origin",
+)
 
 
 def _is_call_shape_type_error(exc: TypeError) -> bool:
@@ -40,8 +45,12 @@ def get_session_config(get_config, session_id: str):
 
     if any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
-    ) or "umo" in signature.parameters:
+    ):
         return get_config(umo=session_id)
+
+    for parameter_name in _SESSION_CONFIG_KEYWORD_NAMES:
+        if parameter_name in signature.parameters:
+            return get_config(**{parameter_name: session_id})
 
     return get_config()
 
