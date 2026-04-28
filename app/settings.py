@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 
 from ..constants import (
+    DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+    DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+    DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
     DEFAULT_MAX_FILE_SIZE_MB,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
@@ -14,6 +17,9 @@ class PluginSettings:
     enable_docx_image_review: bool
     max_inline_docx_image_bytes: int
     max_inline_docx_image_count: int
+    max_excel_preview_rows: int
+    max_excel_preview_chars: int
+    max_excel_preview_sheets: int
     buffer_wait: int
     reply_to_user: bool
     require_at_in_group: bool
@@ -28,8 +34,6 @@ class PluginSettings:
     recent_text_max_entries: int
     recent_text_cleanup_interval_seconds: int
     upload_session_cleanup_interval_seconds: int
-    ppt_render_backend: str
-    excel_render_backend: str
     js_renderer_entry: str
     default_word_font_name: str
     default_word_heading_font_name: str
@@ -39,6 +43,8 @@ class PluginSettings:
 
 def load_plugin_settings(config) -> PluginSettings:
     file_settings = config.get("file_settings", {})
+    upload_session_settings = config.get("upload_session_settings", {})
+    read_settings = config.get("read_settings", {})
     trigger_settings = config.get("trigger_settings", {})
     preview_settings = config.get("preview_settings", {})
     path_settings = config.get("path_settings", {})
@@ -49,17 +55,68 @@ def load_plugin_settings(config) -> PluginSettings:
     max_file_size = (
         file_settings.get("max_file_size_mb", DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024
     )
-    enable_docx_image_review = file_settings.get("enable_docx_image_review", True)
+    enable_docx_image_review = read_settings.get(
+        "enable_docx_image_review",
+        file_settings.get("enable_docx_image_review", True),
+    )
     max_inline_docx_image_bytes = (
-        file_settings.get("max_inline_docx_image_mb", DEFAULT_MAX_INLINE_DOCX_IMAGE_MB)
+        read_settings.get(
+            "max_inline_docx_image_mb",
+            file_settings.get(
+                "max_inline_docx_image_mb",
+                DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
+            ),
+        )
         * 1024
         * 1024
     )
-    max_inline_docx_image_count = file_settings.get(
+    max_inline_docx_image_count = read_settings.get(
         "max_inline_docx_image_count",
-        DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+        file_settings.get(
+            "max_inline_docx_image_count",
+            DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
+        ),
     )
-    buffer_wait = file_settings.get("message_buffer_seconds", 4)
+    max_excel_preview_rows = max(
+        0,
+        int(
+            read_settings.get(
+                "max_excel_preview_rows",
+                file_settings.get(
+                    "max_excel_preview_rows",
+                    DEFAULT_MAX_EXCEL_PREVIEW_ROWS,
+                ),
+            )
+        ),
+    )
+    max_excel_preview_chars = max(
+        0,
+        int(
+            read_settings.get(
+                "max_excel_preview_chars",
+                file_settings.get(
+                    "max_excel_preview_chars",
+                    DEFAULT_MAX_EXCEL_PREVIEW_CHARS,
+                ),
+            )
+        ),
+    )
+    max_excel_preview_sheets = max(
+        0,
+        int(
+            read_settings.get(
+                "max_excel_preview_sheets",
+                file_settings.get(
+                    "max_excel_preview_sheets",
+                    DEFAULT_MAX_EXCEL_PREVIEW_SHEETS,
+                ),
+            )
+        ),
+    )
+    buffer_wait = upload_session_settings.get(
+        "message_buffer_seconds",
+        file_settings.get("message_buffer_seconds", 4),
+    )
     reply_to_user = trigger_settings.get("reply_to_user", True)
     require_at_in_group = trigger_settings.get("require_at_in_group", True)
     enable_features_in_group = trigger_settings.get("enable_features_in_group", False)
@@ -68,15 +125,28 @@ def load_plugin_settings(config) -> PluginSettings:
     )
     enable_preview = preview_settings.get("enable", True)
     preview_dpi = preview_settings.get("dpi", 150)
-    allow_external_input_files = path_settings.get("allow_external_input_files", False)
+    allow_external_input_files = read_settings.get(
+        "allow_external_input_files",
+        path_settings.get("allow_external_input_files", False),
+    )
     feature_settings = config.get("feature_settings", {})
     recent_text_ttl_seconds = max(
         20,
-        int(file_settings.get("recent_text_ttl_seconds", int(buffer_wait) + 10)),
+        int(
+            upload_session_settings.get(
+                "recent_text_ttl_seconds",
+                file_settings.get("recent_text_ttl_seconds", int(buffer_wait) + 10),
+            )
+        ),
     )
     upload_session_ttl_seconds = max(
         60,
-        int(file_settings.get("upload_session_ttl_seconds", 600)),
+        int(
+            upload_session_settings.get(
+                "upload_session_ttl_seconds",
+                file_settings.get("upload_session_ttl_seconds", 600),
+            )
+        ),
     )
     recent_text_max_entries = 512
     recent_text_cleanup_interval_seconds = max(5, min(60, recent_text_ttl_seconds))
@@ -84,12 +154,6 @@ def load_plugin_settings(config) -> PluginSettings:
         10,
         min(300, upload_session_ttl_seconds),
     )
-    ppt_render_backend = str(render_settings.get("ppt_render_backend", "node"))
-    if ppt_render_backend not in {"node", "python"}:
-        ppt_render_backend = "node"
-    excel_render_backend = str(render_settings.get("excel_render_backend", "python"))
-    if excel_render_backend not in {"python", "node"}:
-        excel_render_backend = "python"
     js_renderer_entry = str(
         render_settings.get(
             "js_renderer_entry",
@@ -115,6 +179,9 @@ def load_plugin_settings(config) -> PluginSettings:
         enable_docx_image_review=enable_docx_image_review,
         max_inline_docx_image_bytes=max_inline_docx_image_bytes,
         max_inline_docx_image_count=max_inline_docx_image_count,
+        max_excel_preview_rows=max_excel_preview_rows,
+        max_excel_preview_chars=max_excel_preview_chars,
+        max_excel_preview_sheets=max_excel_preview_sheets,
         buffer_wait=buffer_wait,
         reply_to_user=reply_to_user,
         require_at_in_group=require_at_in_group,
@@ -129,8 +196,6 @@ def load_plugin_settings(config) -> PluginSettings:
         recent_text_max_entries=recent_text_max_entries,
         recent_text_cleanup_interval_seconds=recent_text_cleanup_interval_seconds,
         upload_session_cleanup_interval_seconds=upload_session_cleanup_interval_seconds,
-        ppt_render_backend=ppt_render_backend,
-        excel_render_backend=excel_render_backend,
         js_renderer_entry=js_renderer_entry,
         default_word_font_name=default_word_font_name,
         default_word_heading_font_name=default_word_heading_font_name,

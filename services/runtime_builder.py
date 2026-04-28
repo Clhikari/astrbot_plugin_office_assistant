@@ -132,6 +132,7 @@ def build_plugin_runtime(
         after_export=handle_exported_document_tool,
     )
     request_pipeline_services = _build_request_pipeline_services(
+        astrbot_context=context,
         settings=settings,
         upload_session_service=upload_session_service,
         access_policy_service=access_policy_service,
@@ -141,6 +142,7 @@ def build_plugin_runtime(
         store_uploaded_file=store_uploaded_file,
     )
     file_processing_services = _build_file_processing_services(
+        astrbot_context=context,
         settings=settings,
         workspace_service=workspace_service,
         delivery_service=delivery_service,
@@ -214,8 +216,8 @@ def _build_document_render_backend_config(
     return DocumentRenderBackendConfig(
         preferred_backend="node",
         fallback_enabled=False,
-        ppt_preferred_backend=settings.ppt_render_backend,
-        excel_preferred_backend=settings.excel_render_backend,
+        ppt_preferred_backend="python",
+        excel_preferred_backend="python",
         node_renderer_entry=settings.js_renderer_entry,
     )
 
@@ -235,6 +237,7 @@ def _build_default_document_style(settings: PluginSettings) -> dict[str, object]
 
 def _build_request_pipeline_services(
     *,
+    astrbot_context,
     settings: PluginSettings,
     upload_session_service: UploadSessionService,
     access_policy_service: AccessPolicyService,
@@ -248,6 +251,7 @@ def _build_request_pipeline_services(
     )
 
     request_hook_service = RequestHookService(
+        astrbot_context=astrbot_context,
         auto_block_execution_tools=settings.auto_block_execution_tools,
         get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
         extract_upload_source=extract_upload_source,
@@ -315,6 +319,7 @@ def _build_workbook_summary_lookup(workbook_toolset):
 
 def _build_file_processing_services(
     *,
+    astrbot_context,
     settings: PluginSettings,
     workspace_service: WorkspaceService,
     delivery_service: DeliveryService,
@@ -343,6 +348,9 @@ def _build_file_processing_services(
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
+        max_excel_preview_rows=settings.max_excel_preview_rows,
+        max_excel_preview_chars=settings.max_excel_preview_chars,
+        max_excel_preview_sheets=settings.max_excel_preview_sheets,
     )
     office_generate_service = OfficeGenerateService(
         workspace_service=workspace_service,
@@ -363,6 +371,8 @@ def _build_file_processing_services(
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,
     )
     file_tool_service = FileToolService(
+        astrbot_context=astrbot_context,
+        auto_block_execution_tools=settings.auto_block_execution_tools,
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,
@@ -374,6 +384,9 @@ def _build_file_processing_services(
         enable_docx_image_review=settings.enable_docx_image_review,
         max_inline_docx_image_bytes=settings.max_inline_docx_image_bytes,
         max_inline_docx_image_count=settings.max_inline_docx_image_count,
+        max_excel_preview_rows=settings.max_excel_preview_rows,
+        max_excel_preview_chars=settings.max_excel_preview_chars,
+        max_excel_preview_sheets=settings.max_excel_preview_sheets,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
         group_feature_disabled_error=access_policy_service.group_feature_disabled_error,

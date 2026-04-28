@@ -1,3 +1,4 @@
+from ...constants import EXCEL_SUFFIXES
 from ...services.upload_types import UploadInfo
 
 MAX_DETAILED_UPLOAD_INFOS = 3
@@ -15,10 +16,11 @@ def build_uploaded_file_context_notice(*, upload_infos: list[UploadInfo]) -> str
         return ""
 
     file_info_list, omitted_infos = _build_limited_file_info_list(upload_infos)
+    preferred_read_tool = _preferred_read_tool(upload_infos)
     file_requirement = (
-        "先调用 `read_file` 读取此文件。"
+        f"先调用 `{preferred_read_tool}` 读取此文件。"
         if len(upload_infos) == 1
-        else "先调用 `read_file` 依次读取这些文件。"
+        else f"先调用 `{preferred_read_tool}` 依次读取这些文件。"
     )
     return (
         "\n[System Notice] [ACTION REQUIRED] 已收到上传文件\n"
@@ -41,6 +43,7 @@ def build_buffered_upload_prompt(
 ) -> str:
     file_info_list, omitted_infos = _build_limited_file_info_list(upload_infos)
     has_readable_file = any(info["is_supported"] for info in upload_infos)
+    preferred_read_tool = _preferred_read_tool(upload_infos)
     file_info_block = (
         f"\n[System Notice] 用户上传了 {len(upload_infos)} 个文件\n\n"
         "[文件信息]\n"
@@ -56,9 +59,10 @@ def build_buffered_upload_prompt(
             + "\n\n"
             + "[处理要求]\n"
             + "1. 优先围绕这些上传文件完成用户请求。\n"
-            + "2. 先调用 `read_file` 读取文件。\n"
+            + f"2. 先调用 `{preferred_read_tool}` 读取文件。\n"
             + "3. 不要猜文件名，不要列目录，不要调用 shell。\n"
-            + "4. 读取后按用户指令继续调用工具，不要只回复过渡说明。"
+            + "4. 读取后如果用户已明确说明具体改动，再继续调用工具；如果只说更新、处理、保存，用中文询问要改哪些数据。\n"
+            + "5. 对 `.xls` 文件，除非用户明确要求导出为 `.xlsx` 并说明具体改动，否则不要调用脚本修改。"
         )
 
     if has_readable_file:
@@ -67,7 +71,7 @@ def build_buffered_upload_prompt(
             + "\n\n"
             + "[处理要求]\n"
             + "1. 用户上传了可读取文件，后续应优先围绕这些文件处理。\n"
-            + "2. 如需读取文件，先调用 `read_file`。\n"
+            + f"2. 如需读取文件，先调用 `{preferred_read_tool}`。\n"
             + "3. 不要猜文件名，不要列目录，不要调用 shell。\n"
             + "4. 用户意图尚不明确时，再用中文询问用户想要如何处理。"
         )
@@ -108,3 +112,13 @@ def _build_omitted_upload_info_line(omitted_infos: list[UploadInfo]) -> str:
 
 def _display_upload_name(info: UploadInfo) -> str:
     return info.get("stored_name") or info.get("original_name") or ""
+
+
+def _preferred_read_tool(upload_infos: list[UploadInfo]) -> str:
+    readable_infos = [info for info in upload_infos if info.get("is_supported")]
+    if readable_infos and all(
+        str(info.get("file_suffix", "")).lower() in EXCEL_SUFFIXES
+        for info in readable_infos
+    ):
+        return "read_workbook"
+    return "read_file"
