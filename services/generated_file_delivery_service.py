@@ -9,7 +9,7 @@ from astrbot.api.event import AstrMessageEvent
 
 @dataclass(slots=True)
 class GeneratedFileDeliveryResult:
-    status: Literal["sent", "missing", "oversized", "invalid"]
+    status: Literal["sent", "missing", "oversized", "invalid", "review_required"]
     file_size: int = 0
     max_size: int = 0
     validation_errors: list[str] | None = None
@@ -19,8 +19,12 @@ class GeneratedFileDeliveryResult:
 class GeneratedFileDeliveryService:
     _EXCEL_FORMULA_SUFFIXES = {".xlsx", ".xlsm"}
     _FORMULA_DIVISOR_RE = re.compile(r"/\s*(\$?[A-Z]{1,3}\$?\d+)")
+    _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
+    _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
     _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
+    _PIE_CHART_CLASS_NAMES = {"DoughnutChart", "PieChart", "ProjectedPieChart"}
+    _NON_BLOCKING_QUALITY_WARNINGS = {"未发现 Issues Sheet", "Issues Sheet 没有数据行"}
 
     def __init__(self, *, workspace_service, delivery_service) -> None:
         self._workspace_service = workspace_service
@@ -95,8 +99,7 @@ class GeneratedFileDeliveryService:
     def _sheet_expects_clean_text(cls, sheet_name: str) -> bool:
         normalized_name = cls._normalize_header(sheet_name)
         return any(
-            marker in normalized_name
-            for marker in cls._CLEAN_TEXT_SHEET_MARKERS
+            marker in normalized_name for marker in cls._CLEAN_TEXT_SHEET_MARKERS
         )
 
     @staticmethod
@@ -114,8 +117,7 @@ class GeneratedFileDeliveryService:
 
         try:
             return sum(
-                len(getattr(item, "rules", ()) or ())
-                for item in conditional_formatting
+                len(getattr(item, "rules", ()) or ()) for item in conditional_formatting
             )
         except TypeError:
             pass
@@ -144,8 +146,16 @@ class GeneratedFileDeliveryService:
             or f'{reference}=""' in normalized
             or f"ISBLANK({reference})" in normalized
             or any(check in normalized for check in non_zero_checks)
-            or f"IFERROR(" in normalized
+            or "IFERROR(" in normalized
         )
+
+    @classmethod
+    def _find_single_quoted_formula_literal(cls, formula: str) -> str | None:
+        formula_without_text = cls._DOUBLE_QUOTED_TEXT_RE.sub('""', formula)
+        match = cls._SINGLE_QUOTED_LITERAL_RE.search(formula_without_text)
+        if match is None:
+            return None
+        return match.group(0)
 
     @classmethod
     def _validate_excel_formula_risks(cls, output_path: Path) -> list[str]:
@@ -170,6 +180,19 @@ class GeneratedFileDeliveryService:
                         formula = cell.value
                         if not isinstance(formula, str) or not formula.startswith("="):
                             continue
+                        single_quoted_literal = cls._find_single_quoted_formula_literal(
+                            formula
+                        )
+                        if single_quoted_literal is not None:
+                            errors.append(
+                                (
+                                    f"{worksheet.title}!{cell.coordinate} 公式 "
+                                    f"{formula} 使用了单引号文本 "
+                                    f"{single_quoted_literal}，Excel 公式文本必须用双引号"
+                                )
+                            )
+                            if len(errors) >= cls._MAX_VALIDATION_ERRORS:
+                                return errors
                         for match in cls._FORMULA_DIVISOR_RE.finditer(formula):
                             divisor_ref = cls._normalize_cell_reference(match.group(1))
                             if cls._formula_guards_divisor(formula, divisor_ref):
@@ -214,6 +237,84 @@ class GeneratedFileDeliveryService:
                 if isinstance(cell.value, str) and cell.value.startswith("="):
                     count += 1
         return count
+
+    @classmethod
+    def _quality_warnings_requiring_review(
+        cls,
+        quality_summary: dict[str, Any] | None,
+    ) -> list[str]:
+        if quality_summary is None:
+            return []
+        return [
+            warning
+            for warning in quality_summary.get("warnings", [])
+            if warning not in cls._NON_BLOCKING_QUALITY_WARNINGS
+        ]
+
+    @staticmethod
+    def _extract_chart_reference_formula(reference) -> str | None:
+        if reference is None:
+            return None
+        for ref_attr in ("numRef", "strRef"):
+            ref = getattr(reference, ref_attr, None)
+            formula = getattr(ref, "f", None)
+            if isinstance(formula, str) and formula.strip():
+                return formula.strip()
+        return None
+
+    @staticmethod
+    def _count_reference_cells(formula: str) -> int | None:
+        try:
+            from openpyxl.utils.cell import range_boundaries
+        except ImportError:
+            return None
+
+        range_text = formula.rsplit("!", 1)[-1].strip().replace("$", "")
+        if "," in range_text:
+            return None
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(range_text)
+        except ValueError:
+            return None
+        return (max_col - min_col + 1) * (max_row - min_row + 1)
+
+    @classmethod
+    def _collect_chart_warnings(cls, worksheet) -> list[str]:
+        warnings: list[str] = []
+        for chart in getattr(worksheet, "_charts", []) or []:
+            if type(chart).__name__ not in cls._PIE_CHART_CLASS_NAMES:
+                continue
+
+            series = list(getattr(chart, "series", []) or [])
+            if len(series) != 1:
+                warnings.append(
+                    f"{worksheet.title} 的饼图包含 {len(series)} 个数据系列，"
+                    "可能只会渲染第一个系列"
+                )
+                continue
+
+            chart_series = series[0]
+            category_formula = cls._extract_chart_reference_formula(
+                getattr(chart_series, "cat", None)
+            )
+            value_formula = cls._extract_chart_reference_formula(
+                getattr(chart_series, "val", None)
+            )
+            if category_formula is None or value_formula is None:
+                continue
+
+            category_count = cls._count_reference_cells(category_formula)
+            value_count = cls._count_reference_cells(value_formula)
+            if (
+                category_count is not None
+                and value_count is not None
+                and category_count != value_count
+            ):
+                warnings.append(
+                    f"{worksheet.title} 的饼图分类数量 {category_count} 与"
+                    f"数据点数量 {value_count} 不一致"
+                )
+        return warnings
 
     @staticmethod
     def _collect_dashboard_warnings(
@@ -281,8 +382,7 @@ class GeneratedFileDeliveryService:
         if issue_type_column is not None:
             for row_index in range(2, worksheet.max_row + 1):
                 issue_type = str(
-                    worksheet.cell(row=row_index, column=issue_type_column).value
-                    or ""
+                    worksheet.cell(row=row_index, column=issue_type_column).value or ""
                 ).strip()
                 if issue_type:
                     issue_type_counts[issue_type] = (
@@ -354,9 +454,7 @@ class GeneratedFileDeliveryService:
                 continue
             fixed_values = cls._count_non_formula_values(worksheet, formula_column)
             if fixed_values:
-                warnings.append(
-                    f"Summary 有 {fixed_values} 行 {column_name} 不是公式"
-                )
+                warnings.append(f"Summary 有 {fixed_values} 行 {column_name} 不是公式")
 
         target_column = cls._find_header_column(
             headers,
@@ -403,10 +501,13 @@ class GeneratedFileDeliveryService:
                 chart_count=chart_count,
             )
         )
+        warnings.extend(cls._collect_chart_warnings(worksheet))
 
         repeated_header_rows = cls._count_repeated_header_rows(worksheet, headers)
         if repeated_header_rows:
-            warnings.append(f"{worksheet.title} 有 {repeated_header_rows} 行疑似重复表头")
+            warnings.append(
+                f"{worksheet.title} 有 {repeated_header_rows} 行疑似重复表头"
+            )
 
         warnings.extend(cls._collect_cleaned_data_warnings(worksheet, headers))
 
@@ -524,6 +625,7 @@ class GeneratedFileDeliveryService:
         output_path: Path | None,
         *,
         success_message: str | None = None,
+        block_quality_warnings: bool = False,
     ) -> GeneratedFileDeliveryResult:
         if output_path is None or not output_path.exists():
             logger.info(
@@ -555,6 +657,15 @@ class GeneratedFileDeliveryService:
             )
 
         quality_summary = self._build_excel_quality_summary(output_path)
+        quality_warnings = self._quality_warnings_requiring_review(quality_summary)
+        if block_quality_warnings and quality_warnings:
+            return GeneratedFileDeliveryResult(
+                status="review_required",
+                file_size=file_size,
+                max_size=max_size,
+                validation_errors=quality_warnings,
+                quality_summary=quality_summary,
+            )
 
         if success_message is None:
             await self._delivery_service.send_file_with_preview(event, output_path)

@@ -386,6 +386,7 @@ class ExcelScriptService:
             oversized_template=(
                 "错误：生成的 Excel 文件大小 {file_size} 超过限制 {max_size}"
             ),
+            block_quality_warnings=True,
         )
         if delivery_error:
             return self._build_failure_result(
@@ -413,8 +414,10 @@ class ExcelScriptService:
                 success_payload["requires_review"] = True
                 success_payload["quality_warnings"] = quality_warnings
                 success_payload["message"] = (
-                    "文件已生成并发送，但质量摘要存在警告；回复用户时必须逐条列出 "
-                    "quality_warnings 中的每一条，不要遗漏，也不要表述为完全完成。"
+                    "文件已生成并发送，但质量摘要存在警告；如果能根据 "
+                    "quality_warnings 修正，继续调用 execute_excel_script 生成新版本；"
+                    "无法修正时，回复用户必须逐条列出 quality_warnings 中的每一条，"
+                    "不要遗漏，也不要表述为完全完成。"
                 )
         return json.dumps(
             success_payload,
@@ -564,7 +567,9 @@ class ExcelScriptService:
                 timeout=10,
                 silent=True,
             )
-        except Exception as exc:  # pragma: no cover - cleanup failure should not mask result
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - cleanup failure should not mask result
             logger.warning(f"[文件管理] 清理 Excel sandbox 临时目录失败: {exc}")
 
     async def _run_script_process(
@@ -780,7 +785,10 @@ class ExcelScriptService:
                     )
                 if mode == "file":
                     output_path_value = payload.get("output_path")
-                    if not isinstance(output_path_value, str) or not output_path_value.strip():
+                    if (
+                        not isinstance(output_path_value, str)
+                        or not output_path_value.strip()
+                    ):
                         return ScriptProcessResult(
                             success=False,
                             mode="error",
@@ -959,7 +967,10 @@ class ExcelScriptService:
                 )
             if mode == "file":
                 output_path_value = payload.get("output_path")
-                if not isinstance(output_path_value, str) or not output_path_value.strip():
+                if (
+                    not isinstance(output_path_value, str)
+                    or not output_path_value.strip()
+                ):
                     return ScriptProcessResult(
                         success=False,
                         mode="error",

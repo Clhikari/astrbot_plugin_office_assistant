@@ -3436,7 +3436,9 @@ async def test_request_hook_service_injects_excel_script_notice_for_complex_exce
     assert "create_workbook" not in context.notices[1]
     assert "assistant content 必须为空" in context.notices[1]
     assert "脚本正文只能放在 tool arguments" in context.notices[1]
-    assert "Dashboard 不能只是空白图表容器" in context.notices[1]
+    assert "Dashboard 必须写入源数据" in context.notices[1]
+    assert "保留用户可见的原 Sheet 名" in context.notices[1]
+    assert "等价 `PivotSummary`" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -5408,7 +5410,7 @@ async def test_generated_file_delivery_service_summarizes_excel_dashboard_charts
     dashboard.add_chart(bar, "J2")
 
     pie = PieChart()
-    pie.add_data(Reference(metrics, min_col=4, max_col=6, min_row=3))
+    pie.add_data(Reference(metrics, min_col=4, max_col=6, min_row=3), from_rows=True)
     pie.set_categories(Reference(metrics, min_col=4, max_col=6, min_row=1))
     dashboard.add_chart(pie, "A18")
 
@@ -5440,10 +5442,67 @@ async def test_generated_file_delivery_service_summarizes_excel_dashboard_charts
     assert result.quality_summary["sheets"][0]["charts"] == 3
     assert result.quality_summary["sheets"][0]["data_rows"] == 0
     assert result.quality_summary["sheets"][1]["conditional_formatting_rules"] == 1
-    assert "Dashboard 只有图表，没有数据表或关键指标区" in result.quality_summary[
-        "warnings"
-    ]
+    assert (
+        "Dashboard 只有图表，没有数据表或关键指标区"
+        in result.quality_summary["warnings"]
+    )
+    assert not any("饼图" in warning for warning in result.quality_summary["warnings"])
     assert "未发现 Issues Sheet" in result.quality_summary["warnings"]
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_flags_malformed_pie_chart_series():
+    workspace_dir = _make_workspace("generated-file-delivery-malformed-pie")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    pytest.importorskip("openpyxl")
+    from openpyxl import Workbook
+    from openpyxl.chart import PieChart, Reference
+
+    output_path = workspace_dir / "malformed-pie.xlsx"
+    workbook = Workbook()
+    dashboard = workbook.active
+    dashboard.title = "Dashboard"
+    dashboard.append(["Month", "North", "South", "East"])
+    dashboard.append(["Apr", 69000, 48000, 39000])
+
+    pie = PieChart()
+    pie.add_data(Reference(dashboard, min_col=2, max_col=4, min_row=2, max_row=2))
+    pie.set_categories(Reference(dashboard, min_col=2, max_col=4, min_row=1))
+    dashboard.add_chart(pie, "A4")
+
+    issues = workbook.create_sheet("Issues")
+    issues.append(["IssueType", "Key", "Detail"])
+    issues.append(["Chart", "Dashboard", "Pie chart has multiple series"])
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    assert result.quality_summary is not None
+    assert (
+        "Dashboard 的饼图包含 3 个数据系列，可能只会渲染第一个系列"
+        in result.quality_summary["warnings"]
+    )
     delivery_service.send_file_with_preview.assert_awaited_once()
 
 
@@ -6648,7 +6707,7 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_promotes_quality_warnings():
+async def test_file_tool_service_execute_excel_script_retries_quality_warnings():
     event = _build_event()
 
     delivery_service = MagicMock()
@@ -6675,16 +6734,16 @@ async def test_file_tool_service_execute_excel_script_promotes_quality_warnings(
             )
 
     payload = json.loads(result)
-    assert payload["success"] is True
-    assert payload["requires_review"] is True
-    assert payload["quality_warnings"] == ["Summary 有 1 行目标为空或 0"]
-    assert "逐条列出" in payload["message"]
-    assert "不要遗漏" in payload["message"]
-    delivery_service.send_file_with_preview.assert_awaited_once()
+    assert payload["success"] is False
+    assert "质量警告" in payload["error"]
+    assert "Summary 有 1 行目标为空或 0" in payload["error"]
+    assert "再次调用 execute_excel_script" in payload["error"]
+    assert payload["retry_exhausted"] is False
+    delivery_service.send_file_with_preview.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_promotes_dashboard_chart_warning():
+async def test_file_tool_service_execute_excel_script_retries_dashboard_chart_warning():
     event = _build_event()
 
     delivery_service = MagicMock()
@@ -6718,13 +6777,12 @@ async def test_file_tool_service_execute_excel_script_promotes_dashboard_chart_w
             )
 
     payload = json.loads(result)
-    assert payload["success"] is True
-    assert payload["quality_summary"]["chart_count"] == 1
-    assert payload["requires_review"] is True
-    assert payload["quality_warnings"] == [
-        "Dashboard 只有图表，没有数据表或关键指标区"
-    ]
-    delivery_service.send_file_with_preview.assert_awaited_once()
+    assert payload["success"] is False
+    assert "质量警告" in payload["error"]
+    assert "Dashboard 只有图表，没有数据表或关键指标区" in payload["error"]
+    assert "不要直接回复用户完成" in payload["error"]
+    assert payload["retry_exhausted"] is False
+    delivery_service.send_file_with_preview.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -6788,6 +6846,81 @@ async def test_file_tool_service_execute_excel_script_accepts_guarded_divisor_fo
                     "workbook.save(output_path)\n"
                 ),
                 output_name="guarded-formula.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_single_quoted_text_formula():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-single-quoted-formula",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = 'PivotSummary'\n"
+                    "worksheet['A1'] = 'Region/Product'\n"
+                    "worksheet['A2'] = 'East'\n"
+                    "worksheet['B1'] = 'Keyboard'\n"
+                    "worksheet['B2'] = "
+                    "\"=SUMIFS(Orders!E:E,Orders!C:C,A2,Orders!B:B,'Keyboard')\"\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="single-quoted-formula.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "明显公式风险" in payload["error"]
+    assert "PivotSummary!B2" in payload["error"]
+    assert "Excel 公式文本必须用双引号" in payload["error"]
+    delivery_service.send_file_with_preview.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_accepts_double_quoted_text_formula():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-double-quoted-formula",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "orders = workbook.active\n"
+                    "orders.title = 'Orders'\n"
+                    "orders.append(['Product', 'Units'])\n"
+                    "orders.append(['Keyboard', 3])\n"
+                    "summary = workbook.create_sheet('PivotSummary')\n"
+                    "summary['A1'] = 'Keyboard'\n"
+                    "summary['B1'] = "
+                    "'=SUMIFS(Orders!B:B,Orders!A:A,\"Keyboard\")'\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="double-quoted-formula.xlsx",
             )
 
     payload = json.loads(result)

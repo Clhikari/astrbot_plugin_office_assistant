@@ -26,6 +26,14 @@ class FileDeliveryService:
             errors = delivery_result.validation_errors or []
             details = "；".join(errors)
             return f"错误：生成的 Excel 文件存在明显公式风险：{details}"
+        if delivery_result.status == "review_required":
+            errors = delivery_result.validation_errors or []
+            details = "；".join(errors)
+            return (
+                "错误：生成的 Excel 文件存在质量警告，需要修正后重新生成："
+                f"{details}。请修正脚本并再次调用 execute_excel_script，"
+                "不要直接回复用户完成。"
+            )
         return None
 
     async def deliver_generated_file(
@@ -36,6 +44,7 @@ class FileDeliveryService:
         missing_message: str,
         oversized_template: str,
         success_message: str | None = None,
+        block_quality_warnings: bool = False,
     ) -> str | None:
         delivery_error, _ = await self.deliver_generated_file_with_result(
             event,
@@ -43,6 +52,7 @@ class FileDeliveryService:
             missing_message=missing_message,
             oversized_template=oversized_template,
             success_message=success_message,
+            block_quality_warnings=block_quality_warnings,
         )
         return delivery_error
 
@@ -54,12 +64,14 @@ class FileDeliveryService:
         missing_message: str,
         oversized_template: str,
         success_message: str | None = None,
+        block_quality_warnings: bool = False,
     ) -> tuple[str | None, GeneratedFileDeliveryResult]:
         delivery_result = (
             await self._generated_file_delivery_service.deliver_generated_file(
                 event,
                 output_path,
                 success_message=success_message,
+                block_quality_warnings=block_quality_warnings,
             )
         )
         delivery_error = self._format_generated_file_delivery_error(
