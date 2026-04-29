@@ -519,32 +519,36 @@ def extract_excel_sheets(
         from openpyxl import load_workbook
 
         workbook = load_workbook(file_path, read_only=True, data_only=True)
-        extracted_sheets: list[ExtractedExcelSheet] = []
-        worksheet_count = len(workbook.worksheets)
-        sheet_limit = _resolve_excel_preview_limit(
-            max_sheets,
-            _MAX_EXCEL_PREVIEW_SHEETS,
-        )
-        for sheet_index, worksheet in enumerate(workbook.worksheets, start=1):
-            if sheet_limit and sheet_index > sheet_limit:
+        try:
+            extracted_sheets: list[ExtractedExcelSheet] = []
+            worksheet_count = len(workbook.worksheets)
+            sheet_limit = _resolve_excel_preview_limit(
+                max_sheets,
+                _MAX_EXCEL_PREVIEW_SHEETS,
+            )
+            for sheet_index, worksheet in enumerate(workbook.worksheets, start=1):
+                if sheet_limit and sheet_index > sheet_limit:
+                    extracted_sheets.append(
+                        _build_omitted_excel_sheets_notice(
+                            omitted_count=worksheet_count - sheet_limit,
+                            max_sheets=sheet_limit,
+                        )
+                    )
+                    break
                 extracted_sheets.append(
-                    _build_omitted_excel_sheets_notice(
-                        omitted_count=worksheet_count - sheet_limit,
-                        max_sheets=sheet_limit,
+                    ExtractedExcelSheet(
+                        name=worksheet.title,
+                        text=_extract_openpyxl_sheet_preview(
+                            worksheet,
+                            max_rows=max_rows,
+                            max_chars=max_chars,
+                        ),
                     )
                 )
-                break
-            extracted_sheets.append(
-                ExtractedExcelSheet(
-                    name=worksheet.title,
-                    text=_extract_openpyxl_sheet_preview(
-                        worksheet,
-                        max_rows=max_rows,
-                        max_chars=max_chars,
-                    ),
-                )
-            )
-        return extracted_sheets
+            return extracted_sheets
+        finally:
+            with suppress(Exception):
+                workbook.close()
     except ImportError:
         return None
     except Exception as e:

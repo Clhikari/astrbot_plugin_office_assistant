@@ -67,9 +67,7 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_STATIC_EXCEL_READ,
     SECTION_STATIC_EXCEL_ROUTING,
     SECTION_STATIC_EXCEL_SCRIPT,
-    SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE,
     SECTION_STATIC_WORKBOOK_TOOLS,
-    SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
     PromptContextService,
 )
 from astrbot_plugin_office_assistant.services.runtime_config import (
@@ -1072,6 +1070,8 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
             if getattr(tool, "name", "") == "export_document"
         )
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
+        assert export_tool.render_backend_config.ppt_preferred_backend == "python"
+        assert export_tool.render_backend_config.excel_preferred_backend == "python"
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
         assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
@@ -1094,8 +1094,6 @@ def test_build_plugin_runtime_ignores_legacy_word_render_settings():
         "render_settings": {
             "word_render_backend": "python",
             "word_render_fallback_enabled": False,
-            "ppt_render_backend": "node",
-            "excel_render_backend": "python",
             "js_renderer_entry": "D:/custom/js-renderer.js",
         }
     }
@@ -1115,6 +1113,8 @@ def test_build_plugin_runtime_ignores_legacy_word_render_settings():
             if getattr(tool, "name", "") == "export_document"
         )
         assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
+        assert export_tool.render_backend_config.ppt_preferred_backend == "python"
+        assert export_tool.render_backend_config.excel_preferred_backend == "python"
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
     finally:
         runtime.executor.shutdown(wait=False)
@@ -1893,7 +1893,7 @@ async def test_request_hook_service_keeps_excel_tools_for_generic_prompt():
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_hides_execute_excel_script_for_simple_uploaded_summary_filter():
+async def test_request_hook_service_keeps_execute_excel_script_for_uploaded_summary_filter():
     request = _build_provider_request(
         (
             "我上传了 sales_records.xlsx。请生成「销售汇总筛选.xlsx」："
@@ -1930,7 +1930,35 @@ async def test_request_hook_service_hides_execute_excel_script_for_simple_upload
     assert "create_workbook" in tool_names
     assert "write_rows" in tool_names
     assert "export_workbook" in tool_names
-    assert "execute_excel_script" not in tool_names
+    assert "execute_excel_script" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_execute_excel_script_for_existing_xlsx_edit():
+    request = _build_provider_request(
+        "请修改 sales.xlsx 的状态列并保存",
+        tool_names=[
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "create_workbook" in tool_names
+    assert "write_rows" in tool_names
+    assert "export_workbook" in tool_names
+    assert "execute_excel_script" in tool_names
 
 
 @pytest.mark.asyncio
@@ -3041,7 +3069,7 @@ async def test_request_hook_service_allows_detail_notice_without_core_when_only_
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_injects_workbook_core_and_detail_notices():
+async def test_request_hook_service_injects_workbook_core_notice():
     service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [],
@@ -3074,13 +3102,11 @@ async def test_request_hook_service_injects_workbook_core_and_detail_notices():
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_WORKBOOK_TOOLS,
-        SECTION_STATIC_WORKBOOK_TOOLS_DETAIL,
     ]
     assert "read_workbook" in context.notices[0]
     assert "execute_excel_script" in context.notices[0]
     assert "create_workbook" in context.notices[1]
     assert "write_rows" in context.notices[1]
-    assert "execute_excel_script" in context.notices[2]
 
 
 @pytest.mark.asyncio
@@ -3114,7 +3140,7 @@ async def test_request_hook_service_skips_workbook_guide_when_workbook_tools_are
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_skips_workbook_guide_for_reading_xlsx_requests():
+async def test_request_hook_service_injects_available_workbook_guide_for_xlsx_requests():
     service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [],
@@ -3145,8 +3171,11 @@ async def test_request_hook_service_skips_workbook_guide_for_reading_xlsx_reques
         )
     )
 
-    assert context.section_names == []
-    assert context.notices == []
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_WORKBOOK_TOOLS,
+    ]
+    assert "create_workbook" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -3231,6 +3260,7 @@ async def test_request_hook_service_prefers_excel_read_notice_for_update_record_
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_EXCEL_SCRIPT,
     ]
     assert "read_workbook" in context.notices[1]
 
@@ -3274,12 +3304,13 @@ async def test_request_hook_service_prefers_excel_read_notice_for_update_data_qu
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_EXCEL_SCRIPT,
     ]
     assert "read_workbook" in context.notices[1]
 
 
 @pytest.mark.asyncio
-async def test_request_hook_service_injects_unavailable_notice_for_formula_export_without_script_tool():
+async def test_request_hook_service_skips_script_notice_when_script_tool_is_unavailable():
     service = RequestHookService(
         auto_block_execution_tools=True,
         get_cached_upload_infos=lambda _event: [
@@ -3315,11 +3346,7 @@ async def test_request_hook_service_injects_unavailable_notice_for_formula_expor
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_READ,
-        SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE,
     ]
-    assert "Excel 脚本工具当前不可用" in context.notices[2]
-    assert "先调用 `read_workbook` 读取内容" in context.notices[2]
-    assert "不要承诺稍后可以导出文件" in context.notices[2]
 
 
 @pytest.mark.asyncio
@@ -3361,6 +3388,7 @@ async def test_request_hook_service_prefers_excel_read_notice_for_ambiguous_xls_
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_EXCEL_SCRIPT,
     ]
     assert "转换为 `.xlsx`" in context.notices[1]
 
@@ -3535,7 +3563,7 @@ def test_excel_intent_router_keeps_export_worded_existing_filename():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.matched_files == ("report.xlsx",)
+    assert decision.should_inject_guide is True
 
 
 def test_excel_intent_router_ignores_exposed_excel_tools_without_excel_intent():
@@ -3573,7 +3601,7 @@ def test_excel_intent_router_ignores_output_filename_when_upload_present():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.matched_files == ("input.xlsx",)
+    assert decision.should_inject_guide is True
 
 
 def test_excel_intent_router_keeps_output_worded_existing_filename():
@@ -3586,7 +3614,7 @@ def test_excel_intent_router_keeps_output_worded_existing_filename():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.matched_files == ("report.xlsx",)
+    assert decision.should_inject_guide is True
 
 
 def test_excel_intent_router_keeps_export_purpose_existing_filename():
@@ -3599,7 +3627,7 @@ def test_excel_intent_router_keeps_export_purpose_existing_filename():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.matched_files == ("report.xlsx",)
+    assert decision.should_inject_guide is True
 
 
 def test_excel_intent_router_prefers_read_for_update_record_query():
@@ -3612,7 +3640,6 @@ def test_excel_intent_router_prefers_read_for_update_record_query():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3626,7 +3653,6 @@ def test_excel_intent_router_treats_update_data_prompt_as_modify_existing():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3648,7 +3674,6 @@ def test_excel_intent_router_prefers_read_for_ambiguous_xls_update():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3662,7 +3687,6 @@ def test_excel_intent_router_allows_xls_script_when_xlsx_conversion_is_explicit(
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3676,7 +3700,6 @@ def test_excel_intent_router_treats_english_read_update_formula_prompt_as_modify
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3690,7 +3713,6 @@ def test_excel_intent_router_treats_english_read_add_column_prompt_as_modify_exi
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3704,7 +3726,6 @@ def test_excel_intent_router_treats_english_read_insert_formulas_prompt_as_modif
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.requires_script is False
     assert decision.should_inject_guide is True
 
 
@@ -3723,7 +3744,7 @@ def test_excel_intent_router_keeps_write_into_existing_filename():
 
     assert decision is not None
     assert decision.route == "excel_context"
-    assert decision.matched_files == ("report.xlsx",)
+    assert decision.should_inject_guide is True
 
 
 @pytest.mark.asyncio
@@ -3880,10 +3901,11 @@ async def test_request_hook_service_uses_workbook_guide_for_plain_entry_template
 
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
         SECTION_STATIC_WORKBOOK_TOOLS,
     ]
-    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
-    assert "create_workbook" in context.notices[1]
+    assert "execute_excel_script" in context.notices[1]
+    assert "create_workbook" in context.notices[2]
 
 
 @pytest.mark.asyncio
@@ -3935,11 +3957,12 @@ async def test_request_hook_service_uses_workbook_guide_for_simple_uploaded_summ
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_READ,
+        SECTION_STATIC_EXCEL_SCRIPT,
         SECTION_STATIC_WORKBOOK_TOOLS,
     ]
-    assert SECTION_STATIC_EXCEL_SCRIPT not in context.section_names
     assert "read_workbook" in context.notices[1]
-    assert "create_workbook" in context.notices[2]
+    assert "execute_excel_script" in context.notices[2]
+    assert "create_workbook" in context.notices[3]
 
 
 @pytest.mark.asyncio
@@ -6497,6 +6520,34 @@ async def test_file_tool_service_reads_workbook_with_sheet_sections():
     assert "[Sheet: 华东]" in result
     assert "2026-01\t100" in result
     assert "上海\t80" in result
+
+
+def test_extract_excel_sheets_closes_openpyxl_workbook(monkeypatch):
+    import openpyxl
+
+    worksheet = SimpleNamespace(title="Sheet1")
+    workbook = SimpleNamespace(
+        worksheets=[worksheet],
+        close=MagicMock(),
+    )
+
+    monkeypatch.setattr(
+        openpyxl,
+        "load_workbook",
+        lambda *_args, **_kwargs: workbook,
+    )
+    monkeypatch.setattr(
+        office_utils,
+        "_extract_openpyxl_sheet_preview",
+        lambda *_args, **_kwargs: "A\tB",
+    )
+
+    result = office_utils.extract_excel_sheets(Path("report.xlsx"))
+
+    assert result is not None
+    assert result[0].name == "Sheet1"
+    assert result[0].text == "A\tB"
+    workbook.close.assert_called_once()
 
 
 @pytest.mark.asyncio

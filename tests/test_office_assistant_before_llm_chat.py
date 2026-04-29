@@ -293,8 +293,9 @@ async def test_before_llm_chat_hides_execute_excel_script_when_runtime_is_none()
         assert "existing_tool" in tool_names
         assert "astrbot_execute_shell" not in tool_names
         assert "execute_excel_script" not in tool_names
-        assert "Excel 脚本工具当前不可用" in req.prompt
-        assert "无法完成新增公式或导出新版本" in req.prompt
+        assert "Excel 脚本工具当前不可用" not in req.prompt
+        assert "无法完成新增公式或导出新版本" not in req.prompt
+        assert "Excel 路径选择规则" in req.prompt
 
 
 @pytest.mark.asyncio
@@ -322,8 +323,9 @@ async def test_before_llm_chat_hides_execute_excel_script_when_runtime_is_local_
         assert "existing_tool" in tool_names
         assert "astrbot_execute_shell" not in tool_names
         assert "execute_excel_script" not in tool_names
-        assert "Excel 脚本工具当前不可用" in req.prompt
-        assert "无法完成新增公式或导出新版本" in req.prompt
+        assert "Excel 脚本工具当前不可用" not in req.prompt
+        assert "无法完成新增公式或导出新版本" not in req.prompt
+        assert "Excel 路径选择规则" in req.prompt
 
 
 @pytest.mark.asyncio
