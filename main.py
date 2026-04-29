@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+import json
 from pathlib import Path
 
 import astrbot.api.message_components as Comp
@@ -16,6 +17,33 @@ from astrbot.core.star.star import star_map
 from .app.runtime import PluginRuntimeBundle
 from .message_buffer import BufferedMessage
 from .services import build_plugin_runtime
+
+
+def _is_retry_exhausted_excel_result(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    retry_count = payload.get("retry_count")
+    max_retries = payload.get("max_retries")
+    try:
+        retry_count_int = int(retry_count)
+        max_retries_int = int(max_retries)
+    except (TypeError, ValueError):
+        return False
+    return (
+        payload.get("success") is False
+        and payload.get("retry_exhausted") is True
+        and retry_count_int >= max_retries_int
+    )
+
+
+def _build_direct_excel_retry_result(payload: dict) -> MessageEventResult:
+    user_message = str(
+        payload.get("user_message")
+        or payload.get("error")
+        or "Excel 脚本重试次数已用尽，本次没有生成合格文件。"
+    )
+    return MessageEventResult().message(user_message).stop_event()
+
 
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
 _on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
@@ -201,10 +229,13 @@ class FileOperationPlugin(Star):
         Args:
             filename(string): 要读取的 Excel 文件名。
         """
-        async for result in self._runtime.file_tool_service.iter_read_workbook_tool_results(
-            event,
-            filename,
-        ):
+        workbook_results = (
+            self._runtime.file_tool_service.iter_read_workbook_tool_results(
+                event,
+                filename,
+            )
+        )
+        async for result in workbook_results:
             yield result
 
     @llm_tool(name="create_office_file")
@@ -246,7 +277,7 @@ class FileOperationPlugin(Star):
         script: str = "",
         input_files: list[str] | None = None,
         output_name: str = "",
-    ) -> str:
+    ) -> str | MessageEventResult:
         """执行 Excel 脚本以生成或修改工作簿。
 
         适用场景：
@@ -258,12 +289,19 @@ class FileOperationPlugin(Star):
             input_files(array): 作为输入的 Excel 文件列表。
             output_name(string): 需要返回文件时的输出文件名。
         """
-        return await self._runtime.file_tool_service.execute_excel_script(
+        result = await self._runtime.file_tool_service.execute_excel_script(
             event,
             script=script,
             input_files=input_files,
             output_name=output_name or None,
         )
+        try:
+            payload = json.loads(result)
+        except (TypeError, ValueError):
+            return result
+        if _is_retry_exhausted_excel_result(payload):
+            return _build_direct_excel_retry_result(payload)
+        return result
 
     @llm_tool(name="convert_to_pdf")
     async def convert_to_pdf(

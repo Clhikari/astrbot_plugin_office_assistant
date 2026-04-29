@@ -9,6 +9,7 @@ from astrbot.api.event import AstrMessageEvent
 
 from ..constants import (
     ALL_OFFICE_SUFFIXES,
+    EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY,
     EXECUTION_TOOLS,
     FILE_TOOLS,
     PDF_SUFFIX,
@@ -124,8 +125,10 @@ class RequestHookService:
         consume_session_notice_once: Callable[[AstrMessageEvent, str], bool],
         allow_external_input_files: bool,
         prompt_context_service: PromptContextService | None = None,
-        lookup_document_summary: Callable[[str], dict[str, object] | None] | None = None,
-        lookup_workbook_summary: Callable[[str], dict[str, object] | None] | None = None,
+        lookup_document_summary: Callable[[str], dict[str, object] | None]
+        | None = None,
+        lookup_workbook_summary: Callable[[str], dict[str, object] | None]
+        | None = None,
     ) -> None:
         self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
@@ -148,6 +151,7 @@ class RequestHookService:
             self.append_uploaded_file_notices,
         ]
         self._tool_exposure_hooks = [
+            self.apply_excel_script_retry_exhaustion_block,
             self.apply_execution_tool_block,
             self.apply_excel_script_runtime_restriction,
             self.apply_explicit_file_tool_restriction,
@@ -327,14 +331,11 @@ class RequestHookService:
             "execute_excel_script" in exposed_tool_names
             and context.explicit_tool_name in (None, "execute_excel_script")
         )
-        workbook_tools_available = (
-            self._has_full_workbook_toolset_available(
-                exposed_tool_names=exposed_tool_names
-            )
-            and (
-                context.explicit_tool_name is None
-                or context.explicit_tool_name in self._WORKBOOK_TOOL_NAMES
-            )
+        workbook_tools_available = self._has_full_workbook_toolset_available(
+            exposed_tool_names=exposed_tool_names
+        ) and (
+            context.explicit_tool_name is None
+            or context.explicit_tool_name in self._WORKBOOK_TOOL_NAMES
         )
 
         if read_tool_available:
@@ -685,6 +686,25 @@ class RequestHookService:
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
         return context
 
+    async def apply_excel_script_retry_exhaustion_block(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        if not (context.should_expose and context.request.func_tool):
+            return context
+        get_extra = getattr(context.event, "get_extra", None)
+        retry_exhausted = (
+            bool(get_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY, False))
+            if callable(get_extra)
+            else False
+        )
+        if not retry_exhausted:
+            return context
+        for tool_name in FILE_TOOLS:
+            context.request.func_tool.remove_tool(tool_name)
+        logger.info("[文件管理] Excel 脚本重试次数已用尽，已隐藏本次请求剩余文件工具")
+        return context
+
     async def apply_excel_script_runtime_restriction(
         self,
         context: ToolExposureContext,
@@ -711,7 +731,9 @@ class RequestHookService:
             return context
         context.request.func_tool.remove_tool("execute_excel_script")
         if runtime_mode == "none":
-            logger.info("[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script")
+            logger.info(
+                "[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script"
+            )
             return context
         if runtime_mode not in SUPPORTED_COMPUTER_RUNTIME_MODES:
             logger.warning(

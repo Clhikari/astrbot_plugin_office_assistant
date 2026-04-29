@@ -1,4 +1,5 @@
 import contextlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,6 +33,7 @@ from astrbot_plugin_office_assistant.services.upload_session_service import (
 
 import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
+from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 from conftest import build_notice_once_callback as _build_notice_once_callback
@@ -465,7 +467,9 @@ async def test_before_llm_chat_requires_read_before_document_tools_for_uploaded_
             original_name="source.docx",
             stored_name="source_1.docx",
         )
-        req = _build_provider_request("根据上传文档整理成正式汇报", tool_names=["existing_tool"])
+        req = _build_provider_request(
+            "根据上传文档整理成正式汇报", tool_names=["existing_tool"]
+        )
 
         await managed.plugin.before_llm_chat(event, req)
 
@@ -710,6 +714,37 @@ async def test_before_llm_chat_uses_buffered_user_instruction_for_explicit_tool_
         assert "add_blocks" in tool_names
         assert "finalize_document" in tool_names
         assert "export_document" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_execute_excel_script_returns_direct_message_after_retry_exhaustion():
+    async with _managed_plugin() as managed:
+        event = _build_event()
+        managed.plugin._runtime.file_tool_service.execute_excel_script = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "success": False,
+                    "error": "错误：生成的 Excel 文件存在质量警告",
+                    "traceback": "",
+                    "script": "bad script",
+                    "retry_count": 3,
+                    "max_retries": 3,
+                    "retry_exhausted": True,
+                    "user_message": "Excel 脚本已经达到最多 3 次重试，本次没有生成合格文件。",
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        result = await managed.plugin.execute_excel_script(
+            event,
+            script="bad script",
+            output_name="out.xlsx",
+        )
+
+    assert isinstance(result, MessageEventResult)
+    assert result.is_stopped()
+    assert "最多 3 次重试" in result.get_plain_text()
 
 
 @pytest.mark.asyncio
@@ -1165,8 +1200,10 @@ async def test_buffered_upload_without_prompt_requeues_in_friend_chat():
 
         queued_event = event_queue.put.await_args.args[0]
         prompt_text = queued_event.message_obj.message[0].text
-        upload_infos = managed.plugin._runtime.upload_session_service.list_session_upload_infos(
-            event
+        upload_infos = (
+            managed.plugin._runtime.upload_session_service.list_session_upload_infos(
+                event
+            )
         )
         assert len(upload_infos) == 1
         assert upload_infos[0]["original_name"] == "report.docx"
@@ -1196,8 +1233,10 @@ async def test_buffered_upload_without_prompt_only_caches_upload_infos_in_group_
         await managed.plugin._on_buffer_complete(buf)
 
         event_queue.put.assert_not_awaited()
-        upload_infos = managed.plugin._runtime.upload_session_service.list_session_upload_infos(
-            event
+        upload_infos = (
+            managed.plugin._runtime.upload_session_service.list_session_upload_infos(
+                event
+            )
         )
         assert len(upload_infos) == 1
         assert upload_infos[0]["original_name"] == "report.docx"
@@ -1377,10 +1416,10 @@ async def test_before_llm_chat_exposes_file_tools_for_group_doc_command_without_
             "[文件信息]\n"
             "- 原始文件名: B.xlsx\n"
             "  工作区文件名: B_1.xlsx\n\n"
-                "[用户指令]\n"
-                "根据这份文件整理成正式汇报\n\n"
-                "[处理要求]\n"
-                "1. 优先围绕这些上传文件完成用户请求。\n"
+            "[用户指令]\n"
+            "根据这份文件整理成正式汇报\n\n"
+            "[处理要求]\n"
+            "1. 优先围绕这些上传文件完成用户请求。\n"
         )
         req = _build_provider_request(event.message_str, tool_names=["existing_tool"])
 

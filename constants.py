@@ -109,6 +109,8 @@ FILE_TOOLS = (
 
 EXPLICIT_FILE_TOOL_EVENT_KEY = "office_assistant_explicit_file_tool_name"
 DOC_COMMAND_TRIGGER_EVENT_KEY = "office_assistant_doc_command_trigger"
+EXCEL_SCRIPT_RETRY_FAILURES_EVENT_KEY = "office_assistant_excel_script_retry_failures"
+EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY = "office_assistant_excel_script_retry_exhausted"
 
 EXECUTION_TOOLS = (
     "astrbot_execute_shell",

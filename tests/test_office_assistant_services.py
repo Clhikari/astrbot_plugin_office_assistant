@@ -19,6 +19,7 @@ from astrbot_plugin_office_assistant.constants import (
     DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT,
     DEFAULT_MAX_INLINE_DOCX_IMAGE_MB,
     DOC_COMMAND_TRIGGER_EVENT_KEY,
+    EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY,
     EXPLICIT_FILE_TOOL_EVENT_KEY,
     OfficeType,
 )
@@ -1862,6 +1863,34 @@ async def test_request_hook_service_keeps_execute_excel_script_for_local_runtime
     assert "read_workbook" in tool_names
     assert "execute_excel_script" in tool_names
     assert "astrbot_execute_shell" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_hides_file_tools_after_excel_script_retry_exhaustion():
+    event = _build_event()
+    event.set_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY, True)
+    request = _build_provider_request(
+        "继续生成课表清单",
+        tool_names=[
+            "existing_tool",
+            "read_workbook",
+            "create_workbook",
+            "write_rows",
+            "export_workbook",
+            "execute_excel_script",
+            "convert_to_pdf",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="sandbox"),
+    )
+    context = _build_tool_exposure_context(request, event=event)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert tool_names == {"existing_tool"}
 
 
 @pytest.mark.asyncio
@@ -5530,6 +5559,53 @@ async def test_generated_file_delivery_service_flags_malformed_pie_chart_series(
 
 
 @pytest.mark.asyncio
+async def test_generated_file_delivery_service_flags_text_layout_risk():
+    workspace_dir = _make_workspace("generated-file-delivery-text-layout")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    pytest.importorskip("openpyxl")
+    from openpyxl import Workbook
+
+    output_path = workspace_dir / "text-layout.xlsx"
+    workbook = Workbook()
+    schedule = workbook.active
+    schedule.title = "Schedule"
+    schedule.append(["Section", "Course"])
+    schedule["A2"] = 1
+    schedule["B2"] = "网络基础\n教师A\n实训楼301\n1-8周"
+    schedule.merge_cells("B2:B3")
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    assert result.quality_summary is not None
+    assert (
+        "Schedule 有 1 个文本单元格可能显示不全：B2；请设置自动换行并调整列宽或行高"
+        in result.quality_summary["warnings"]
+    )
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generated_file_delivery_service_flags_excel_quality_anomalies():
     workspace_dir = _make_workspace("generated-file-delivery-quality-anomalies")
     event = _build_event()
@@ -5589,6 +5665,7 @@ async def test_generated_file_delivery_service_flags_excel_quality_anomalies():
         "CleanedData 有 1 行疑似重复表头",
         "CleanedData 有 1 行主键为空",
         "CleanedContacts 有 2 个单元格仍包含换行或 Tab",
+        "CleanedContacts 有 1 个文本单元格可能显示不全：C2；请设置自动换行并调整列宽或行高",
         "Summary 有 1 行 CompletionRate 不是公式",
         "Summary 有 1 行目标为空或 0",
         "Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型",
@@ -6832,6 +6909,43 @@ async def test_file_tool_service_execute_excel_script_retries_dashboard_chart_wa
     assert "质量警告" in payload["error"]
     assert "Dashboard 只有图表，没有数据表或关键指标区" in payload["error"]
     assert "不要直接回复用户完成" in payload["error"]
+    assert payload["retry_exhausted"] is False
+    delivery_service.send_file_with_preview.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_retries_text_layout_warning():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-text-layout-warning",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = 'Schedule'\n"
+                    "worksheet.append(['Section', 'Course'])\n"
+                    "worksheet['A2'] = 1\n"
+                    "worksheet['B2'] = '网络基础\\n教师A\\n实训楼301\\n1-8周'\n"
+                    "worksheet.merge_cells('B2:B3')\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="text-layout-warning.xlsx",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "质量警告" in payload["error"]
+    assert "Schedule 有 1 个文本单元格可能显示不全" in payload["error"]
     assert payload["retry_exhausted"] is False
     delivery_service.send_file_with_preview.assert_not_awaited()
 
@@ -8213,6 +8327,7 @@ async def test_file_tool_service_execute_excel_script_marks_retry_exhausted_afte
     assert fourth["retry_count"] == 3
     assert fourth["retry_exhausted"] is True
     assert "已超过最多 3 次脚本重试" in fourth["error"]
+    assert event.get_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY) is True
     assert runner.call_count == 4
 
 
@@ -8269,6 +8384,7 @@ async def test_file_tool_service_execute_excel_script_stops_running_after_retry_
     assert fourth["retry_count"] == 3
     assert fourth["retry_exhausted"] is True
     assert "脚本重试次数已用尽" in fourth["error"]
+    assert event.get_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY) is True
     assert runner.call_count == 4
 
 

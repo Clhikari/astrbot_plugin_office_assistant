@@ -14,7 +14,11 @@ from uuid import uuid4
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
-from ..constants import EXCEL_SUFFIXES
+from ..constants import (
+    EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY,
+    EXCEL_SCRIPT_RETRY_FAILURES_EVENT_KEY,
+    EXCEL_SUFFIXES,
+)
 from .runtime_config import (
     SUPPORTED_COMPUTER_RUNTIME_MODES,
     resolve_computer_runtime_mode,
@@ -54,7 +58,7 @@ class SandboxScriptPaths:
 class ExcelScriptService:
     _EXCEL_SUFFIXES = EXCEL_SUFFIXES
     _MAX_SCRIPT_RETRIES = 3
-    _RETRY_COUNT_EVENT_KEY = "office_assistant_excel_script_retry_failures"
+    _RETRY_COUNT_EVENT_KEY = EXCEL_SCRIPT_RETRY_FAILURES_EVENT_KEY
     _SCRIPT_TIMEOUT_SECONDS = 30
     _SANDBOX_EXEC_ROOT = PurePosixPath(".office_assistant") / "excel_scripts"
 
@@ -87,19 +91,20 @@ class ExcelScriptService:
         traceback_text: str = "",
         retry_count: int = 0,
         retry_exhausted: bool = False,
+        user_message: str | None = None,
     ) -> str:
-        return json.dumps(
-            {
-                "success": False,
-                "error": error,
-                "traceback": traceback_text,
-                "script": script,
-                "retry_count": retry_count,
-                "max_retries": ExcelScriptService._MAX_SCRIPT_RETRIES,
-                "retry_exhausted": retry_exhausted,
-            },
-            ensure_ascii=False,
-        )
+        payload = {
+            "success": False,
+            "error": error,
+            "traceback": traceback_text,
+            "script": script,
+            "retry_count": retry_count,
+            "max_retries": ExcelScriptService._MAX_SCRIPT_RETRIES,
+            "retry_exhausted": retry_exhausted,
+        }
+        if user_message:
+            payload["user_message"] = user_message
+        return json.dumps(payload, ensure_ascii=False)
 
     @classmethod
     def _get_failure_count(cls, event: AstrMessageEvent) -> int:
@@ -121,6 +126,13 @@ class ExcelScriptService:
     @classmethod
     def _reset_failure_count(cls, event: AstrMessageEvent) -> None:
         cls._set_failure_count(event, 0)
+        cls._set_retry_exhausted(event, False)
+
+    @classmethod
+    def _set_retry_exhausted(cls, event: AstrMessageEvent, exhausted: bool) -> None:
+        set_extra = getattr(event, "set_extra", None)
+        if callable(set_extra):
+            set_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY, exhausted)
 
     @classmethod
     def _retry_used_count(cls, failure_count: int) -> int:
@@ -129,8 +141,16 @@ class ExcelScriptService:
     @classmethod
     def _build_retry_exhausted_error(cls, error: str) -> str:
         return (
-            f"{error}；已超过最多 {cls._MAX_SCRIPT_RETRIES} 次脚本重试，请停止重试，"
-            "直接向用户说明失败原因，并建议缩小需求或改走原语路径。"
+            f"{error}；已超过最多 {cls._MAX_SCRIPT_RETRIES} 次脚本重试，"
+            "请停止调用工具，直接向用户说明最后一次失败原因。"
+        )
+
+    @classmethod
+    def _build_retry_exhausted_user_message(cls, error: str) -> str:
+        return (
+            f"Excel 脚本已经达到最多 {cls._MAX_SCRIPT_RETRIES} 次重试，"
+            "本次没有生成合格文件。\n\n"
+            f"最后一次失败：{error}"
         )
 
     @classmethod
@@ -148,6 +168,7 @@ class ExcelScriptService:
             traceback_text=traceback_text,
             retry_count=cls._retry_used_count(failure_count),
             retry_exhausted=True,
+            user_message=cls._build_retry_exhausted_user_message(error),
         )
 
     def _build_failure_result(
@@ -161,6 +182,7 @@ class ExcelScriptService:
         failure_count = self._get_failure_count(event) + 1
         self._set_failure_count(event, failure_count)
         if failure_count > self._MAX_SCRIPT_RETRIES:
+            self._set_retry_exhausted(event, True)
             return self._build_exhausted_result(
                 script=script,
                 error=error,
@@ -204,6 +226,7 @@ class ExcelScriptService:
         normalized_script = (script or "").strip()
         current_failure_count = self._get_failure_count(event)
         if current_failure_count > self._MAX_SCRIPT_RETRIES:
+            self._set_retry_exhausted(event, True)
             return self._build_exhausted_result(
                 script=normalized_script or script or "",
                 error="脚本重试次数已用尽",

@@ -13,6 +13,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
+from ..constants import EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY
 from ..domain.workbook.contracts import (
     CreateWorkbookRequest,
     ExportWorkbookRequest,
@@ -34,17 +35,44 @@ def _dump_result(result: ToolResult) -> str:
     return result.model_dump_json(exclude_none=True)
 
 
+def _excel_script_retry_exhausted(context: ContextWrapper[AstrAgentContext]) -> bool:
+    agent_context = getattr(context, "context", None)
+    event = getattr(agent_context, "event", None)
+    get_extra = getattr(event, "get_extra", None)
+    if not callable(get_extra):
+        return False
+    return bool(get_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY, False))
+
+
+def _blocked_by_excel_script_retry_result(tool_name: str) -> str:
+    return _dump_result(
+        ToolResult(
+            success=False,
+            message=(
+                f"{tool_name} blocked: Excel 脚本重试次数已用尽；"
+                "请停止调用工具，直接向用户说明最后一次失败原因。"
+            ),
+        )
+    )
+
+
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class WorkbookToolBase(FunctionTool[AstrAgentContext]):
     store: WorkbookSessionStore = Field(default_factory=_build_default_store)
+
+    def _blocked_result_if_excel_script_retry_exhausted(
+        self,
+        context: ContextWrapper[AstrAgentContext],
+    ) -> str | None:
+        if _excel_script_retry_exhausted(context):
+            return _blocked_by_excel_script_retry_result(self.name)
+        return None
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class CreateWorkbookTool(WorkbookToolBase):
     name: str = "create_workbook"
-    description: str = (
-        "Create a draft workbook session and return workbook_id for structured Excel generation."
-    )
+    description: str = "Create a draft workbook session and return workbook_id for structured Excel generation."
     parameters: dict[str, Any] = Field(
         default_factory=lambda: {
             "type": "object",
@@ -68,6 +96,9 @@ class CreateWorkbookTool(WorkbookToolBase):
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs: Any
     ) -> ToolExecResult:
+        blocked_result = self._blocked_result_if_excel_script_retry_exhausted(context)
+        if blocked_result is not None:
+            return blocked_result
         try:
             request = CreateWorkbookRequest(
                 session_id=str(kwargs.get("session_id") or ""),
@@ -130,6 +161,9 @@ class WriteRowsTool(WorkbookToolBase):
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs: Any
     ) -> ToolExecResult:
+        blocked_result = self._blocked_result_if_excel_script_retry_exhausted(context)
+        if blocked_result is not None:
+            return blocked_result
         try:
             raw_start_row = kwargs.get("start_row")
             request = WriteRowsRequest(
@@ -195,6 +229,9 @@ class ExportWorkbookTool(WorkbookToolBase):
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs: Any
     ) -> ToolExecResult:
+        blocked_result = self._blocked_result_if_excel_script_retry_exhausted(context)
+        if blocked_result is not None:
+            return blocked_result
         try:
             request = ExportWorkbookRequest(
                 workbook_id=str(kwargs.get("workbook_id") or ""),

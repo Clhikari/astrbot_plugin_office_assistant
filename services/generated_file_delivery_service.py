@@ -22,6 +22,10 @@ class GeneratedFileDeliveryService:
     _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
     _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
+    _MAX_TEXT_LAYOUT_WARNING_EXAMPLES = 6
+    _DEFAULT_EXCEL_COLUMN_WIDTH = 13.0
+    _DEFAULT_EXCEL_ROW_HEIGHT = 15.0
+    _TEXT_WIDTH_MARGIN = 1.2
     _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
     _PIE_CHART_CLASS_NAMES = {"DoughnutChart", "PieChart", "ProjectedPieChart"}
     _NON_BLOCKING_QUALITY_WARNINGS = {"未发现 Issues Sheet", "Issues Sheet 没有数据行"}
@@ -237,6 +241,98 @@ class GeneratedFileDeliveryService:
                 if isinstance(cell.value, str) and cell.value.startswith("="):
                     count += 1
         return count
+
+    @classmethod
+    def _column_width(cls, worksheet, column: int) -> float:
+        try:
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            return cls._DEFAULT_EXCEL_COLUMN_WIDTH
+
+        width = worksheet.column_dimensions[get_column_letter(column)].width
+        try:
+            return float(width or cls._DEFAULT_EXCEL_COLUMN_WIDTH)
+        except (TypeError, ValueError):
+            return cls._DEFAULT_EXCEL_COLUMN_WIDTH
+
+    @classmethod
+    def _row_height(cls, worksheet, row: int) -> float:
+        height = worksheet.row_dimensions[row].height
+        try:
+            return float(height or cls._DEFAULT_EXCEL_ROW_HEIGHT)
+        except (TypeError, ValueError):
+            return cls._DEFAULT_EXCEL_ROW_HEIGHT
+
+    @classmethod
+    def _cell_display_bounds(cls, worksheet, cell) -> tuple[int, int, int, int] | None:
+        for merged_range in worksheet.merged_cells.ranges:
+            if cell.coordinate not in merged_range:
+                continue
+            if cell.row != merged_range.min_row or cell.column != merged_range.min_col:
+                return None
+            return (
+                merged_range.min_row,
+                merged_range.min_col,
+                merged_range.max_row,
+                merged_range.max_col,
+            )
+        return (cell.row, cell.column, cell.row, cell.column)
+
+    @classmethod
+    def _cell_text_layout_is_risky(cls, worksheet, cell) -> bool:
+        value = cell.value
+        if not isinstance(value, str) or not value.strip() or value.startswith("="):
+            return False
+
+        bounds = cls._cell_display_bounds(worksheet, cell)
+        if bounds is None:
+            return False
+
+        min_row, min_col, max_row, max_col = bounds
+        available_width = sum(
+            cls._column_width(worksheet, column)
+            for column in range(min_col, max_col + 1)
+        )
+        available_height = sum(
+            cls._row_height(worksheet, row) for row in range(min_row, max_row + 1)
+        )
+        line_capacity = max(int(available_height / cls._DEFAULT_EXCEL_ROW_HEIGHT), 1)
+        lines = [line for line in value.replace("\r\n", "\n").split("\n") if line]
+        if not lines:
+            return False
+
+        has_line_break = len(lines) > 1
+        has_long_line = any(
+            len(line) > available_width * cls._TEXT_WIDTH_MARGIN for line in lines
+        )
+        wrap_text = bool(cell.alignment.wrap_text)
+        if has_line_break and not wrap_text:
+            return True
+        if has_line_break and len(lines) > line_capacity:
+            return True
+        return has_long_line and not wrap_text
+
+    @classmethod
+    def _collect_text_layout_warnings(cls, worksheet) -> list[str]:
+        risky_cells: list[str] = []
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cls._cell_text_layout_is_risky(worksheet, cell):
+                    risky_cells.append(cell.coordinate)
+
+        if not risky_cells:
+            return []
+
+        examples = "、".join(risky_cells[: cls._MAX_TEXT_LAYOUT_WARNING_EXAMPLES])
+        suffix = (
+            "等" if len(risky_cells) > cls._MAX_TEXT_LAYOUT_WARNING_EXAMPLES else ""
+        )
+        return [
+            (
+                f"{worksheet.title} 有 {len(risky_cells)} 个文本单元格可能显示不全："
+                f"{examples}{suffix}；请设置自动换行并调整列宽或行高"
+            )
+        ]
 
     @classmethod
     def _quality_warnings_requiring_review(
@@ -518,6 +614,7 @@ class GeneratedFileDeliveryService:
                     f"{worksheet.title} 有 {dirty_text_cells} 个单元格仍包含换行或 Tab"
                 )
 
+        warnings.extend(cls._collect_text_layout_warnings(worksheet))
         warnings.extend(
             cls._collect_gross_margin_warnings(
                 worksheet,
