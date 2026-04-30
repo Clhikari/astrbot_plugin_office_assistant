@@ -65,6 +65,7 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_SCENE_UPLOADED_CONTEXT,
     SECTION_STATIC_DOCUMENT_TOOLS,
     SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
+    SECTION_STATIC_EXCEL_DOMAIN,
     SECTION_STATIC_EXCEL_READ,
     SECTION_STATIC_EXCEL_ROUTING,
     SECTION_STATIC_EXCEL_SCRIPT,
@@ -3493,9 +3494,89 @@ async def test_request_hook_service_injects_excel_script_notice_for_complex_exce
     assert "create_workbook" not in context.notices[1]
     assert "assistant content 必须为空" in context.notices[1]
     assert "脚本正文只能放在 tool arguments" in context.notices[1]
-    assert "Dashboard 必须写入源数据" in context.notices[1]
     assert "保留用户可见的原 Sheet 名" in context.notices[1]
-    assert "等价 `PivotSummary`" in context.notices[1]
+    assert "Dashboard 必须写入源数据" not in context.notices[1]
+    assert "等价 `PivotSummary`" not in context.notices[1]
+    assert "需要引用、保留或修改源 Sheet" in context.notices[0]
+    assert "清洗后的明细与 Raw 内容完全相同" in context.notices[1]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_excel_domain_notice_for_schedule_script():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [
+            {
+                "original_name": "class_schedule.xlsx",
+                "file_suffix": ".xlsx",
+                "stored_name": "class_schedule.xlsx",
+                "source_path": "",
+                "is_supported": True,
+            }
+        ],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请生成课表清单，把合并课程展开成 CourseList",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
+        SECTION_STATIC_EXCEL_DOMAIN,
+    ]
+    assert "备注、说明、空白占位不能作为数据行" in context.notices[2]
+    assert "ensure_readable_sheet(source_sheet)" in context.notices[2]
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_injects_excel_domain_notice_for_dashboard():
+    service = RequestHookService(
+        auto_block_execution_tools=True,
+        get_cached_upload_infos=lambda _event: [],
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+        consume_session_notice_once=_build_notice_once_callback(),
+        allow_external_input_files=False,
+    )
+
+    context = await service.append_document_tool_guide_notice(
+        NoticeBuildContext(
+            event=_build_event(),
+            request=ProviderRequest(
+                prompt="请生成一个包含 Dashboard 的 Excel 报表",
+                system_prompt="base",
+                func_tool=ToolSet([_tool("execute_excel_script")]),
+            ),
+            should_expose=True,
+            can_process_upload=True,
+            explicit_tool_name=None,
+            notices=[],
+        )
+    )
+
+    assert context.section_names == [
+        SECTION_STATIC_EXCEL_ROUTING,
+        SECTION_STATIC_EXCEL_SCRIPT,
+        SECTION_STATIC_EXCEL_DOMAIN,
+    ]
+    assert "Dashboard 必须写入源数据" not in context.notices[1]
+    assert "Dashboard 必须写入源数据" in context.notices[2]
 
 
 @pytest.mark.asyncio
@@ -5499,7 +5580,9 @@ async def test_generated_file_delivery_service_summarizes_excel_dashboard_charts
         in result.quality_summary["warnings"]
     )
     assert not any("饼图" in warning for warning in result.quality_summary["warnings"])
-    assert "未发现 Issues Sheet" in result.quality_summary["warnings"]
+    assert not any(
+        "Issues Sheet" in warning for warning in result.quality_summary["warnings"]
+    )
     delivery_service.send_file_with_preview.assert_awaited_once()
 
 
@@ -5559,7 +5642,7 @@ async def test_generated_file_delivery_service_flags_malformed_pie_chart_series(
 
 
 @pytest.mark.asyncio
-async def test_generated_file_delivery_service_flags_text_layout_risk():
+async def test_generated_file_delivery_service_does_not_block_text_layout_style():
     workspace_dir = _make_workspace("generated-file-delivery-text-layout")
     event = _build_event()
     delivery_service = MagicMock()
@@ -5598,8 +5681,90 @@ async def test_generated_file_delivery_service_flags_text_layout_risk():
 
     assert result.status == "sent"
     assert result.quality_summary is not None
+    assert not any(
+        "文本单元格可能显示不全" in warning
+        for warning in result.quality_summary["warnings"]
+    )
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generated_file_delivery_service_flags_course_list_note_rows():
+    workspace_dir = _make_workspace("generated-file-delivery-course-list")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    pytest.importorskip("openpyxl")
+    from openpyxl import Workbook
+
+    output_path = workspace_dir / "course-list.xlsx"
+    workbook = Workbook()
+    course_list = workbook.active
+    course_list.title = "CourseList"
+    course_list.append(
+        [
+            "Class",
+            "Weekday",
+            "SectionStart",
+            "SectionEnd",
+            "Course",
+            "Teacher",
+            "Room",
+            "Weeks",
+        ]
+    )
+    course_list.append(
+        ["24网1", "周一", 1, 2, "网络基础", "教师A", "实训楼301", "1-8周"]
+    )
+    course_list.append(
+        [
+            "24云2",
+            "周五",
+            28,
+            28,
+            "备注：少量课程跨班合班，部分空白代表暂未排课。",
+            None,
+            None,
+            None,
+        ]
+    )
+    course_list.append(
+        [
+            "24云2",
+            "周五",
+            29,
+            29,
+            "少量课程备注：跨班合班，部分空白代表暂未排课。",
+            None,
+            None,
+            None,
+        ]
+    )
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "sent"
+    assert result.quality_summary is not None
     assert (
-        "Schedule 有 1 个文本单元格可能显示不全：B2；请设置自动换行并调整列宽或行高"
+        "CourseList 有 2 行疑似备注被写入课程明细：第 3 行、第 4 行"
         in result.quality_summary["warnings"]
     )
     delivery_service.send_file_with_preview.assert_awaited_once()
@@ -5665,10 +5830,8 @@ async def test_generated_file_delivery_service_flags_excel_quality_anomalies():
         "CleanedData 有 1 行疑似重复表头",
         "CleanedData 有 1 行主键为空",
         "CleanedContacts 有 2 个单元格仍包含换行或 Tab",
-        "CleanedContacts 有 1 个文本单元格可能显示不全：C2；请设置自动换行并调整列宽或行高",
         "Summary 有 1 行 CompletionRate 不是公式",
         "Summary 有 1 行目标为空或 0",
-        "Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型",
         "ProductDetail 缺少维度列：Region、Month",
         "InventoryImpact 有 1 行 EndingStock 不是公式",
     ]
@@ -6828,7 +6991,7 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
     assert payload["quality_summary"]["file_type"] == "excel"
     assert payload["quality_summary"]["sheet_count"] == 1
     assert payload["quality_summary"]["formula_count"] == 0
-    assert payload["quality_summary"]["warnings"] == ["未发现 Issues Sheet"]
+    assert payload["quality_summary"]["warnings"] == []
     assert "requires_review" not in payload
     assert "quality_warnings" not in payload
     delivery_service.send_file_with_preview.assert_awaited_once()
@@ -6914,7 +7077,7 @@ async def test_file_tool_service_execute_excel_script_retries_dashboard_chart_wa
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_execute_excel_script_retries_text_layout_warning():
+async def test_file_tool_service_execute_excel_script_allows_text_layout_style():
     event = _build_event()
 
     delivery_service = MagicMock()
@@ -6943,9 +7106,46 @@ async def test_file_tool_service_execute_excel_script_retries_text_layout_warnin
             )
 
     payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["quality_summary"]["warnings"] == []
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_retries_course_list_warning():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-course-list-warning",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "worksheet = workbook.active\n"
+                    "worksheet.title = 'CourseList'\n"
+                    "worksheet.append(['Class', 'Weekday', 'SectionStart', "
+                    "'SectionEnd', 'Course', 'Teacher', 'Room', 'Weeks'])\n"
+                    "worksheet.append(['24云2', '周五', 28, 28, "
+                    "'少量课程备注：跨班合班，部分空白代表暂未排课。', "
+                    "None, None, None])\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="course-list-warning.xlsx",
+            )
+
+    payload = json.loads(result)
     assert payload["success"] is False
     assert "质量警告" in payload["error"]
-    assert "Schedule 有 1 个文本单元格可能显示不全" in payload["error"]
+    assert "CourseList 有 1 行疑似备注被写入课程明细" in payload["error"]
     assert payload["retry_exhausted"] is False
     delivery_service.send_file_with_preview.assert_not_awaited()
 
@@ -7207,6 +7407,344 @@ async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
     assert payload["mode"] == "text"
     assert payload["result_text"] == "ok"
     mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_repairs_double_escaped_quotes():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-double-escaped-quotes",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+    ) as managed:
+        result = await managed.service.execute_excel_script(
+            event,
+            script='result_text = \\"ok\\"',
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_reports_syntax_error_location():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-syntax-error",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+    ) as managed:
+        result = await managed.service.execute_excel_script(
+            event,
+            script="if True print('x')",
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "脚本语法错误（第 1 行）" in payload["error"]
+    assert "if True print('x')" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_ignores_input_sheet_quality_warnings():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-input-warning-skip",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+        delivery_service=delivery_service,
+    ) as managed:
+        source_path = managed.workspace_dir / "source.xlsx"
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "Schedule"
+        sheet.append(["Section", "Course"])
+        sheet["A2"] = 1
+        sheet["B2"] = "网络基础\n教师A\n实训楼301\n1-8周"
+        sheet.merge_cells("B2:B3")
+        workbook.save(source_path)
+
+        result = await managed.service.execute_excel_script(
+            event,
+            script=(
+                "workbook = load_workbook(input_files[0])\n"
+                "worksheet = workbook.create_sheet('CourseList')\n"
+                "worksheet.append(['Class', 'Weekday', 'SectionStart', "
+                "'SectionEnd', 'Course', 'Teacher', 'Room', 'Weeks'])\n"
+                "worksheet.append(['24网1', '周一', 1, 2, "
+                "'网络基础', '教师A', '实训楼301', '1-8周'])\n"
+                "workbook.save(output_path)\n"
+            ),
+            input_files=[source_path.name],
+            output_name="course-list.xlsx",
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["quality_summary"]["warnings"] == []
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_exposes_workbook_helpers():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-workbook-helpers",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+        delivery_service=delivery_service,
+    ) as managed:
+        source_path = managed.workspace_dir / "schedule.xlsx"
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "2025-2026-2班级课表"
+        sheet.freeze_panes = "A2"
+        sheet.column_dimensions["A"].width = 24
+        sheet["A1"] = "节次"
+        sheet["A1"].font = openpyxl.styles.Font(bold=True)
+        sheet["A2"] = 1
+        sheet["C2"] = "网络基础\n教师A\n实训楼301\n1-8周"
+        workbook.save(source_path)
+
+        result = await managed.service.execute_excel_script(
+            event,
+            script=(
+                "source_workbook = load_input_workbook()\n"
+                "source_sheet = source_workbook.active\n"
+                "workbook = Workbook()\n"
+                "sheet = workbook.active\n"
+                "sheet.title = source_sheet.title\n"
+                "for row in source_sheet.iter_rows():\n"
+                "    for cell in row:\n"
+                "        sheet[cell.coordinate] = cell.value\n"
+                "source_workbook.close()\n"
+                "preserve_input_sheet_layout(workbook)\n"
+                "course_list = workbook.create_sheet('CourseList')\n"
+                "course_list.append(['Class', 'Weekday', 'SectionStart', "
+                "'SectionEnd', 'Course', 'Teacher', 'Room', 'Weeks'])\n"
+                "course_list.append(['24网1', '周一', 1, 2, "
+                "'网络基础', '教师A', '实训楼301', '1-8周'])\n"
+                "format_course_list_sheet(course_list)\n"
+                "save_output_workbook(workbook)\n"
+            ),
+            input_files=[source_path.name],
+            output_name="schedule-list.xlsx",
+        )
+
+        payload = json.loads(result)
+        output_path = managed.workspace_dir / "schedule-list.xlsx"
+        output_workbook = openpyxl.load_workbook(output_path)
+        try:
+            source_sheet = output_workbook["2025-2026-2班级课表"]
+            course_list = output_workbook["CourseList"]
+            assert source_sheet.freeze_panes == "A2"
+            assert source_sheet.column_dimensions["A"].width == 24
+            assert source_sheet["A1"].font.bold is True
+            assert course_list.freeze_panes == "A2"
+            assert course_list.column_dimensions["E"].width == 28
+            assert course_list["A1"].font.bold is True
+            assert course_list["E2"].alignment.wrap_text is True
+        finally:
+            output_workbook.close()
+
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["quality_summary"]["warnings"] == []
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_save_helper_formats_tables():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-save-helper-formats",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.execute_excel_script(
+            event,
+            script=(
+                "workbook = Workbook()\n"
+                "raw = workbook.active\n"
+                "raw.title = 'RawExamSchedule'\n"
+                "raw.append(['2025-2026 第一学期期末考核安排（匿名样本）'])\n"
+                "raw.append([])\n"
+                "raw.append(['Department', 'ClassName', 'Course'])\n"
+                "raw.append(['软件系', '24级匿名2班', 'Python 程序设计'])\n"
+                "summary = workbook.create_sheet('Summary')\n"
+                "summary.append(['Department', 'Total Exams'])\n"
+                "summary.append(['软件系', '=COUNTIF(RawExamSchedule!A:A, A2)'])\n"
+                "save_output_workbook(workbook)\n"
+            ),
+            output_name="exam-formatted.xlsx",
+        )
+
+        payload = json.loads(result)
+        output_workbook = openpyxl.load_workbook(
+            managed.workspace_dir / "exam-formatted.xlsx",
+            data_only=False,
+        )
+        try:
+            raw = output_workbook["RawExamSchedule"]
+            summary = output_workbook["Summary"]
+            assert raw.freeze_panes == "A4"
+            assert raw.auto_filter.ref == "A3:C4"
+            assert raw["A1"].font.bold is False
+            assert raw["A1"].fill.fill_type is None
+            assert raw["A3"].font.bold is True
+            assert raw["A3"].fill.fill_type == "solid"
+            assert raw["A4"].alignment.wrap_text is True
+            assert summary.freeze_panes == "A2"
+            assert summary.auto_filter.ref == "A1:B2"
+            assert raw.column_dimensions["C"].width >= 17
+            assert output_workbook.calculation.fullCalcOnLoad is True
+            assert output_workbook.calculation.forceFullCalc is True
+            assert output_workbook.calculation.calcMode == "auto"
+        finally:
+            output_workbook.close()
+
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["quality_summary"]["warnings"] == []
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_direct_save_formats_tables():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-direct-save-formats",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        sandbox_dir = managed.workspace_dir / "fake-sandbox"
+        sandbox_dir.mkdir()
+        with _patch_excel_sandbox(_FakeSandboxBooter(sandbox_dir)):
+            result = await managed.service.execute_excel_script(
+                event,
+                script=(
+                    "workbook = Workbook()\n"
+                    "cleaned = workbook.active\n"
+                    "cleaned.title = 'CleanedData'\n"
+                    "cleaned.append(['StudentID', 'Name', 'ClassName', 'Status'])\n"
+                    "cleaned.append(['S0001', '学生001', '24级匿名2班', '通过'])\n"
+                    "issues = workbook.create_sheet('Issues')\n"
+                    "issues.append(['StudentID', 'Name', 'ClassName', 'Status'])\n"
+                    "issues.append(['S0007', '学生007', '24级匿名2班', '需补考'])\n"
+                    "workbook.save(output_path)\n"
+                ),
+                output_name="direct-save-formatted.xlsx",
+            )
+
+        payload = json.loads(result)
+        output_workbook = openpyxl.load_workbook(
+            managed.workspace_dir / "direct-save-formatted.xlsx",
+            data_only=False,
+        )
+        try:
+            cleaned = output_workbook["CleanedData"]
+            issues = output_workbook["Issues"]
+            assert cleaned.freeze_panes == "A2"
+            assert cleaned.auto_filter.ref == "A1:D2"
+            assert cleaned["A1"].font.bold is True
+            assert cleaned["A1"].fill.fill_type == "solid"
+            assert cleaned["A2"].alignment.wrap_text is True
+            assert issues.freeze_panes == "A2"
+            assert issues.auto_filter.ref == "A1:D2"
+            assert output_workbook.calculation.fullCalcOnLoad is True
+            assert output_workbook.calculation.forceFullCalc is True
+            assert output_workbook.calculation.calcMode == "auto"
+        finally:
+            output_workbook.close()
+
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    assert payload["quality_summary"]["warnings"] == []
+    delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_evenly_resizes_merged_rows():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-readable-merged-rows",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+        delivery_service=delivery_service,
+    ) as managed:
+        source_path = managed.workspace_dir / "schedule.xlsx"
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "2025-2026-2班级课表"
+        sheet["A4"] = 1
+        sheet["A5"] = 2
+        sheet["C4"] = "网络基础\n教师A\n实训楼301\n1-8周"
+        sheet.merge_cells("C4:C5")
+        workbook.save(source_path)
+
+        result = await managed.service.execute_excel_script(
+            event,
+            script=(
+                "workbook = load_input_workbook()\n"
+                "worksheet = workbook.active\n"
+                "ensure_readable_sheet(worksheet)\n"
+                "save_output_workbook(workbook)\n"
+            ),
+            input_files=[source_path.name],
+            output_name="schedule-readable.xlsx",
+        )
+
+        payload = json.loads(result)
+        output_workbook = openpyxl.load_workbook(
+            managed.workspace_dir / "schedule-readable.xlsx"
+        )
+        try:
+            output_sheet = output_workbook["2025-2026-2班级课表"]
+            row4_height = output_sheet.row_dimensions[4].height
+            row5_height = output_sheet.row_dimensions[5].height
+            assert row4_height is not None
+            assert row5_height is not None
+            assert abs(row4_height - row5_height) < 0.1
+            assert row4_height >= 30
+            assert output_sheet["C4"].alignment.wrap_text is True
+        finally:
+            output_workbook.close()
+
+    assert payload["success"] is True
+    assert payload["mode"] == "file"
+    delivery_service.send_file_with_preview.assert_awaited_once()
 
 
 @pytest.mark.asyncio

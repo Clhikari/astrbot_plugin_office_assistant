@@ -12,6 +12,7 @@ from ..prompts.static import (
     build_document_follow_up_notice,
     build_document_tools_core_notice,
     build_document_tools_detail_notice,
+    build_excel_domain_hints,
     build_excel_read_notice,
     build_excel_routing_notice,
     build_excel_script_notice,
@@ -30,6 +31,7 @@ SECTION_STATIC_DOCUMENT_TOOLS_DETAIL = "static_document_tools_detail"
 SECTION_STATIC_EXCEL_ROUTING = "static_excel_routing"
 SECTION_STATIC_EXCEL_READ = "static_excel_read"
 SECTION_STATIC_EXCEL_SCRIPT = "static_excel_script"
+SECTION_STATIC_EXCEL_DOMAIN = "static_excel_domain"
 SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE = "static_excel_script_unavailable"
 SECTION_STATIC_WORKBOOK_TOOLS = "static_workbook_tools"
 SECTION_STATIC_WORKBOOK_TOOLS_DETAIL = "static_workbook_tools_detail"
@@ -178,6 +180,13 @@ class PromptContextService:
         return PromptSection(
             name=SECTION_STATIC_EXCEL_SCRIPT,
             content=build_excel_script_notice(),
+            target="prompt_suffix",
+        )
+
+    def build_excel_domain_section(self, scenario: str) -> PromptSection:
+        return PromptSection(
+            name=SECTION_STATIC_EXCEL_DOMAIN,
+            content=build_excel_domain_hints(scenario),
             target="prompt_suffix",
         )
 

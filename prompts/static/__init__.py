@@ -7,6 +7,7 @@ from .document_tools import (
     build_document_tools_guide_notice,
 )
 from .excel_tools import (
+    build_excel_domain_hints,
     build_excel_read_notice,
     build_excel_routing_notice,
     build_excel_script_notice,
@@ -27,6 +28,7 @@ __all__ = [
     "build_document_tools_detail_notice",
     "build_document_tools_guide_notice",
     "build_excel_read_notice",
+    "build_excel_domain_hints",
     "build_excel_routing_notice",
     "build_excel_script_notice",
     "build_excel_script_unavailable_notice",

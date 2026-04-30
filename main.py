@@ -15,6 +15,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star import star_map
 
 from .app.runtime import PluginRuntimeBundle
+from .constants import EXCEL_SUFFIXES
 from .message_buffer import BufferedMessage
 from .services import build_plugin_runtime
 
@@ -36,6 +37,23 @@ def _is_retry_exhausted_excel_result(payload: object) -> bool:
     )
 
 
+def _is_successful_excel_file_result(payload: object) -> bool:
+    return (
+        isinstance(payload, dict)
+        and payload.get("success") is True
+        and payload.get("mode") == "file"
+    )
+
+
+def _build_direct_excel_success_result(payload: dict) -> MessageEventResult:
+    output_name = str(payload.get("output_name") or "").strip()
+    if output_name:
+        message = f"Excel 文件已生成并发送：{output_name}"
+    else:
+        message = "Excel 文件已生成并发送。"
+    return MessageEventResult().message(message).stop_event()
+
+
 def _build_direct_excel_retry_result(payload: dict) -> MessageEventResult:
     user_message = str(
         payload.get("user_message")
@@ -43,6 +61,30 @@ def _build_direct_excel_retry_result(payload: dict) -> MessageEventResult:
         or "Excel 脚本重试次数已用尽，本次没有生成合格文件。"
     )
     return MessageEventResult().message(user_message).stop_event()
+
+
+def _script_uses_input_files(script: str) -> bool:
+    return any(
+        marker in script
+        for marker in (
+            "input_files",
+            "load_input_workbook",
+            "preserve_input_sheet_layout",
+        )
+    )
+
+
+def _extract_single_uploaded_excel_name(upload_infos: list[dict]) -> str:
+    excel_infos = [
+        info
+        for info in upload_infos
+        if info.get("is_supported")
+        and str(info.get("file_suffix", "")).lower() in EXCEL_SUFFIXES
+        and str(info.get("stored_name", "")).strip()
+    ]
+    if len(excel_infos) != 1:
+        return ""
+    return str(excel_infos[0]["stored_name"]).strip()
 
 
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
@@ -285,14 +327,24 @@ class FileOperationPlugin(Star):
         - 修改已有 `.xlsx` / `.xls`
 
         Args:
-            script(string): 要执行的 Python 脚本。
+            script(string): 要执行的 Python 脚本。运行环境提供
+                load_input_workbook、save_output_workbook、ensure_readable_sheet、
+                format_table_sheet、format_course_list_sheet、auto_format_workbook、
+                preserve_input_sheet_layout 等辅助函数。
             input_files(array): 作为输入的 Excel 文件列表。
             output_name(string): 需要返回文件时的输出文件名。
         """
+        effective_input_files = input_files
+        if not effective_input_files and _script_uses_input_files(script or ""):
+            uploaded_name = _extract_single_uploaded_excel_name(
+                self._runtime.upload_session_service.get_cached_upload_infos(event)
+            )
+            if uploaded_name:
+                effective_input_files = [uploaded_name]
         result = await self._runtime.file_tool_service.execute_excel_script(
             event,
             script=script,
-            input_files=input_files,
+            input_files=effective_input_files,
             output_name=output_name or None,
         )
         try:
@@ -301,6 +353,8 @@ class FileOperationPlugin(Star):
             return result
         if _is_retry_exhausted_excel_result(payload):
             return _build_direct_excel_retry_result(payload)
+        if _is_successful_excel_file_result(payload):
+            return _build_direct_excel_success_result(payload)
         return result
 
     @llm_tool(name="convert_to_pdf")

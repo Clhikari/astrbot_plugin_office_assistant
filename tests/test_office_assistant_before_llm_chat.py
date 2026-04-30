@@ -28,6 +28,7 @@ from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_STATIC_DOCUMENT_TOOLS,
 )
 from astrbot_plugin_office_assistant.services.upload_session_service import (
+    EVENT_UPLOAD_CACHE_ATTR,
     UploadSessionService,
 )
 
@@ -745,6 +746,76 @@ async def test_execute_excel_script_returns_direct_message_after_retry_exhaustio
     assert isinstance(result, MessageEventResult)
     assert result.is_stopped()
     assert "最多 3 次重试" in result.get_plain_text()
+
+
+@pytest.mark.asyncio
+async def test_execute_excel_script_stops_after_successful_file_delivery():
+    async with _managed_plugin() as managed:
+        event = _build_event()
+        managed.plugin._runtime.file_tool_service.execute_excel_script = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "success": True,
+                    "mode": "file",
+                    "output_name": "课表清单.xlsx",
+                    "quality_summary": {"file_type": "excel", "warnings": []},
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        result = await managed.plugin.execute_excel_script(
+            event,
+            script="workbook.save(output_path)",
+            output_name="课表清单.xlsx",
+        )
+
+    assert isinstance(result, MessageEventResult)
+    assert result.is_stopped()
+    assert "课表清单.xlsx" in result.get_plain_text()
+
+
+@pytest.mark.asyncio
+async def test_execute_excel_script_fills_single_uploaded_input_when_script_uses_input_files():
+    async with _managed_plugin() as managed:
+        event = _build_event()
+        setattr(
+            event,
+            EVENT_UPLOAD_CACHE_ATTR,
+            [
+                {
+                    "original_name": "名单.xlsx",
+                    "file_suffix": ".xlsx",
+                    "stored_name": "mixed_empty_sheets.xlsx",
+                    "source_path": "",
+                    "is_supported": True,
+                }
+            ],
+        )
+        execute_excel_script = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "success": True,
+                    "mode": "text",
+                    "result_text": "ok",
+                },
+                ensure_ascii=False,
+            )
+        )
+        managed.plugin._runtime.file_tool_service.execute_excel_script = (
+            execute_excel_script
+        )
+
+        result = await managed.plugin.execute_excel_script(
+            event,
+            script="input_path = input_files[0]\nresult_text = 'ok'",
+            output_name="名单清洗结果.xlsx",
+        )
+
+    assert json.loads(result)["result_text"] == "ok"
+    execute_excel_script.assert_awaited_once()
+    call_kwargs = execute_excel_script.await_args.kwargs
+    assert call_kwargs["input_files"] == ["mixed_empty_sheets.xlsx"]
 
 
 @pytest.mark.asyncio

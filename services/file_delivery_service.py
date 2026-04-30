@@ -45,6 +45,7 @@ class FileDeliveryService:
         oversized_template: str,
         success_message: str | None = None,
         block_quality_warnings: bool = False,
+        quality_warning_input_paths=None,
     ) -> str | None:
         delivery_error, _ = await self.deliver_generated_file_with_result(
             event,
@@ -53,6 +54,7 @@ class FileDeliveryService:
             oversized_template=oversized_template,
             success_message=success_message,
             block_quality_warnings=block_quality_warnings,
+            quality_warning_input_paths=quality_warning_input_paths,
         )
         return delivery_error
 
@@ -65,6 +67,7 @@ class FileDeliveryService:
         oversized_template: str,
         success_message: str | None = None,
         block_quality_warnings: bool = False,
+        quality_warning_input_paths=None,
     ) -> tuple[str | None, GeneratedFileDeliveryResult]:
         delivery_result = (
             await self._generated_file_delivery_service.deliver_generated_file(
@@ -72,6 +75,7 @@ class FileDeliveryService:
                 output_path,
                 success_message=success_message,
                 block_quality_warnings=block_quality_warnings,
+                quality_warning_input_paths=quality_warning_input_paths,
             )
         )
         delivery_error = self._format_generated_file_delivery_error(

@@ -110,6 +110,7 @@ class RequestHookService:
     _EXCEL_ROUTING_NOTICE_KEY = "excel_routing_guide"
     _EXCEL_READ_NOTICE_KEY = "excel_read_guide"
     _EXCEL_SCRIPT_NOTICE_KEY = "excel_script_guide"
+    _EXCEL_DOMAIN_NOTICE_KEY_PREFIX = "excel_domain_guide:"
     _WORKBOOK_CORE_NOTICE_KEY = "workbook_core_guide"
 
     def __init__(
@@ -355,6 +356,15 @@ class RequestHookService:
                     context,
                     self.prompt_context_service.build_excel_script_section(),
                 )
+            for scenario in self._detect_excel_domain_scenarios(request_text):
+                notice_key = f"{self._EXCEL_DOMAIN_NOTICE_KEY_PREFIX}{scenario}"
+                if self._consume_session_notice_once(context.event, notice_key):
+                    self._append_notice_section(
+                        context,
+                        self.prompt_context_service.build_excel_domain_section(
+                            scenario
+                        ),
+                    )
         if workbook_tools_available and self._consume_session_notice_once(
             context.event, self._WORKBOOK_CORE_NOTICE_KEY
         ):
@@ -362,6 +372,21 @@ class RequestHookService:
                 context,
                 self.prompt_context_service.build_workbook_tool_guide_section(),
             )
+
+    @staticmethod
+    def _detect_excel_domain_scenarios(request_text: str) -> list[str]:
+        normalized = request_text or ""
+        scenarios: list[str] = []
+        checks = (
+            ("schedule", r"(课表|课程表|排课|班级课表|CourseList|class_schedule)"),
+            ("dashboard", r"(Dashboard|仪表盘|看板)"),
+            ("chart", r"(饼图|pie chart|圆环图|doughnut|图表)"),
+            ("pivot", r"(PivotSummary|数据透视|透视表|SUMIFS|汇总透视)"),
+        )
+        for scenario, pattern in checks:
+            if re.search(pattern, normalized, flags=re.IGNORECASE):
+                scenarios.append(scenario)
+        return scenarios
 
     @classmethod
     def _should_inject_document_tool_guide(cls, *, request_text: str) -> bool:

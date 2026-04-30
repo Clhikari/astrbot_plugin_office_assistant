@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,13 +23,8 @@ class GeneratedFileDeliveryService:
     _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
     _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
-    _MAX_TEXT_LAYOUT_WARNING_EXAMPLES = 6
-    _DEFAULT_EXCEL_COLUMN_WIDTH = 13.0
-    _DEFAULT_EXCEL_ROW_HEIGHT = 15.0
-    _TEXT_WIDTH_MARGIN = 1.2
     _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
     _PIE_CHART_CLASS_NAMES = {"DoughnutChart", "PieChart", "ProjectedPieChart"}
-    _NON_BLOCKING_QUALITY_WARNINGS = {"未发现 Issues Sheet", "Issues Sheet 没有数据行"}
 
     def __init__(self, *, workspace_service, delivery_service) -> None:
         self._workspace_service = workspace_service
@@ -243,109 +239,13 @@ class GeneratedFileDeliveryService:
         return count
 
     @classmethod
-    def _column_width(cls, worksheet, column: int) -> float:
-        try:
-            from openpyxl.utils import get_column_letter
-        except ImportError:
-            return cls._DEFAULT_EXCEL_COLUMN_WIDTH
-
-        width = worksheet.column_dimensions[get_column_letter(column)].width
-        try:
-            return float(width or cls._DEFAULT_EXCEL_COLUMN_WIDTH)
-        except (TypeError, ValueError):
-            return cls._DEFAULT_EXCEL_COLUMN_WIDTH
-
-    @classmethod
-    def _row_height(cls, worksheet, row: int) -> float:
-        height = worksheet.row_dimensions[row].height
-        try:
-            return float(height or cls._DEFAULT_EXCEL_ROW_HEIGHT)
-        except (TypeError, ValueError):
-            return cls._DEFAULT_EXCEL_ROW_HEIGHT
-
-    @classmethod
-    def _cell_display_bounds(cls, worksheet, cell) -> tuple[int, int, int, int] | None:
-        for merged_range in worksheet.merged_cells.ranges:
-            if cell.coordinate not in merged_range:
-                continue
-            if cell.row != merged_range.min_row or cell.column != merged_range.min_col:
-                return None
-            return (
-                merged_range.min_row,
-                merged_range.min_col,
-                merged_range.max_row,
-                merged_range.max_col,
-            )
-        return (cell.row, cell.column, cell.row, cell.column)
-
-    @classmethod
-    def _cell_text_layout_is_risky(cls, worksheet, cell) -> bool:
-        value = cell.value
-        if not isinstance(value, str) or not value.strip() or value.startswith("="):
-            return False
-
-        bounds = cls._cell_display_bounds(worksheet, cell)
-        if bounds is None:
-            return False
-
-        min_row, min_col, max_row, max_col = bounds
-        available_width = sum(
-            cls._column_width(worksheet, column)
-            for column in range(min_col, max_col + 1)
-        )
-        available_height = sum(
-            cls._row_height(worksheet, row) for row in range(min_row, max_row + 1)
-        )
-        line_capacity = max(int(available_height / cls._DEFAULT_EXCEL_ROW_HEIGHT), 1)
-        lines = [line for line in value.replace("\r\n", "\n").split("\n") if line]
-        if not lines:
-            return False
-
-        has_line_break = len(lines) > 1
-        has_long_line = any(
-            len(line) > available_width * cls._TEXT_WIDTH_MARGIN for line in lines
-        )
-        wrap_text = bool(cell.alignment.wrap_text)
-        if has_line_break and not wrap_text:
-            return True
-        if has_line_break and len(lines) > line_capacity:
-            return True
-        return has_long_line and not wrap_text
-
-    @classmethod
-    def _collect_text_layout_warnings(cls, worksheet) -> list[str]:
-        risky_cells: list[str] = []
-        for row in worksheet.iter_rows():
-            for cell in row:
-                if cls._cell_text_layout_is_risky(worksheet, cell):
-                    risky_cells.append(cell.coordinate)
-
-        if not risky_cells:
-            return []
-
-        examples = "、".join(risky_cells[: cls._MAX_TEXT_LAYOUT_WARNING_EXAMPLES])
-        suffix = (
-            "等" if len(risky_cells) > cls._MAX_TEXT_LAYOUT_WARNING_EXAMPLES else ""
-        )
-        return [
-            (
-                f"{worksheet.title} 有 {len(risky_cells)} 个文本单元格可能显示不全："
-                f"{examples}{suffix}；请设置自动换行并调整列宽或行高"
-            )
-        ]
-
-    @classmethod
     def _quality_warnings_requiring_review(
         cls,
         quality_summary: dict[str, Any] | None,
     ) -> list[str]:
         if quality_summary is None:
             return []
-        return [
-            warning
-            for warning in quality_summary.get("warnings", [])
-            if warning not in cls._NON_BLOCKING_QUALITY_WARNINGS
-        ]
+        return list(quality_summary.get("warnings", []))
 
     @staticmethod
     def _extract_chart_reference_formula(reference) -> str | None:
@@ -484,9 +384,6 @@ class GeneratedFileDeliveryService:
                     issue_type_counts[issue_type] = (
                         issue_type_counts.get(issue_type, 0) + 1
                     )
-        elif data_row_count:
-            warnings.append("Issues Sheet 缺少 Type/IssueType 列，无法统计异常类型")
-
         return data_row_count, issue_type_counts, warnings
 
     @classmethod
@@ -580,6 +477,79 @@ class GeneratedFileDeliveryService:
         return warnings
 
     @classmethod
+    def _collect_course_list_warnings(
+        cls,
+        worksheet,
+        headers: list[Any],
+    ) -> list[str]:
+        if worksheet.title.lower() != "courselist":
+            return []
+
+        field_aliases = {
+            "Class": ("Class", "班级"),
+            "Weekday": ("Weekday", "Day", "星期", "周"),
+            "SectionStart": ("SectionStart", "Section Start", "StartSection"),
+            "SectionEnd": ("SectionEnd", "Section End", "EndSection"),
+            "Course": ("Course", "课程"),
+            "Teacher": ("Teacher", "老师", "教师"),
+            "Room": ("Room", "Classroom", "教室", "地点"),
+            "Weeks": ("Weeks", "Week", "周次"),
+        }
+        columns = {
+            field: cls._find_header_column(headers, aliases)
+            for field, aliases in field_aliases.items()
+        }
+        missing_headers = [field for field, column in columns.items() if column is None]
+        if missing_headers:
+            return ["CourseList 缺少字段：" + "、".join(missing_headers)]
+
+        note_rows: list[int] = []
+        incomplete_rows: list[int] = []
+        required_fields = tuple(field_aliases)
+        for row_index in range(2, worksheet.max_row + 1):
+            row_values = [
+                worksheet.cell(row=row_index, column=column).value
+                for column in range(1, worksheet.max_column + 1)
+            ]
+            if all(value in (None, "") for value in row_values):
+                continue
+
+            course_value = str(
+                worksheet.cell(row=row_index, column=columns["Course"]).value or ""
+            ).strip()
+            if any(
+                marker in course_value for marker in ("备注", "说明", "注：", "注:")
+            ):
+                note_rows.append(row_index)
+                continue
+
+            missing_fields = [
+                field
+                for field in required_fields
+                if worksheet.cell(row=row_index, column=columns[field]).value
+                in (None, "")
+            ]
+            if missing_fields:
+                incomplete_rows.append(row_index)
+
+        warnings: list[str] = []
+        if note_rows:
+            examples = "、".join(f"第 {row} 行" for row in note_rows[:3])
+            suffix = "等" if len(note_rows) > 3 else ""
+            warnings.append(
+                f"CourseList 有 {len(note_rows)} 行疑似备注被写入课程明细："
+                f"{examples}{suffix}"
+            )
+        if incomplete_rows:
+            examples = "、".join(f"第 {row} 行" for row in incomplete_rows[:3])
+            suffix = "等" if len(incomplete_rows) > 3 else ""
+            warnings.append(
+                f"CourseList 有 {len(incomplete_rows)} 行课程明细字段不完整："
+                f"{examples}{suffix}"
+            )
+        return warnings
+
+    @classmethod
     def _collect_sheet_quality_warnings(
         cls,
         worksheet,
@@ -614,7 +584,6 @@ class GeneratedFileDeliveryService:
                     f"{worksheet.title} 有 {dirty_text_cells} 个单元格仍包含换行或 Tab"
                 )
 
-        warnings.extend(cls._collect_text_layout_warnings(worksheet))
         warnings.extend(
             cls._collect_gross_margin_warnings(
                 worksheet,
@@ -625,10 +594,44 @@ class GeneratedFileDeliveryService:
         warnings.extend(cls._collect_product_detail_warnings(worksheet, headers))
         warnings.extend(cls._collect_inventory_impact_warnings(worksheet, headers))
         warnings.extend(cls._collect_summary_sheet_warnings(worksheet, headers))
+        warnings.extend(cls._collect_course_list_warnings(worksheet, headers))
         return warnings
 
     @classmethod
-    def _build_excel_quality_summary(cls, output_path: Path) -> dict[str, Any] | None:
+    def _collect_input_sheet_names(cls, input_paths: Sequence[Path] | None) -> set[str]:
+        if not input_paths:
+            return set()
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            return set()
+
+        sheet_names: set[str] = set()
+        for input_path in input_paths:
+            if input_path.suffix.lower() not in cls._EXCEL_FORMULA_SUFFIXES:
+                continue
+            workbook = None
+            try:
+                workbook = load_workbook(
+                    input_path,
+                    data_only=False,
+                    read_only=True,
+                )
+                sheet_names.update(workbook.sheetnames)
+            except Exception as exc:
+                logger.debug(f"[文件管理] 读取输入工作簿 Sheet 名失败: {exc}")
+            finally:
+                if workbook is not None:
+                    workbook.close()
+        return sheet_names
+
+    @classmethod
+    def _build_excel_quality_summary(
+        cls,
+        output_path: Path,
+        *,
+        quality_warning_input_paths: Sequence[Path] | None = None,
+    ) -> dict[str, Any] | None:
         if output_path.suffix.lower() not in cls._EXCEL_FORMULA_SUFFIXES:
             return None
 
@@ -643,6 +646,9 @@ class GeneratedFileDeliveryService:
             return {"file_type": "excel", "warnings": [f"无法读取质量摘要：{exc}"]}
 
         try:
+            input_sheet_names = cls._collect_input_sheet_names(
+                quality_warning_input_paths
+            )
             sheet_summaries: list[dict[str, Any]] = []
             formula_count = 0
             chart_count = 0
@@ -674,17 +680,18 @@ class GeneratedFileDeliveryService:
                     )
                 )
                 formula_count += cls._count_sheet_formulas(worksheet)
-                warnings.extend(
-                    cls._collect_sheet_quality_warnings(
-                        worksheet,
-                        headers,
-                        data_row_count=data_row_count,
-                        chart_count=sheet_chart_count,
-                        conditional_formatting_count=(
-                            sheet_conditional_formatting_count
-                        ),
+                if worksheet.title not in input_sheet_names:
+                    warnings.extend(
+                        cls._collect_sheet_quality_warnings(
+                            worksheet,
+                            headers,
+                            data_row_count=data_row_count,
+                            chart_count=sheet_chart_count,
+                            conditional_formatting_count=(
+                                sheet_conditional_formatting_count
+                            ),
+                        )
                     )
-                )
                 sheet_issues_rows, sheet_issue_type_counts, issue_warnings = (
                     cls._collect_issues_sheet_state(
                         worksheet,
@@ -696,11 +703,6 @@ class GeneratedFileDeliveryService:
                     issues_rows = sheet_issues_rows
                     issue_type_counts.update(sheet_issue_type_counts)
                     warnings.extend(issue_warnings)
-
-            if issues_rows is None:
-                warnings.append("未发现 Issues Sheet")
-            elif issues_rows == 0:
-                warnings.append("Issues Sheet 没有数据行")
 
             return {
                 "file_type": "excel",
@@ -723,6 +725,7 @@ class GeneratedFileDeliveryService:
         *,
         success_message: str | None = None,
         block_quality_warnings: bool = False,
+        quality_warning_input_paths: Sequence[Path] | None = None,
     ) -> GeneratedFileDeliveryResult:
         if output_path is None or not output_path.exists():
             logger.info(
@@ -753,7 +756,10 @@ class GeneratedFileDeliveryService:
                 validation_errors=validation_errors,
             )
 
-        quality_summary = self._build_excel_quality_summary(output_path)
+        quality_summary = self._build_excel_quality_summary(
+            output_path,
+            quality_warning_input_paths=quality_warning_input_paths,
+        )
         quality_warnings = self._quality_warnings_requiring_review(quality_summary)
         if block_quality_warnings and quality_warnings:
             return GeneratedFileDeliveryResult(
