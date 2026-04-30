@@ -478,6 +478,23 @@ def test_excel_script_service_build_sandbox_paths_uses_relative_runtime_paths():
     assert "Q1经营复盘" not in paths.remote_output_path
 
 
+def test_excel_script_service_build_sandbox_paths_preserves_xlsm_suffix():
+    with patch(
+        "astrbot_plugin_office_assistant.services.excel_script_service.uuid4",
+        return_value=SimpleNamespace(hex="run"),
+    ):
+        paths = ExcelScriptService._build_sandbox_paths(
+            SimpleNamespace(workspace_root="/workspace"),
+            input_files=[],
+            output_path=Path("macro-report.xlsm"),
+        )
+
+    assert (
+        paths.output_path == ".office_assistant/excel_scripts/run/_output/output.xlsm"
+    )
+    assert paths.remote_output_path == paths.output_path
+
+
 def test_excel_script_service_build_prepare_script_uses_file_parent_in_sandbox():
     script = ExcelScriptService._build_prepare_script(
         [
@@ -7038,6 +7055,35 @@ async def test_file_tool_service_execute_excel_script_returns_generated_file():
     assert "requires_review" not in payload
     assert "quality_warnings" not in payload
     delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_rejects_legacy_xls_output():
+    event = _build_event()
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-xls-output",
+        office_libs={"openpyxl": object()},
+        delivery_service=delivery_service,
+    ) as managed:
+        result = await managed.service.execute_excel_script(
+            event,
+            script=(
+                "workbook = Workbook()\n"
+                "worksheet = workbook.active\n"
+                "worksheet['A1'] = '导出'\n"
+                "workbook.save(output_path)\n"
+            ),
+            output_name="script-output.xls",
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is False
+    assert "仅支持 .xlsx 或 .xlsm" in payload["error"]
+    assert payload["retry_exhausted"] is True
+    delivery_service.send_file_with_preview.assert_not_called()
 
 
 @pytest.mark.asyncio

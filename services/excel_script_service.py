@@ -63,6 +63,7 @@ class SandboxScriptPaths:
 
 class ExcelScriptService:
     _EXCEL_SUFFIXES = EXCEL_SUFFIXES
+    _SCRIPT_OUTPUT_SUFFIXES = frozenset({".xlsx", ".xlsm"})
     _MAX_SCRIPT_RETRIES = 3
     _RETRY_COUNT_EVENT_KEY = EXCEL_SCRIPT_RETRY_FAILURES_EVENT_KEY
     _SCRIPT_TIMEOUT_SECONDS = 30
@@ -327,6 +328,13 @@ class ExcelScriptService:
                     script=normalized_script,
                     error="错误：输出文件路径解析失败",
                 )
+            if resolved_path.suffix.lower() not in self._SCRIPT_OUTPUT_SUFFIXES:
+                return self._build_non_retry_result(
+                    event,
+                    script=normalized_script,
+                    error="错误：Excel 脚本导出仅支持 .xlsx 或 .xlsm，不能导出旧版 .xls",
+                    retry_exhausted=True,
+                )
             resolved_output_path = resolved_path
             resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -544,7 +552,12 @@ class ExcelScriptService:
         runtime_output_path: str | None = None
         remote_output_path: str | None = None
         if output_path is not None:
-            relative_output_path = exec_relative_dir / "_output" / "output.xlsx"
+            output_suffix = output_path.suffix.lower()
+            if output_suffix not in cls._SCRIPT_OUTPUT_SUFFIXES:
+                output_suffix = ".xlsx"
+            relative_output_path = (
+                exec_relative_dir / "_output" / f"output{output_suffix}"
+            )
             runtime_output_path = relative_output_path.as_posix()
             remote_output_path = runtime_output_path
 
