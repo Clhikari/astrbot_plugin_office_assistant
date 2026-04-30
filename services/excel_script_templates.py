@@ -111,23 +111,19 @@ def build_runner_script(
                 if output_alias_path.exists():
                     shutil.copy2(output_alias_path, output_path)
             if output_path is not None and not output_path.exists():
-                output_dir = output_path.parent
                 known_input_names = {{path.name for path in input_files}}
                 candidates = []
-                for search_dir in (exec_dir, output_dir):
-                    if not search_dir.exists():
+                for candidate in exec_dir.iterdir():
+                    if not candidate.is_file():
                         continue
-                    for candidate in search_dir.iterdir():
-                        if not candidate.is_file():
-                            continue
-                        if candidate.resolve() == result_path.resolve():
-                            continue
-                        if candidate.resolve() == output_path.resolve():
-                            continue
-                        if candidate.name in known_input_names:
-                            continue
-                        if candidate.suffix.lower() in {{".xlsx", ".xlsm", ".xls"}}:
-                            candidates.append(candidate)
+                    if candidate.resolve() == result_path.resolve():
+                        continue
+                    if candidate.resolve() == output_path.resolve():
+                        continue
+                    if candidate.name in known_input_names:
+                        continue
+                    if candidate.suffix.lower() in {{".xlsx", ".xlsm", ".xls"}}:
+                        candidates.append(candidate)
                 if len(candidates) == 1:
                     shutil.copy2(candidates[0], output_path)
             output_changed = False

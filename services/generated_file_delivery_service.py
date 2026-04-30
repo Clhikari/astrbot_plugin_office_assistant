@@ -19,7 +19,9 @@ class GeneratedFileDeliveryResult:
 
 class GeneratedFileDeliveryService:
     _EXCEL_FORMULA_SUFFIXES = {".xlsx", ".xlsm"}
-    _FORMULA_DIVISOR_RE = re.compile(r"/\s*(\$?[A-Z]{1,3}\$?\d+)")
+    _FORMULA_DIVISOR_RE = re.compile(
+        r"/\s*((?:(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?\$?[A-Z]{1,3}\$?\d+)"
+    )
     _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
     _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
@@ -33,6 +35,31 @@ class GeneratedFileDeliveryService:
     @classmethod
     def _normalize_cell_reference(cls, cell_reference: str) -> str:
         return cell_reference.replace("$", "").upper()
+
+    @classmethod
+    def _normalize_formula_reference(cls, reference: str) -> str:
+        return reference.replace("$", "").replace("'", "").replace(" ", "").upper()
+
+    @classmethod
+    def _split_formula_reference(cls, reference: str) -> tuple[str | None, str]:
+        normalized = reference.replace("$", "")
+        if "!" not in normalized:
+            return None, cls._normalize_cell_reference(normalized)
+
+        sheet_name, cell_reference = normalized.rsplit("!", 1)
+        sheet_name = sheet_name.strip()
+        if sheet_name.startswith("'") and sheet_name.endswith("'"):
+            sheet_name = sheet_name[1:-1].replace("''", "'")
+        return sheet_name, cls._normalize_cell_reference(cell_reference)
+
+    @staticmethod
+    def _format_formula_reference(
+        sheet_name: str | None,
+        cell_reference: str,
+    ) -> str:
+        if sheet_name:
+            return f"{sheet_name}!{cell_reference}"
+        return cell_reference
 
     @staticmethod
     def _normalize_header(header: Any) -> str:
@@ -129,8 +156,8 @@ class GeneratedFileDeliveryService:
 
     @classmethod
     def _formula_guards_divisor(cls, formula: str, cell_reference: str) -> bool:
-        reference = cls._normalize_cell_reference(cell_reference)
-        normalized = formula.upper().replace("$", "").replace(" ", "")
+        reference = cls._normalize_formula_reference(cell_reference)
+        normalized = cls._normalize_formula_reference(formula)
         non_zero_checks = (
             f"{reference}<>0",
             f"0<>{reference}",
@@ -194,15 +221,39 @@ class GeneratedFileDeliveryService:
                             if len(errors) >= cls._MAX_VALIDATION_ERRORS:
                                 return errors
                         for match in cls._FORMULA_DIVISOR_RE.finditer(formula):
-                            divisor_ref = cls._normalize_cell_reference(match.group(1))
-                            if cls._formula_guards_divisor(formula, divisor_ref):
+                            divisor_reference = match.group(1)
+                            if cls._formula_guards_divisor(
+                                formula,
+                                divisor_reference,
+                            ):
                                 continue
-                            divisor_value = worksheet[divisor_ref].value
+                            sheet_name, divisor_ref = cls._split_formula_reference(
+                                divisor_reference
+                            )
+                            divisor_sheet = worksheet
+                            if sheet_name:
+                                try:
+                                    divisor_sheet = workbook[sheet_name]
+                                except KeyError:
+                                    errors.append(
+                                        (
+                                            f"{worksheet.title}!{cell.coordinate} 公式 "
+                                            f"{formula} 引用了不存在的 Sheet：{sheet_name}"
+                                        )
+                                    )
+                                    if len(errors) >= cls._MAX_VALIDATION_ERRORS:
+                                        return errors
+                                    continue
+                            divisor_value = divisor_sheet[divisor_ref].value
                             if divisor_value in (None, "", 0):
+                                display_ref = cls._format_formula_reference(
+                                    sheet_name,
+                                    divisor_ref,
+                                )
                                 errors.append(
                                     (
                                         f"{worksheet.title}!{cell.coordinate} 公式 "
-                                        f"{formula} 的分母 {divisor_ref} 为空或 0"
+                                        f"{formula} 的分母 {display_ref} 为空或 0"
                                     )
                                 )
                                 if len(errors) >= cls._MAX_VALIDATION_ERRORS:

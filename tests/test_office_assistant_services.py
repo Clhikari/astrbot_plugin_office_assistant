@@ -5371,6 +5371,49 @@ async def test_generated_file_delivery_service_rejects_unsafe_excel_formula():
 
 
 @pytest.mark.asyncio
+async def test_generated_file_delivery_service_rejects_cross_sheet_zero_divisor():
+    workspace_dir = _make_workspace("generated-file-delivery-cross-sheet-divisor")
+    event = _build_event()
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    executor = ThreadPoolExecutor(max_workers=1)
+    openpyxl = pytest.importorskip("openpyxl")
+    output_path = workspace_dir / "formula-risk.xlsx"
+    workbook = openpyxl.Workbook()
+    summary = workbook.active
+    summary.title = "Summary"
+    rates = workbook.create_sheet("Rates")
+    summary["A1"] = 100
+    rates["B1"] = 0
+    summary["C1"] = "=A1/'Rates'!B1"
+    workbook.save(output_path)
+
+    try:
+        workspace_service = WorkspaceService(
+            plugin_data_path=workspace_dir,
+            executor=executor,
+            office_libs={},
+            max_file_size=64 * 1024,
+            feature_settings={},
+        )
+        service = GeneratedFileDeliveryService(
+            workspace_service=workspace_service,
+            delivery_service=delivery_service,
+        )
+
+        result = await service.deliver_generated_file(event, output_path)
+    finally:
+        executor.shutdown(wait=False)
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    assert result.status == "invalid"
+    assert result.validation_errors is not None
+    assert "Summary!C1" in result.validation_errors[0]
+    assert "Rates!B1" in result.validation_errors[0]
+    delivery_service.send_file_with_preview.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_generated_file_delivery_service_allows_guarded_excel_formula():
     workspace_dir = _make_workspace("generated-file-delivery-guarded-formula")
     event = _build_event()
@@ -7688,6 +7731,40 @@ async def test_file_tool_service_execute_excel_script_direct_save_formats_tables
     assert payload["mode"] == "file"
     assert payload["quality_summary"]["warnings"] == []
     delivery_service.send_file_with_preview.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_does_not_copy_existing_workbook_when_output_missing():
+    event = _build_event()
+    openpyxl = pytest.importorskip("openpyxl")
+
+    delivery_service = MagicMock()
+    delivery_service.send_file_with_preview = AsyncMock()
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-output-missing",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=False,
+        delivery_service=delivery_service,
+    ) as managed:
+        stale_path = managed.workspace_dir / "stale.xlsx"
+        stale_workbook = openpyxl.Workbook()
+        stale_workbook.active["A1"] = "old"
+        stale_workbook.save(stale_path)
+
+        result = await managed.service.execute_excel_script(
+            event,
+            script="workbook = Workbook()\n",
+            output_name="missing-output.xlsx",
+        )
+
+        payload = json.loads(result)
+        assert stale_path.exists()
+        assert not (managed.workspace_dir / "missing-output.xlsx").exists()
+
+    assert payload["success"] is False
+    assert "既没有设置 result_text，也没有写出 output_path" in payload["error"]
+    delivery_service.send_file_with_preview.assert_not_awaited()
 
 
 @pytest.mark.asyncio
