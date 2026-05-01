@@ -28,6 +28,7 @@ flowchart TB
     APS["access_policy_service.py"]
     LLM["llm_request_policy.py"]
     RHS["request_hook_service.py"]
+    EIR["excel_intent_router.py"]
     RFU["request_follow_up.py<br/>request_hook_notice_helpers.py"]
     PCS["prompt_context_service.py"]
     UPS["upload_prompt_service.py"]
@@ -40,6 +41,7 @@ flowchart TB
   RPS --> APS
   RPS --> LLM
   LLM --> RHS
+  RHS --> EIR
   RHS --> RFU
   RHS --> PCS
   RHS --> UPS
@@ -67,8 +69,10 @@ flowchart TB
     MCP["mcp_server<br/>document tools<br/>workbook tools"]
     WC["Word Workflow Contract<br/>create_document<br/>add_blocks<br/>finalize_document<br/>export_document"]
     WB["Workbook Workflow Contract<br/>create_workbook<br/>write_rows<br/>export_workbook"]
+    XFT["Excel File Tool Contract<br/>read_workbook<br/>execute_excel_script"]
   end
 
+  M --> XFT
   PRB --> AG
   PRB --> MCP
   AG --> AA --> REG
@@ -110,6 +114,7 @@ flowchart TB
     FRS["file_read_service.py"]
     WRS["word_read_service.py"]
     FTS["file_tool_service.py"]
+    ESS["excel_script_service.py"]
     OGS["office_generate_service.py"]
     PCS2["pdf_convert_service.py"]
   end
@@ -120,6 +125,12 @@ flowchart TB
   FPS --> FTS
   FPS --> OGS
   FPS --> PCS2
+  XFT --> FTS
+  FTS --> FRS
+  FTS --> ESS
+  FTS --> OGS
+  FTS --> PCS2
+  ESS --> WSS
 
   subgraph RV["Rendering Conversion And Preview"]
     WRJ["word_renderer_js<br/>Primary backend for complex Word rendering"]
@@ -141,6 +152,7 @@ flowchart TB
   end
 
   FTS --> FDS
+  ESS --> FDS
   GFD --> DSV
   FDS --> GFD
   OG --> FDS
@@ -159,4 +171,8 @@ flowchart TB
   FI -. shows Node renderer status .-> WRJ
   RHS -. injects workflow guidance .-> WC
   RHS -. injects workbook guide and follow-up notice .-> WB
+  RHS -. filters execute_excel_script by runtime and allow_local_excel_script .-> XFT
+  EIR -. selects Excel read, workbook, or script guidance .-> XFT
+  EIR -. can select workbook primitive guidance .-> WB
+  GFD -. reports generated Excel quality warnings .-> ESS
 ```

@@ -8,7 +8,7 @@
 
 **让你的聊天bot能够生成office文件**
 
-[![Version](https://img.shields.io/badge/version-v1.6.2-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
+[![Version](https://img.shields.io/badge/version-v1.7.0--preview-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-18%2B-5FA04E.svg)](https://nodejs.org/)
 
@@ -23,7 +23,6 @@
 - [快速开始](#快速开始)
 - [配置说明](#配置说明)
 - [工具与命令](#工具与命令)
-- [Word 工作流](#word-工作流)
 - [支持的文件格式](#支持的文件格式)
 - [系统依赖安装](#系统依赖安装)
 - [Docker 部署](#docker-部署)
@@ -56,6 +55,8 @@
 - 插件生效时会自动隐藏 `astrbot_execute_shell` 等执行类工具。
 - 默认只能访问工作区内路径，可配置放开。
 - 复杂 Word 走四步链：`create_document → add_blocks → finalize_document → export_document`，支持封面、正文、列表、表格、图片、目录等。
+- Excel 分三类：`read_workbook` 读已有表，`create_workbook → write_rows → export_workbook` 新建简单表，`execute_excel_script` 处理公式、图表、条件格式和复杂编辑。
+- AstrBot computer runtime 会影响 Excel 脚本：`sandbox` 可显示 `execute_excel_script`；`local` 表示脚本会在机器人本机运行，默认隐藏，需要打开 `allow_local_excel_script`；`none` 不能执行脚本。读表和 workbook 三步链不受影响。
 
 ---
 
@@ -87,7 +88,7 @@ npm run build
 ### 4. 试一下
 
 - 发个 `.txt` 或 `.md` 给机器人，让它读取并总结
-- 让机器人生成一个 `.xlsx`
+- 上传 `.xlsx` 让机器人先读表；要公式、图表或条件格式时，让它用脚本生成 Excel
 - 装了转换依赖的话，试一次 Office → PDF
 
 ---
@@ -101,8 +102,12 @@ npm run build
 | `enable_features_in_group` | `false` | 要在群聊里用插件 |
 | `require_at_in_group` | `true` | 群聊里不想强制 @ |
 | `enable_docx_image_review` | `true` | 不需要模型读 Word 里的图片 |
-| `auto_block_execution_tools` | `true` | 不想自动隐藏执行类工具 |
+| `auto_block_execution_tools` | `true` | 建议保持开启，用来隐藏通用 shell/python 执行工具 |
+| `allow_local_excel_script` | `false` | `computer_use_runtime=local` 时开放 `execute_excel_script` |
 | `allow_external_input_files` | `false` | 要读工作区外的文件 |
+| `max_excel_preview_rows` | `2000` | Excel 很大，想减少每个 Sheet 的预览行数 |
+| `max_excel_preview_chars` | `200000` | Excel 单个 Sheet 文本太长 |
+| `max_excel_preview_sheets` | `0` | 只想预览前几个 Sheet；`0` 表示不限 |
 | `enable_pdf_conversion` | `true` | 不需要 Office/PDF 转换 |
 | `auto_delete_files` | `true` | 想保留生成的文件 |
 | `word_style_settings.default_font_name` | 空 | 想统一改 Word 默认字体，比如 Arial |
@@ -116,7 +121,8 @@ npm run build
 | --- | --- | --- | --- |
 | 群聊需要@/引用机器人 (`require_at_in_group`) | bool | true | 群聊中 @ 或引用机器人时才暴露文件工具 |
 | 群聊启用插件功能 (`enable_features_in_group`) | bool | false | 关了的话群聊里插件完全不生效 |
-| 自动屏蔽 shell/python 工具 (`auto_block_execution_tools`) | bool | true | 插件生效时隐藏 `astrbot_execute_*` 系列工具 |
+| 自动屏蔽 shell/python 工具 (`auto_block_execution_tools`) | bool | true | 插件生效时隐藏 `astrbot_execute_shell`、`astrbot_execute_python`、`astrbot_execute_ipython` |
+| 允许本地 Excel 脚本工具 (`allow_local_excel_script`) | bool | false | `computer_use_runtime=local` 时允许 `execute_excel_script` 出现，不影响 `auto_block_execution_tools` 对通用执行工具的屏蔽 |
 | 发送文件时@用户 (`reply_to_user`) | bool | true | 发文件时是否 @ 发起人 |
 
 ### 权限管理（`permission_settings`）
@@ -132,24 +138,32 @@ npm run build
 | 启用 Office 文件生成 (`enable_office_files`) | bool | true | 是否允许 `create_office_file` |
 | 启用 PDF 转换 (`enable_pdf_conversion`) | bool | true | 是否允许 Office ↔ PDF 转换（需系统依赖） |
 
-### 文件限制（`file_settings`）
+### 文件存储与大小（`file_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | 最大文件大小MB (`max_file_size_mb`) | int | 20 | 读取和发送的大小上限 |
-| 启用 Word 图片理解 (`enable_docx_image_review`) | bool | true | 读 `.docx` 时把嵌入图片注入上下文，关了就按纯文本读 |
-| Word图片注入大小上限MB (`max_inline_docx_image_mb`) | int | 2 | 单张图超过这个大小就跳过 |
-| Word图片最多注入张数 (`max_inline_docx_image_count`) | int | 3 | 最多注入几张图到上下文 |
 | 发送后自动删除文件 (`auto_delete_files`) | bool | true | 发完就删，关了就留在工作区 |
+
+### 上传合并与会话（`upload_session_settings`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
 | 文件合并等待时间秒 (`message_buffer_seconds`) | float | 4 | 上传文件后等一会儿，把同一波的文件合在一起 |
 | 旧流程文本缓存时间秒 (`recent_text_ttl_seconds`) | int | 20 | 主要影响"文件和文字一起进来"的老用法，一般不用动 |
 | 上传文件保留时间秒 (`upload_session_ttl_seconds`) | int | 600 | 上传完文件后在当前会话里保留多久，供 `/doc` 命令使用 |
 
-### 路径访问（`path_settings`）
+### 读取设置（`read_settings`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | 允许外部绝对路径 (`allow_external_input_files`) | bool | false | 放开后 `read_file` 和转换工具可以访问工作区外路径，删除不受影响 |
+| Excel预览最大行数 (`max_excel_preview_rows`) | int | 2000 | 读取 Excel 时，每个 Sheet 最多展示多少行。`0` 表示不限 |
+| Excel预览最大字符数 (`max_excel_preview_chars`) | int | 200000 | 读取 Excel 时，每个 Sheet 最多展示多少字符。`0` 表示不限 |
+| Excel预览最大Sheet数 (`max_excel_preview_sheets`) | int | 0 | 读取 Excel 时最多展示多少个 Sheet。`0` 表示不限 |
+| 启用 Word 图片理解 (`enable_docx_image_review`) | bool | true | 读 `.docx` 时把嵌入图片注入上下文，关了就按纯文本读 |
+| Word图片注入大小上限MB (`max_inline_docx_image_mb`) | int | 2 | 单张图超过这个大小就跳过 |
+| Word图片最多注入张数 (`max_inline_docx_image_count`) | int | 3 | 最多注入几张图到上下文 |
 
 ### 预览图（`preview_settings`）
 
@@ -178,11 +192,16 @@ npm run build
 | 工具名 | 干什么 |
 | --- | --- |
 | `read_file` | 读文本、代码、Office、PDF 的内容 |
+| `read_workbook` | 读 Excel，按 Sheet 返回内容 |
 | `create_office_file` | 生成 Word / Excel / PPT（Word 建议走四步链） |
 | `create_document` | 新建 Word 草稿 |
 | `add_blocks` | 往草稿里加内容 |
 | `finalize_document` | 锁定草稿 |
 | `export_document` | 导出 .docx，自动发给用户 |
+| `create_workbook` | 新建 Excel 工作簿草稿 |
+| `write_rows` | 向工作簿写入行数据 |
+| `export_workbook` | 导出 .xlsx，自动发给用户 |
+| `execute_excel_script` | 用受控 Python 脚本生成或修改 Excel |
 | `convert_to_pdf` | Office → PDF |
 | `convert_from_pdf` | PDF → Word 或 Excel |
 
@@ -217,76 +236,6 @@ npm run build
 ```
 
 文件按"平台 + 会话 + 用户"隔离，群里其他人的文件不会混进来。
-
----
-
-## Word 工作流
-
-先建草稿，一块一块填内容，最后锁定导出。适合周报月报、管理层汇报、简历、带表格和图的报告这些东西。
-
-### 流程
-
-1. `create_document`：建草稿，定主题、表格模板、密度、强调色
-2. `add_blocks`：往里加内容，可以多次调用
-3. `finalize_document`：锁定，之后不能再追加
-4. `export_document`：导出 .docx，自动发文件和预览图
-
-```
-┌───────────────────────────┐
-│     create_document       │
-│                           │
-│  theme_name               │
-│  table_template           │
-│  density                  │
-│  accent_color             │
-└─────────────┬─────────────┘
-              │
-              ▼
-┌───────────────────────────┐
-│       add_blocks          │◄──┐
-│                           │   │
-│  page_template hero_banner│   │
-│  heading      paragraph   │   │
-│  list         table image │   │ 可多次调用
-│  summary_card accent_box  │   │
-│  metric_cards page_break  │   │
-│  section_break toc        │   │
-│  group       columns      │   │
-└─────────────┬─────────────┘   │
-              │ 内容完成        │
-              │─────────────────┘
-              ▼
-┌───────────────────────────┐
-│   finalize_document       │
-│       锁定草稿            │
-└─────────────┬─────────────┘
-              │
-              ▼
-┌───────────────────────────┐
-│    export_document        │
-│  导出 .docx + 自动发送    │
-└───────────────────────────┘
-```
-
-### 可选配置
-
-- 主题：`business_report`、`project_review`、`executive_brief`
-- 表格样式：`report_grid`、`metrics_compact`、`minimal`
-- 排版密度：`comfortable`（宽松）或 `compact`（紧凑）
-- 强调色：`accent_color=RRGGBB`
-- 卡片变体：`summary` 或 `conclusion`
-- 页面模板：`business_review_cover`（经营复盘封面）、`technical_resume`（技术简历）
-- 段落和表格支持富文本（粗体、斜体、下划线、颜色、字体、超链接等）和边框
-- 表格支持两层表头（`header_groups`）
-- 支持页眉页脚（首页不同、奇偶页不同）、分节、目录
-
-### 注意
-
-- 中途出错别续旧草稿，重新来一份更稳。
-- 想参考旧版内容，先上传旧文档让模型提取，再用提取结果生成新的。
-
-> [!TIP]
-> 提示写清楚效果会好很多：文档给谁看、要哪些章节、哪些内容用表格或卡片、语气正式还是简洁、排版宽松还是紧凑。
 
 ---
 
@@ -417,6 +366,12 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 
 三种可能：`preview_settings.enable` 关了；缺 `pymupdf`；Office 预览目前只支持 Windows 上的 Word。
 
+### 看不到 `execute_excel_script`？
+
+`sandbox` runtime 下会显示。`local` runtime 下默认隐藏；如果确认机器人本机可以运行 Excel 脚本，把 `trigger_settings.allow_local_excel_script` 改成 `true`，并保持 `auto_block_execution_tools=true`。
+
+没有脚本运行环境时，可以用 `read_workbook` 读表，或者用 workbook 三步链生成简单 `.xlsx`。
+
 ### PDF → Excel 出来是空表或者乱的？
 
 PDF → Excel 是抽表格的，扫描件、跨页表格、复杂版面都容易出问题。换一份干净的 PDF，或者装 Java + `tabula-py` 试试。
@@ -440,10 +395,10 @@ PDF → Excel 是抽表格的，扫描件、跨页表格、复杂版面都容易
 ### Excel
 
 - [x] 独立的工作簿/工作表模型，支持 `create_workbook -> write_rows -> export_workbook`
-- [ ] 覆盖大多数新建报表场景：多工作表、表头、分批写入、导出
-- [ ] 补齐常用报表格式：列宽、冻结窗格、自动筛选、数字格式、条件格式
-- [ ] 增加已有 `.xlsx` 的读取与续写能力，支持“先读后建”和基于现有文件继续生成
-- [ ] 高级能力按需补充：公式、图表、复杂模板编辑
+- [x] 已有 `.xlsx/.xls` 读取，支持按 Sheet 输出内容
+- [x] 复杂生成和修改可走 `execute_excel_script`
+- [ ] 继续补 Excel 细节：列宽、冻结窗格、自动筛选、数字格式、模板编辑
+- [ ] 提升 Excel 质量检查的提示精度
 
 ### PPT
 

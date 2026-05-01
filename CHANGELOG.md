@@ -4,6 +4,34 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [v1.7.0-preview] - 2026-05-01
+
+### Added
+
+- 新增 Excel 脚本执行链路，支持在 AstrBot runtime / sandbox 环境中运行受控脚本来生成或修改工作簿。
+- 新增 Excel 脚本模板和路由能力，可按请求类型在读取现有文件、workbook 会话和脚本执行之间选择更合适的流程。
+- 新增 Excel 脚本结果质量检查，生成文件存在明显结构问题或质量提示时，会把 `requires_review` 和 `quality_warnings` 返回给模型。
+- 新增 `allow_local_excel_script` 配置。`computer_use_runtime=local` 时可单独开放 `execute_excel_script`，不需要关闭 `auto_block_execution_tools`，通用 shell/python 执行工具仍会被隐藏。
+- 新增 `add_blocks` 公共 schema 测试辅助函数，方便稳定断言 provider 兼容字段。
+- 新增 `technical_resume` 模板的 `auto_page_break` 支持，可让模板页自行附带分页。
+
+### Changed
+
+- Excel 上传后的提示更贴近当前工具能力，明确什么时候可以读取、什么时候需要重新生成、什么时候当前环境不能执行脚本。
+- Excel 路由进一步细化，英文 `add` / `insert` 等编辑请求、混合文件编辑请求和 `.xls` 请求会进入更合适的处理流程。
+- Excel 脚本执行结果解析更严格，只接受结构化对象结果，并隔离输入文件，降低误读旧文件或无关文件的概率。
+- Excel sandbox 输出会保留调用方请求的文件后缀，避免内容格式和扩展名不一致。
+- `add_blocks` 公共 schema 进一步简化，继续规避 `anyOf`、`oneOf` 和 `type` 列表，同时保留运行时富文本能力。
+- Word 文档工具现在可接受 JSON 字符串形式的 `document_style`、`header_footer` 和 `blocks` 参数，更适配部分模型的工具调用格式。
+
+### Fixed
+
+- 修复 Excel 大工作簿读取预览过长时文本预算没有稳定生效的问题。([#55](https://github.com/Clhikari/astrbot_plugin_office_assistant/pull/55))
+- 修复 Excel 上传提示计数、混合文件编辑提示和英文 `add` / `insert` 编辑请求识别不稳的问题。([#55](https://github.com/Clhikari/astrbot_plugin_office_assistant/pull/55))
+- 修复 `add_blocks` 公共 schema 在部分模型 provider 中因复杂联合类型被拒的问题，同时保留列表和表格中的富文本能力。([#59](https://github.com/Clhikari/astrbot_plugin_office_assistant/pull/59))
+- 修复 `technical_resume` 的 `details` / `lines` 公共 schema 过窄，导致富文本 `runs` 被模型调用层拒绝的问题。([#60](https://github.com/Clhikari/astrbot_plugin_office_assistant/pull/60))
+- 修复 `technical_resume.sections[].heading` 被误传时验证失败的问题，现在会兼容转换为 `title`。([#60](https://github.com/Clhikari/astrbot_plugin_office_assistant/pull/60))
+
 ## [v1.6.3-beta] - 2026-04-19
 
 ### Added
