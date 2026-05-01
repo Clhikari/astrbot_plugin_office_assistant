@@ -512,6 +512,28 @@ async def test_create_document_tool_accepts_json_string_document_style(
 
 
 @pytest.mark.asyncio
+async def test_create_document_tool_accepts_json_string_header_footer(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-json-header-footer"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            output_name="json-header-footer.docx",
+            header_footer='{"footer_text": "Page footer"}',
+        )
+    )
+
+    assert created["success"] is True
+    assert created["document"]["header_footer"]["footer_text"] == "Page footer"
+
+
+@pytest.mark.asyncio
 async def test_create_document_tool_returns_incrementing_short_document_ids():
     tool = CreateDocumentTool()
 

@@ -579,42 +579,43 @@ def _apply_block_normalization_pipeline(block: dict) -> None:
             normalizer(block)
 
 
-def _coerce_optional_mapping(value: object) -> dict[str, object]:
+def _coerce_optional_mapping(value: object, field_name: str) -> dict[str, object]:
     if isinstance(value, Mapping):
         return dict(value)
     if not isinstance(value, str):
-        return {}
+        raise ValueError(f"{field_name} must be an object or JSON object string")
 
     text = value.strip()
     if not text:
-        return {}
+        raise ValueError(f"{field_name} must be a JSON object when passed as a string")
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{field_name} must be valid JSON when passed as a string"
+        ) from exc
     if isinstance(parsed, Mapping):
         return dict(parsed)
-    return {}
+    raise ValueError(f"{field_name} must be a JSON object when passed as a string")
 
 
 def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
     normalized = dict(kwargs)
-    raw_header_footer = normalized.get("header_footer")
-    header_footer = _coerce_optional_mapping(raw_header_footer)
-    if header_footer:
+    header_footer: dict[str, object] = {}
+    if "header_footer" in normalized:
+        raw_header_footer = normalized.get("header_footer")
+        header_footer = _coerce_optional_mapping(raw_header_footer, "header_footer")
         normalized["header_footer"] = header_footer
-    elif "header_footer" in normalized and not isinstance(raw_header_footer, Mapping):
-        normalized.pop("header_footer", None)
 
-    raw_document_style = normalized.get("document_style")
-    document_style = _coerce_optional_mapping(raw_document_style)
+    document_style: dict[str, object] = {}
+    if "document_style" in normalized:
+        raw_document_style = normalized.get("document_style")
+        document_style = _coerce_optional_mapping(raw_document_style, "document_style")
     for key in _DOCUMENT_STYLE_COMPAT_KEYS:
         if key in normalized and key not in document_style:
             document_style[key] = normalized[key]
     if document_style:
         normalized["document_style"] = document_style
-    elif "document_style" in normalized and not isinstance(raw_document_style, Mapping):
-        normalized.pop("document_style", None)
     return normalized
 
 
@@ -655,7 +656,7 @@ def normalize_raw_block_payloads(
             blocks = json.loads(blocks)
         except json.JSONDecodeError as exc:
             raise ValueError(
-                "blocks must be a JSON array when passed as a string"
+                "blocks must be a valid JSON array when passed as a string"
             ) from exc
     if not isinstance(blocks, list):
         raise ValueError("blocks must be a list")
