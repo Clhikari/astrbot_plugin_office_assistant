@@ -248,6 +248,7 @@ class TechnicalResumeData(BaseModel):
     headline: str = ""
     contact_line: str = Field(min_length=1)
     sections: list[ResumeSection] = Field(min_length=1)
+    auto_page_break: bool = False
 
 
 class PageTemplateBlock(BaseModel):

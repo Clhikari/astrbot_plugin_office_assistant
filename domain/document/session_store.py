@@ -420,6 +420,7 @@ class DocumentSessionStore:
                         name=block.data.name,
                         headline=block.data.headline,
                         contact_line=block.data.contact_line,
+                        auto_page_break=block.data.auto_page_break,
                         sections=[
                             ResumeSection(
                                 title=section.title,

@@ -2,6 +2,7 @@ import {
   AlignmentType,
   BorderStyle,
   LineRuleType,
+  PageBreak,
   Paragraph,
   TabStopType,
   TextRun,
@@ -13,6 +14,7 @@ import { FileChild, ThemeConfig } from "../types";
 import {
   arrayValue,
   asObject,
+  booleanValue,
   halfPoint,
   point,
   stringValue,
@@ -45,6 +47,14 @@ export function renderTechnicalResume(
 
   for (const rawSection of arrayValue(data.sections)) {
     children.push(...buildResumeSection(asObject(rawSection)));
+  }
+  if (booleanValue(data.auto_page_break) === true) {
+    children.push(
+      new Paragraph({
+        spacing: { before: point(4) },
+        children: [new PageBreak()],
+      }),
+    );
   }
 
   return children;

@@ -966,6 +966,54 @@ def test_node_renderer_supports_technical_resume_page_template(
     assert _paragraph_run_size(detail) == pytest.approx(10.0, abs=0.2)
 
 
+def test_node_renderer_supports_technical_resume_auto_page_break(
+    workspace_root: Path,
+):
+    resume_block = _technical_resume_block()
+    resume_block["data"]["auto_page_break"] = True
+
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-technical-resume-auto-break",
+        {
+            "document_id": "technical-resume-auto-break",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [resume_block],
+        },
+    )
+
+    assert any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
+
+
+def test_node_renderer_suppresses_technical_resume_auto_page_break_when_body_follows(
+    workspace_root: Path,
+):
+    resume_block = _technical_resume_block()
+    resume_block["data"]["auto_page_break"] = True
+
+    loaded_doc, _ = _render_structured_payload_with_node(
+        workspace_root,
+        "pytest-node-renderer-technical-resume-auto-break-suppressed",
+        {
+            "document_id": "technical-resume-auto-break-suppressed",
+            "metadata": _business_report_metadata(title=""),
+            "blocks": [
+                resume_block,
+                {"type": "heading", "text": "普通 AddBlocks 富文本列表", "level": 1},
+            ],
+        },
+    )
+
+    assert not any(
+        _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
+    )
+    assert _find_paragraph(loaded_doc, "普通 AddBlocks 富文本列表").text == (
+        "普通 AddBlocks 富文本列表"
+    )
+
+
 def test_node_renderer_preserves_multiline_table_cell_text(workspace_root: Path):
     loaded_doc, _ = _render_structured_payload_with_node(
         workspace_root,

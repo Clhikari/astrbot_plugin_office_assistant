@@ -465,6 +465,53 @@ async def test_add_blocks_failure_message_keeps_model_on_same_tool(
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_accepts_json_string_blocks(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-json-blocks")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            output_name="json-blocks.docx",
+        )
+    )
+
+    added = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks='[{"type": "paragraph", "text": "正文"}]',
+        )
+    )
+
+    assert added["success"] is True
+    assert added["document"]["block_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_document_tool_accepts_json_string_document_style(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-json-style")
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            output_name="json-style.docx",
+            document_style=(
+                '{"font_name": "Microsoft YaHei", "heading_color": "1F4E79"}'
+            ),
+        )
+    )
+
+    assert created["success"] is True
+    assert created["document"]["document_style"]["heading_color"] == "1F4E79"
+
+
+@pytest.mark.asyncio
 async def test_create_document_tool_returns_incrementing_short_document_ids():
     tool = CreateDocumentTool()
 
@@ -1887,9 +1934,28 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
     properties = block_schema["properties"]
     list_item_schema = properties["items"]["items"]
     row_cell_schema = properties["rows"]["items"]["items"]
+    resume_sections = properties["data"]["properties"]["sections"]["items"][
+        "properties"
+    ]
+    resume_detail_schema = resume_sections["entries"]["items"]["properties"]["details"][
+        "items"
+    ]
+    resume_line_schema = resume_sections["lines"]["items"]
 
     assert row_cell_schema == {"type": "string"}
     assert list_item_schema == {"type": "string"}
+    assert "type" not in resume_detail_schema
+    assert (
+        resume_detail_schema["properties"]["runs"]["items"]["properties"]["bold"][
+            "type"
+        ]
+        == "boolean"
+    )
+    assert "type" not in resume_line_schema
+    assert (
+        resume_line_schema["properties"]["runs"]["items"]["properties"]["bold"]["type"]
+        == "boolean"
+    )
     assert not _schema_contains_key(add_blocks_tool.parameters, "anyOf")
     assert not _schema_contains_key(add_blocks_tool.parameters, "oneOf")
     assert not _schema_contains_type_list(add_blocks_tool.parameters)

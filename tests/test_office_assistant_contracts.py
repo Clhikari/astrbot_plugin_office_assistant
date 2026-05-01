@@ -111,7 +111,6 @@ from tests._docx_test_helpers import _technical_resume_block
 from tests._schema_test_helpers import _schema_contains_key, _schema_contains_type_list
 
 
-
 def test_create_document_tool_schema_exposes_document_style():
     toolset = build_document_toolset()
     create_document_tool = next(
@@ -195,6 +194,7 @@ def test_create_document_tool_schema_exposes_document_style():
     ]
     assert table_defaults["cell_align"]["enum"] == ["left", "center", "right"]
 
+
 def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     toolset = build_document_toolset()
     add_blocks_tool = next(tool for tool in toolset.tools if tool.name == "add_blocks")
@@ -237,8 +237,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         == "string"
     )
     assert (
-        block_properties["data"]["properties"]["auto_page_break"]["type"]
-        == "boolean"
+        block_properties["data"]["properties"]["auto_page_break"]["type"] == "boolean"
     )
     resume_section_schema = block_properties["data"]["properties"]["sections"]["items"][
         "properties"
@@ -247,17 +246,30 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         "details"
     ]["items"]
     resume_line_schema = resume_section_schema["lines"]["items"]
-    assert resume_detail_schema == {"type": "string"}
-    assert resume_line_schema == {"type": "string"}
+    assert "type" not in resume_detail_schema
+    assert resume_detail_schema["properties"]["text"]["type"] == "string"
+    assert resume_detail_schema["properties"]["runs"]["type"] == "array"
+    assert (
+        resume_detail_schema["properties"]["runs"]["items"]["properties"]["bold"][
+            "type"
+        ]
+        == "boolean"
+    )
+    assert "type" not in resume_line_schema
+    assert resume_line_schema["properties"]["text"]["type"] == "string"
+    assert resume_line_schema["properties"]["runs"]["type"] == "array"
+    assert (
+        resume_line_schema["properties"]["runs"]["items"]["properties"]["bold"]["type"]
+        == "boolean"
+    )
     assert block_properties["text"]["type"] == "string"
     assert block_properties["subtitle"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"
     assert block_properties["runs"]["items"]["type"] == "object"
     assert block_properties["border"]["type"] == "object"
-    assert (
-        block_properties["border"]["properties"]["bottom"]["properties"]["style"]["enum"]
-        == ["single", "double", "dashed", "dotted", "none"]
-    )
+    assert block_properties["border"]["properties"]["bottom"]["properties"]["style"][
+        "enum"
+    ] == ["single", "double", "dashed", "dotted", "none"]
     assert block_properties["bottom_border"]["type"] == "boolean"
     assert block_properties["bottom_border_color"]["type"] == "string"
     assert block_properties["bottom_border_size_pt"]["type"] == "number"
@@ -336,8 +348,14 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert block_properties["title_font_scale"]["type"] == "number"
     assert block_properties["body_font_scale"]["type"] == "number"
     assert block_properties["metrics"]["items"]["required"] == ["label", "value"]
-    assert block_properties["metrics"]["items"]["properties"]["label_color"]["type"] == "string"
-    assert block_properties["metrics"]["items"]["properties"]["note_color"]["type"] == "string"
+    assert (
+        block_properties["metrics"]["items"]["properties"]["label_color"]["type"]
+        == "string"
+    )
+    assert (
+        block_properties["metrics"]["items"]["properties"]["note_color"]["type"]
+        == "string"
+    )
     assert (
         block_properties["metrics"]["items"]["properties"]["value_font_scale"]["type"]
         == "number"
@@ -372,6 +390,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     )
     assert block_properties["levels"]["type"] == "integer"
     assert block_properties["start_on_new_page"]["type"] == "boolean"
+
 
 def test_create_document_request_accepts_header_footer_defaults():
     request = CreateDocumentRequest(
@@ -423,6 +442,7 @@ def test_create_document_request_accepts_header_footer_defaults():
     assert request.header_footer.page_number_align == "center"
     assert request.header_footer.page_number_format == "upperRoman"
 
+
 def test_section_break_block_rejects_page_number_start_without_restart():
     with pytest.raises(
         ValidationError,
@@ -431,6 +451,7 @@ def test_section_break_block_rejects_page_number_start_without_restart():
         SectionBreakBlock(
             page_number_start=2,
         )
+
 
 def test_add_blocks_request_rejects_section_page_number_start_without_restart():
     with pytest.raises(
@@ -447,9 +468,11 @@ def test_add_blocks_request_rejects_section_page_number_start_without_restart():
             ],
         )
 
+
 def test_section_margins_config_rejects_zero_margin():
     with pytest.raises(ValidationError):
         SectionMarginsConfig(top_cm=0, bottom_cm=2, left_cm=2, right_cm=2)
+
 
 def test_section_break_block_rejects_margin_greater_than_ten():
     with pytest.raises(ValidationError):
@@ -461,6 +484,7 @@ def test_section_break_block_rejects_margin_greater_than_ten():
                 "right_cm": 2,
             }
         )
+
 
 def test_add_blocks_request_rejects_invalid_section_margins():
     with pytest.raises(ValidationError):
@@ -478,6 +502,7 @@ def test_add_blocks_request_rejects_invalid_section_margins():
                 }
             ],
         )
+
 
 def test_normalize_raw_block_payloads_repairs_section_toc_and_table_aliases():
     normalized = normalize_raw_block_payloads(
@@ -544,6 +569,7 @@ def test_normalize_raw_block_payloads_repairs_section_toc_and_table_aliases():
     assert normalized[6]["layout"]["spacing_before"] == pytest.approx(72.0)
     assert normalized[6]["layout"]["spacing_after"] == pytest.approx(0.0)
 
+
 def test_normalize_raw_block_payloads_strips_markdown_table_edge_pipes():
     normalized = normalize_raw_block_payloads(
         [
@@ -555,6 +581,13 @@ def test_normalize_raw_block_payloads_strips_markdown_table_edge_pipes():
     )
 
     assert normalized[0]["rows"] == [["单元格1", "单元格2", "单元格3"]]
+
+
+def test_normalize_raw_block_payloads_accepts_json_string_array():
+    normalized = normalize_raw_block_payloads('[{"type": "paragraph", "text": "正文"}]')
+
+    assert normalized == [{"type": "paragraph", "text": "正文"}]
+
 
 def test_normalize_raw_block_payloads_repairs_paragraph_items_alias():
     normalized = normalize_raw_block_payloads(
@@ -689,6 +722,7 @@ def test_normalize_raw_block_payloads_unwraps_singleton_list_items():
         "runs": [{"text": "库存健康：建立动态安全库存模型。"}]
     }
 
+
 def test_normalize_create_document_kwargs_moves_top_level_style_fields():
     normalized = normalize_create_document_kwargs(
         {
@@ -701,6 +735,22 @@ def test_normalize_create_document_kwargs_moves_top_level_style_fields():
     assert normalized["document_style"]["heading_color"] == "000000"
     assert normalized["document_style"]["title_align"] == "center"
 
+
+def test_normalize_create_document_kwargs_accepts_json_string_objects():
+    normalized = normalize_create_document_kwargs(
+        {
+            "document_style": (
+                '{"font_name": "Microsoft YaHei", "heading_color": "1F4E79"}'
+            ),
+            "header_footer": '{"footer_text": "内部资料"}',
+        }
+    )
+
+    assert normalized["document_style"]["font_name"] == "Microsoft YaHei"
+    assert normalized["document_style"]["heading_color"] == "1F4E79"
+    assert normalized["header_footer"]["footer_text"] == "内部资料"
+
+
 def test_normalize_raw_block_payloads_rejects_excessive_nesting():
     nested_block: dict[str, object] = {"type": "paragraph", "text": "leaf"}
     for _ in range(34):
@@ -709,15 +759,18 @@ def test_normalize_raw_block_payloads_rejects_excessive_nesting():
     with pytest.raises(ValueError, match="nesting exceeds limit"):
         normalize_raw_block_payloads([nested_block])
 
+
 def test_create_document_request_normalizes_separator_only_output_name():
     request = CreateDocumentRequest(output_name="//")
 
     assert request.output_name == "document.docx"
 
+
 def test_export_document_request_normalizes_dot_only_output_name():
     request = ExportDocumentRequest(document_id="doc-1", output_name=".")
 
     assert request.output_name == "document.docx"
+
 
 def test_paragraph_schema_requires_text_or_runs():
     with pytest.raises(ValidationError, match="paragraph requires text or runs"):
@@ -728,6 +781,7 @@ def test_paragraph_schema_requires_text_or_runs():
                 "runs": [],
             }
         )
+
 
 def test_build_document_render_payload_preserves_runs_when_text_and_runs_exist():
     block = ParagraphBlock(
@@ -843,6 +897,7 @@ def test_paragraph_run_accepts_scheme_only_https_url():
 
     assert run.url == "https://example.com/"
 
+
 def test_build_document_render_payload_keeps_default_metadata_fields():
     document = DocumentModel(
         document_id="doc-1",
@@ -857,6 +912,7 @@ def test_build_document_render_payload_keeps_default_metadata_fields():
     assert payload["metadata"]["theme_name"] == "business_report"
     assert payload["metadata"]["table_template"] == "report_grid"
     assert payload["metadata"]["density"] == "comfortable"
+
 
 def test_build_document_render_payload_keeps_page_template_required_defaults():
     document = DocumentModel(
@@ -906,8 +962,13 @@ def test_build_document_render_payload_omits_none_in_page_template_runs():
                                     details=[
                                         ListItem(
                                             runs=[
-                                                ParagraphRun(text="主导优化推荐引擎召回模块，", bold=True),
-                                                ParagraphRun(text="将离线索引构建耗时压缩到 1/4。"),
+                                                ParagraphRun(
+                                                    text="主导优化推荐引擎召回模块，",
+                                                    bold=True,
+                                                ),
+                                                ParagraphRun(
+                                                    text="将离线索引构建耗时压缩到 1/4。"
+                                                ),
                                             ]
                                         )
                                     ],
@@ -921,7 +982,9 @@ def test_build_document_render_payload_omits_none_in_page_template_runs():
     )
 
     payload = build_document_render_payload(document)
-    runs = payload["blocks"][0]["data"]["sections"][0]["entries"][0]["details"][0]["runs"]
+    runs = payload["blocks"][0]["data"]["sections"][0]["entries"][0]["details"][0][
+        "runs"
+    ]
 
     assert all("color" not in run for run in runs)
     assert all("url" not in run for run in runs)
@@ -939,6 +1002,7 @@ def test_build_document_render_payload_omits_none_in_page_template_runs():
 def test_paragraph_run_rejects_invalid_hyperlink_url(url: str):
     with pytest.raises(ValidationError, match="http, https, or mailto"):
         ParagraphRun(text="错误链接", url=url)
+
 
 def test_build_document_render_payload_omits_unset_heading_bottom_border():
     document = DocumentModel(
@@ -985,6 +1049,7 @@ def test_build_document_render_payload_omits_none_hero_banner_fields():
     assert "subtitle_color" not in hero_banner
     assert "min_height_pt" not in hero_banner
 
+
 def test_normalize_raw_block_payloads_moves_legacy_layout_alignment_into_style():
     normalized = normalize_raw_block_payloads(
         [
@@ -1000,6 +1065,7 @@ def test_normalize_raw_block_payloads_moves_legacy_layout_alignment_into_style()
     assert normalized[0]["type"] == "paragraph"
     assert normalized[0]["style"]["align"] == "right"
     assert normalized[0]["layout"] == {"spacing_after": 6}
+
 
 def test_create_document_request_normalizes_document_style():
     request = CreateDocumentRequest(
@@ -1070,6 +1136,7 @@ def test_create_document_request_normalizes_document_style():
     assert request.document_style.table_defaults.caption_emphasis == "strong"
     assert request.document_style.table_defaults.cell_align == "center"
 
+
 def test_create_document_request_rejects_invalid_document_style_heading_color():
     with pytest.raises(ValidationError):
         CreateDocumentRequest(
@@ -1079,6 +1146,7 @@ def test_create_document_request_rejects_invalid_document_style_heading_color():
                 "heading_color": "blue",
             },
         )
+
 
 def test_create_document_request_rejects_invalid_table_defaults_header_fill():
     with pytest.raises(ValidationError):
@@ -1091,6 +1159,7 @@ def test_create_document_request_rejects_invalid_table_defaults_header_fill():
                 },
             },
         )
+
 
 def test_add_blocks_request_rejects_invalid_hero_banner_colors():
     with pytest.raises(ValidationError, match="6-digit hex color"):
@@ -1105,6 +1174,7 @@ def test_add_blocks_request_rejects_invalid_hero_banner_colors():
             ],
         )
 
+
 def test_create_document_request_defaults_nested_document_style_sections():
     request = CreateDocumentRequest(
         title="Nested Defaults",
@@ -1117,6 +1187,7 @@ def test_create_document_request_defaults_nested_document_style_sections():
     assert request.document_style.table_defaults is not None
     assert request.document_style.summary_card_defaults.title_align is None
     assert request.document_style.table_defaults.header_fill is None
+
 
 def test_create_document_request_normalizes_blank_document_style_colors_to_none():
     request = CreateDocumentRequest(
@@ -1136,6 +1207,7 @@ def test_create_document_request_normalizes_blank_document_style_colors_to_none(
     assert request.document_style.table_defaults.header_fill is None
     assert request.document_style.table_defaults.header_text_color is None
     assert request.document_style.table_defaults.banded_row_fill is None
+
 
 def test_create_document_request_rejects_extra_document_style_keys():
     with pytest.raises(ValidationError):
@@ -1159,6 +1231,7 @@ def test_create_document_request_rejects_extra_document_style_keys():
             },
         )
 
+
 @pytest.mark.parametrize("body_font_size", [8, 17])
 def test_create_document_request_rejects_out_of_range_body_font_size(body_font_size):
     with pytest.raises(ValidationError):
@@ -1169,6 +1242,7 @@ def test_create_document_request_rejects_out_of_range_body_font_size(body_font_s
                 "body_font_size": body_font_size,
             },
         )
+
 
 @pytest.mark.parametrize("body_line_spacing", [0.9, 2.6])
 def test_create_document_request_rejects_out_of_range_body_line_spacing(
@@ -1182,6 +1256,7 @@ def test_create_document_request_rejects_out_of_range_body_line_spacing(
                 "body_line_spacing": body_line_spacing,
             },
         )
+
 
 @pytest.mark.parametrize("title_font_scale", [0.5, 2.5])
 def test_create_document_request_rejects_out_of_range_title_font_scale(
@@ -1197,6 +1272,7 @@ def test_create_document_request_rejects_out_of_range_title_font_scale(
                 },
             },
         )
+
 
 @pytest.mark.parametrize(
     "field_name,value",
@@ -1218,6 +1294,7 @@ def test_create_document_request_rejects_out_of_range_document_spacing_fields(
                 field_name: value,
             },
         )
+
 
 @pytest.mark.parametrize(
     "field_name,value",
@@ -1243,6 +1320,7 @@ def test_create_document_request_rejects_out_of_range_summary_card_spacing_field
                 },
             },
         )
+
 
 def test_table_schema_normalizers_are_shared():
     request = AddTableRequest(
@@ -1304,6 +1382,7 @@ def test_table_schema_normalizers_are_shared():
     assert section.border_style == "minimal"
     assert section.caption_emphasis == "normal"
 
+
 def test_add_table_request_rejects_grouped_header_span_total_mismatch():
     with pytest.raises(
         ValidationError,
@@ -1316,6 +1395,7 @@ def test_add_table_request_rejects_grouped_header_span_total_mismatch():
             header_groups=[{"title": "经营数据", "span": 1}],
         )
 
+
 def test_section_table_input_rejects_grouped_header_span_below_minimum():
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         SectionTableInput(
@@ -1323,6 +1403,7 @@ def test_section_table_input_rejects_grouped_header_span_below_minimum():
             rows=[["华东", "120"]],
             header_groups=[{"title": "经营数据", "span": 0}],
         )
+
 
 @pytest.mark.parametrize(
     "field_name", ["header_fill", "header_text_color", "banded_row_fill"]
@@ -1349,6 +1430,7 @@ def test_add_table_request_rejects_invalid_color_fields(
     with pytest.raises(ValidationError, match="6-digit hex color"):
         AddTableRequest(**kwargs)
 
+
 @pytest.mark.parametrize(
     "field_name", ["header_fill", "header_text_color", "banded_row_fill"]
 )
@@ -1373,6 +1455,7 @@ def test_section_table_input_rejects_invalid_color_fields(
     with pytest.raises(ValidationError, match="6-digit hex color"):
         SectionTableInput(**kwargs)
 
+
 def test_section_table_input_rejects_invalid_border_style():
     with pytest.raises(ValidationError):
         SectionTableInput(
@@ -1381,12 +1464,14 @@ def test_section_table_input_rejects_invalid_border_style():
             border_style="heavy",
         )
 
+
 def test_table_block_rejects_header_groups_without_columns():
     with pytest.raises(
         ValidationError,
         match=r"header_groups require at least one column from headers or rows \(column_count=0\)",
     ):
         TableBlock(header_groups=[{"title": "经营数据", "span": 1}])
+
 
 def test_table_schema_allows_empty_placeholder_tables():
     request = AddTableRequest(document_id="doc-1", headers=[], rows=[])
@@ -1399,6 +1484,7 @@ def test_table_schema_allows_empty_placeholder_tables():
     assert section.rows == []
     assert block.headers == []
     assert block.rows == []
+
 
 def test_add_table_request_rejects_row_span_cells():
     with pytest.raises(ValidationError, match="row_span"):
@@ -1485,6 +1571,7 @@ def test_add_table_request_accepts_cells_with_both_text_and_runs():
     assert course_cell.text == "课程 A"
     assert "".join(run.text for run in course_cell.runs) == "课程 A"
 
+
 def test_add_table_request_rejects_underfilled_rows():
     with pytest.raises(ValidationError, match="table row 1 is missing cells"):
         AddTableRequest(
@@ -1492,6 +1579,7 @@ def test_add_table_request_rejects_underfilled_rows():
             headers=["日期", "时间", "课程"],
             rows=[["第一天", "09:00"]],
         )
+
 
 def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_styles():
     request = AddBlocksRequest(
@@ -1543,7 +1631,11 @@ def test_add_blocks_request_accepts_accent_box_metric_cards_and_table_cell_style
                             "align": "right",
                             "font_name": "Source Han Sans SC",
                             "border": {
-                                "top": {"style": "single", "color": "1F4E79", "width_pt": 0.75}
+                                "top": {
+                                    "style": "single",
+                                    "color": "1F4E79",
+                                    "width_pt": 0.75,
+                                }
                             },
                         },
                     ]
@@ -1718,6 +1810,7 @@ def test_build_document_render_payload_preserves_empty_border_side_objects():
     assert payload["blocks"][0]["border"]["bottom"] == {}
     assert payload["blocks"][1]["rows"][0][1]["border"]["top"] == {}
 
+
 def test_normalize_raw_block_payloads_flattens_nested_block_aliases():
     normalized = normalize_raw_block_payloads(
         [
@@ -1800,6 +1893,7 @@ def test_normalize_raw_block_payloads_flattens_nested_block_aliases():
     assert table["rows"][0][2]["text"] == "重点项目提前交付"
     assert paragraph["runs"][0]["text"] == "供应链风险："
     assert paragraph["style"]["align"] == "right"
+
 
 def test_add_blocks_request_accepts_hero_banner_and_report_style_fields():
     request = AddBlocksRequest(
@@ -1901,6 +1995,7 @@ def test_add_blocks_request_accepts_hero_banner_and_report_style_fields():
     assert table.cell_padding_horizontal_pt == pytest.approx(8)
     assert table.rows[0][1].font_scale == pytest.approx(1.2)
 
+
 def test_add_blocks_request_accepts_page_template_business_review_cover():
     request = AddBlocksRequest(
         document_id="doc-1",
@@ -1933,38 +2028,54 @@ def test_add_blocks_request_accepts_page_template_business_review_cover():
 
 
 def test_add_blocks_request_accepts_page_template_technical_resume():
-    request = AddBlocksRequest(
-        document_id="doc-1",
-        blocks=[
-            _technical_resume_block(
-                sections=[
+    resume_block = _technical_resume_block(
+        sections=[
+            {
+                "title": "教育背景",
+                "entries": [
                     {
-                        "title": "教育背景",
-                        "entries": [
+                        "heading": "北京大学",
+                        "date": "2019.09 – 2023.06",
+                        "subtitle": "计算机科学与技术  |  工学学士",
+                        "details": [
                             {
-                                "heading": "北京大学",
-                                "date": "2019.09 – 2023.06",
-                                "subtitle": "计算机科学与技术  |  工学学士",
-                                "details": [
-                                    "GPA 3.86/4.0，连续三年一等奖学金，排名前 5%"
-                                ],
+                                "runs": [
+                                    {"text": "GPA 3.86/4.0，", "bold": True},
+                                    {"text": "连续三年一等奖学金，排名前 5%"},
+                                ]
                             }
                         ],
-                    },
+                    }
+                ],
+            },
+            {
+                "title": "技术栈",
+                "lines": [
                     {
-                        "title": "技术栈",
-                        "lines": ["语言：Go（熟练）、Java（熟练）、Python、SQL"],
-                    },
-                ]
-            )
-        ],
+                        "runs": [
+                            {"text": "语言：Go（熟练）", "bold": True},
+                            {"text": "、Java（熟练）、Python、SQL"},
+                        ]
+                    }
+                ],
+            },
+        ]
+    )
+    resume_block["data"]["auto_page_break"] = True
+
+    request = AddBlocksRequest(
+        document_id="doc-1",
+        blocks=[resume_block],
     )
 
     block = request.blocks[0]
     assert block.template == "technical_resume"
     assert block.data.name == "张明远"
+    assert block.data.auto_page_break is True
     assert block.data.sections[0].entries[0].heading == "北京大学"
-    assert block.data.sections[1].lines[0] == "语言：Go（熟练）、Java（熟练）、Python、SQL"
+    assert block.data.sections[0].entries[0].details[0].runs[0].bold is True
+    assert block.data.sections[1].lines[0].runs[0].bold is True
+
 
 def test_add_blocks_request_rejects_table_cell_col_span():
     with pytest.raises(ValidationError, match="col_span"):
