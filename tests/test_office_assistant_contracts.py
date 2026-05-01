@@ -789,6 +789,29 @@ def test_normalize_create_document_kwargs_accepts_json_string_objects():
     assert normalized["header_footer"]["footer_text"] == "内部资料"
 
 
+def test_normalize_create_document_kwargs_treats_none_optional_objects_as_absent():
+    normalized = normalize_create_document_kwargs(
+        {
+            "document_style": None,
+            "header_footer": None,
+        }
+    )
+
+    assert "document_style" not in normalized
+    assert "header_footer" not in normalized
+
+
+def test_normalize_create_document_kwargs_merges_style_aliases_when_style_is_none():
+    normalized = normalize_create_document_kwargs(
+        {
+            "document_style": None,
+            "heading_color": "1F4E79",
+        }
+    )
+
+    assert normalized["document_style"]["heading_color"] == "1F4E79"
+
+
 @pytest.mark.parametrize("field_name", ["document_style", "header_footer"])
 def test_normalize_create_document_kwargs_rejects_invalid_json_string(field_name: str):
     with pytest.raises(ValueError, match=f"{field_name} must be valid JSON"):
