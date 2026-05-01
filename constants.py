@@ -68,6 +68,12 @@ SUFFIX_TO_OFFICE_TYPE = {v: k for k, v in OFFICE_EXTENSIONS.items()} | {
     ".ppt": OfficeType.POWERPOINT,
 }
 
+EXCEL_SUFFIXES = frozenset(
+    suffix
+    for suffix, office_type in SUFFIX_TO_OFFICE_TYPE.items()
+    if office_type is OfficeType.EXCEL
+)
+
 # 所有可读取的 Office 格式（新旧）
 ALL_OFFICE_SUFFIXES = frozenset(SUFFIX_TO_OFFICE_TYPE.keys())
 
@@ -75,6 +81,9 @@ DEFAULT_MAX_FILE_SIZE_MB = 20
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
 DEFAULT_MAX_INLINE_DOCX_IMAGE_MB = 2
 DEFAULT_MAX_INLINE_DOCX_IMAGE_COUNT = 3
+DEFAULT_MAX_EXCEL_PREVIEW_ROWS = 2000
+DEFAULT_MAX_EXCEL_PREVIEW_CHARS = 200_000
+DEFAULT_MAX_EXCEL_PREVIEW_SHEETS = 0
 DOCUMENT_BLOCK_FONT_SCALE_MIN = 0.75
 DOCUMENT_BLOCK_FONT_SCALE_MAX = 2.0
 DOCUMENT_BLOCK_SPACING_MIN = 0.0
@@ -84,6 +93,7 @@ DOCUMENT_BLOCK_SPACING_MAX = 72.0
 #         document tool 名称定义在 agent_tools/document_tools.py 的 name 字段。
 FILE_TOOLS = (
     "read_file",
+    "read_workbook",
     "create_office_file",
     "create_document",
     "add_blocks",
@@ -92,12 +102,15 @@ FILE_TOOLS = (
     "create_workbook",
     "write_rows",
     "export_workbook",
+    "execute_excel_script",
     "convert_to_pdf",
     "convert_from_pdf",
 )
 
 EXPLICIT_FILE_TOOL_EVENT_KEY = "office_assistant_explicit_file_tool_name"
 DOC_COMMAND_TRIGGER_EVENT_KEY = "office_assistant_doc_command_trigger"
+EXCEL_SCRIPT_RETRY_FAILURES_EVENT_KEY = "office_assistant_excel_script_retry_failures"
+EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY = "office_assistant_excel_script_retry_exhausted"
 
 EXECUTION_TOOLS = (
     "astrbot_execute_shell",

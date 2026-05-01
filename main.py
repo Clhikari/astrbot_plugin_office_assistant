@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+import json
 from pathlib import Path
 
 import astrbot.api.message_components as Comp
@@ -14,8 +15,77 @@ from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.star.star import star_map
 
 from .app.runtime import PluginRuntimeBundle
+from .constants import EXCEL_SUFFIXES
 from .message_buffer import BufferedMessage
 from .services import build_plugin_runtime
+
+
+def _is_retry_exhausted_excel_result(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    retry_count = payload.get("retry_count")
+    max_retries = payload.get("max_retries")
+    try:
+        retry_count_int = int(retry_count)
+        max_retries_int = int(max_retries)
+    except (TypeError, ValueError):
+        return False
+    return (
+        payload.get("success") is False
+        and payload.get("retry_exhausted") is True
+        and retry_count_int >= max_retries_int
+    )
+
+
+def _is_successful_excel_file_result(payload: object) -> bool:
+    return (
+        isinstance(payload, dict)
+        and payload.get("success") is True
+        and payload.get("mode") == "file"
+    )
+
+
+def _build_direct_excel_success_result(payload: dict) -> MessageEventResult:
+    output_name = str(payload.get("output_name") or "").strip()
+    if output_name:
+        message = f"Excel 文件已生成并发送：{output_name}"
+    else:
+        message = "Excel 文件已生成并发送。"
+    return MessageEventResult().message(message).stop_event()
+
+
+def _build_direct_excel_retry_result(payload: dict) -> MessageEventResult:
+    user_message = str(
+        payload.get("user_message")
+        or payload.get("error")
+        or "Excel 脚本重试次数已用尽，本次没有生成合格文件。"
+    )
+    return MessageEventResult().message(user_message).stop_event()
+
+
+def _script_uses_input_files(script: str) -> bool:
+    return any(
+        marker in script
+        for marker in (
+            "input_files",
+            "load_input_workbook",
+            "preserve_input_sheet_layout",
+        )
+    )
+
+
+def _extract_single_uploaded_excel_name(upload_infos: list[dict]) -> str:
+    excel_infos = [
+        info
+        for info in upload_infos
+        if info.get("is_supported")
+        and str(info.get("file_suffix", "")).lower() in EXCEL_SUFFIXES
+        and str(info.get("stored_name", "")).strip()
+    ]
+    if len(excel_infos) != 1:
+        return ""
+    return str(excel_infos[0]["stored_name"]).strip()
+
 
 # 向后兼容性：旧版本的 AstrBot 未公开此钩子.
 _on_plugin_error_decorator = getattr(filter, "on_plugin_error", None)
@@ -182,6 +252,34 @@ class FileOperationPlugin(Star):
         ):
             yield result
 
+    @llm_tool(name="read_workbook")
+    async def read_workbook(
+        self,
+        event: AstrMessageEvent,
+        filename: str = "",
+    ) -> AsyncGenerator[str | mcp.types.CallToolResult, None]:
+        """读取已有 Excel 工作簿内容。
+
+        适用场景：
+        - 读取 `.xlsx` / `.xls`
+        - 查看 Sheet 内容、统计、汇总、解释
+
+        注意：
+        - 这是 Excel 专用读取入口
+        - 不创建 workbook session，不导出新文件
+
+        Args:
+            filename(string): 要读取的 Excel 文件名。
+        """
+        workbook_results = (
+            self._runtime.file_tool_service.iter_read_workbook_tool_results(
+                event,
+                filename,
+            )
+        )
+        async for result in workbook_results:
+            yield result
+
     @llm_tool(name="create_office_file")
     async def create_office_file(
         self,
@@ -213,6 +311,51 @@ class FileOperationPlugin(Star):
             content=content,
             file_type=file_type,
         )
+
+    @llm_tool(name="execute_excel_script")
+    async def execute_excel_script(
+        self,
+        event: AstrMessageEvent,
+        script: str = "",
+        input_files: list[str] | None = None,
+        output_name: str = "",
+    ) -> str | MessageEventResult:
+        """执行 Excel 脚本以生成或修改工作簿。
+
+        适用场景：
+        - 新建包含公式、图表、条件格式、数据验证的复杂 Excel
+        - 修改已有 `.xlsx` / `.xls`
+
+        Args:
+            script(string): 要执行的 Python 脚本。运行环境提供
+                load_input_workbook、save_output_workbook、ensure_readable_sheet、
+                format_table_sheet、format_course_list_sheet、auto_format_workbook、
+                preserve_input_sheet_layout 等辅助函数。
+            input_files(array): 作为输入的 Excel 文件列表。
+            output_name(string): 需要返回文件时的输出文件名。
+        """
+        effective_input_files = input_files
+        if not effective_input_files and _script_uses_input_files(script or ""):
+            uploaded_name = _extract_single_uploaded_excel_name(
+                self._runtime.upload_session_service.get_cached_upload_infos(event)
+            )
+            if uploaded_name:
+                effective_input_files = [uploaded_name]
+        result = await self._runtime.file_tool_service.execute_excel_script(
+            event,
+            script=script,
+            input_files=effective_input_files,
+            output_name=output_name or None,
+        )
+        try:
+            payload = json.loads(result)
+        except (TypeError, ValueError):
+            return result
+        if _is_retry_exhausted_excel_result(payload):
+            return _build_direct_excel_retry_result(payload)
+        if _is_successful_excel_file_result(payload):
+            return _build_direct_excel_success_result(payload)
+        return result
 
     @llm_tool(name="convert_to_pdf")
     async def convert_to_pdf(
