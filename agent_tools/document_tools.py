@@ -197,6 +197,8 @@ _TABLE_CELL_SCHEMA = {
     },
 }
 
+_STRING_PUBLIC_SCHEMA = {"type": "string"}
+
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class DocumentToolBase(FunctionTool[AstrAgentContext]):
@@ -456,14 +458,14 @@ class AddBlocksTool(DocumentToolBase):
         "Append one or more blocks in order. Use this for mixed content such as "
         "page_template, hero_banner, heading, paragraph, accent_box, metric_cards, list, table, image, summary_card, page_break, section_break, toc, group, or columns. "
         "For heading blocks, use text instead of title. "
-        "For paragraph, list, or table-cell runs, use color instead of text_color. "
+        "For paragraph runs, use color instead of text_color. "
         "For table blocks, if the user asks for a table title or 表格标题, put it in the table "
         "block's caption/title field so it renders as the first merged row inside the table, "
         "not as a separate heading block. For table styling, use table-specific fields like "
         "header_fill, header_text_color, header_bold, banded_rows, first_column_bold, table_align, "
-        "border_style, caption_emphasis, cell border, and cell fill when the user requests a custom visual style. "
+        "border_style, and caption_emphasis when the user requests a custom visual style. "
         "Do not pass row_span or col_span in public table payloads. "
-        "Table body cell objects must not include type=cell. "
+        "Use plain strings for table body cells. "
         "Use paragraph border via border.top/bottom/left/right. bottom_border, bottom_border_color, "
         "and bottom_border_size_pt are heading-only fields. header_fill_enabled and header_bold are "
         "table block fields, not document_style.table_defaults fields."
@@ -559,21 +561,9 @@ class AddBlocksTool(DocumentToolBase):
                                                             "subtitle": {"type": "string"},
                                                             "details": {
                                                                 "type": "array",
-                                                                "items": {
-                                                                    "anyOf": [
-                                                                        {"type": "string"},
-                                                                        {
-                                                                            "type": "object",
-                                                                            "properties": {
-                                                                                "text": {"type": "string"},
-                                                                                "runs": {
-                                                                                    "type": "array",
-                                                                                    "items": _schema_copy(_INLINE_RUN_SCHEMA),
-                                                                                },
-                                                                            },
-                                                                        },
-                                                                    ]
-                                                                },
+                                                                "items": _schema_copy(
+                                                                    _STRING_PUBLIC_SCHEMA
+                                                                ),
                                                             },
                                                         },
                                                         "required": ["heading"],
@@ -581,21 +571,9 @@ class AddBlocksTool(DocumentToolBase):
                                                 },
                                                 "lines": {
                                                     "type": "array",
-                                                    "items": {
-                                                        "anyOf": [
-                                                            {"type": "string"},
-                                                            {
-                                                                "type": "object",
-                                                                "properties": {
-                                                                    "text": {"type": "string"},
-                                                                    "runs": {
-                                                                        "type": "array",
-                                                                        "items": _schema_copy(_INLINE_RUN_SCHEMA),
-                                                                    },
-                                                                },
-                                                            },
-                                                        ]
-                                                    },
+                                                    "items": _schema_copy(
+                                                        _STRING_PUBLIC_SCHEMA
+                                                    ),
                                                 },
                                             },
                                         },
@@ -622,21 +600,7 @@ class AddBlocksTool(DocumentToolBase):
                             },
                             "items": {
                                 "type": "array",
-                                "items": {
-                                    "anyOf": [
-                                        {"type": "string"},
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "text": {"type": "string"},
-                                                "runs": {
-                                                    "type": "array",
-                                                    "items": _schema_copy(_INLINE_RUN_SCHEMA),
-                                                },
-                                            },
-                                        },
-                                    ]
-                                },
+                                "items": _schema_copy(_STRING_PUBLIC_SCHEMA),
                             },
                             "ordered": {"type": "boolean"},
                             "headers": {
@@ -647,12 +611,7 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "array",
                                 "items": {
                                     "type": "array",
-                                    "items": {
-                                        "anyOf": [
-                                            {"type": "string"},
-                                            _schema_copy(_TABLE_CELL_SCHEMA),
-                                        ]
-                                    },
+                                    "items": _schema_copy(_STRING_PUBLIC_SCHEMA),
                                 },
                             },
                             "header_groups": {
