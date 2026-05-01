@@ -27,6 +27,9 @@ from astrbot_plugin_office_assistant.agent_tools.workbook_tools import (
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
 )
+from astrbot_plugin_office_assistant.constants import (
+    EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY,
+)
 from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
     DOCX_TABLE_STYLES,
     TableRenderer,
@@ -118,6 +121,15 @@ from tests._docx_test_helpers import *  # noqa: F401,F403
 from tests._schema_test_helpers import _schema_contains_key, _schema_contains_type_list
 
 
+def _build_agent_tool_context(*, excel_script_retry_exhausted: bool = False):
+    event = MagicMock()
+    event.get_extra.side_effect = lambda key, default=None: (
+        excel_script_retry_exhausted
+        if key == EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY
+        else default
+    )
+    return SimpleNamespace(context=SimpleNamespace(event=event))
+
 
 def test_build_document_toolset_uses_shared_store_and_default_workspace():
     toolset = build_document_toolset()
@@ -193,7 +205,9 @@ async def test_create_workbook_tool_wraps_expected_store_errors(
 ):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     tool = CreateWorkbookTool(store=store)
-    monkeypatch.setattr(store, "create_workbook", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(
+        store, "create_workbook", MagicMock(side_effect=OSError("disk full"))
+    )
 
     result = json.loads(await tool.call(None, filename="rows.xlsx"))
 
@@ -208,10 +222,44 @@ async def test_create_workbook_tool_reraises_unexpected_store_errors(
 ):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     tool = CreateWorkbookTool(store=store)
-    monkeypatch.setattr(store, "create_workbook", MagicMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(
+        store, "create_workbook", MagicMock(side_effect=RuntimeError("boom"))
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         await tool.call(None, filename="rows.xlsx")
+
+
+@pytest.mark.asyncio
+async def test_workbook_tools_refuse_after_excel_script_retry_exhaustion(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
+    context = _build_agent_tool_context(excel_script_retry_exhausted=True)
+
+    create_result = json.loads(
+        await CreateWorkbookTool(store=store).call(context, filename="new.xlsx")
+    )
+    write_result = json.loads(
+        await WriteRowsTool(store=store).call(
+            context,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+        )
+    )
+    export_result = json.loads(
+        await ExportWorkbookTool(store=store).call(
+            context,
+            workbook_id=workbook.workbook_id,
+        )
+    )
+
+    for result in (create_result, write_result, export_result):
+        assert result["success"] is False
+        assert "Excel 脚本重试次数已用尽" in result["message"]
+        assert "请停止调用工具" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -291,7 +339,9 @@ async def test_write_rows_tool_reraises_unexpected_store_errors(
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
     tool = WriteRowsTool(store=store)
-    monkeypatch.setattr(store, "write_rows", MagicMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(
+        store, "write_rows", MagicMock(side_effect=RuntimeError("boom"))
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         await tool.call(
@@ -331,7 +381,9 @@ async def test_export_workbook_tool_reraises_unexpected_store_errors(
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="rows.xlsx"))
     tool = ExportWorkbookTool(store=store)
-    monkeypatch.setattr(store, "export_workbook", MagicMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(
+        store, "export_workbook", MagicMock(side_effect=RuntimeError("boom"))
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         await tool.call(
@@ -374,11 +426,16 @@ async def test_document_tool_messages_enforce_workflow_after_create_and_finalize
     )
 
     assert "下一步只能调用 export_document 导出文件" in finalized["message"]
-    assert "不要再调用 add_blocks、create_document 或 finalize_document" in finalized["message"]
+    assert (
+        "不要再调用 add_blocks、create_document 或 finalize_document"
+        in finalized["message"]
+    )
 
 
 @pytest.mark.asyncio
-async def test_add_blocks_failure_message_keeps_model_on_same_tool(workspace_root: Path):
+async def test_add_blocks_failure_message_keeps_model_on_same_tool(
+    workspace_root: Path,
+):
     workspace_dir = _make_workspace(
         workspace_root, "pytest-agent-tools-add-blocks-failure"
     )
@@ -629,40 +686,6 @@ def test_mcp_document_tool_registration_passes_export_hooks(
     assert export_call_kwargs["after_export_hooks"] is after_hooks
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_create_document_tool_does_not_stringify_missing_session():
     tool = CreateDocumentTool()
@@ -672,30 +695,6 @@ async def test_create_document_tool_does_not_stringify_missing_session():
     assert created["success"] is True
     document = tool.store.require_document(created["document"]["document_id"])
     assert document.session_id == ""
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.asyncio
@@ -1598,7 +1597,9 @@ async def test_add_blocks_tool_supports_rich_text_list_items(workspace_root: Pat
         loaded_doc,
         "1. Enhance project management skills by exploring advanced methodologies such as Agile and Scrum.",
     )
-    second_item = _find_paragraph(loaded_doc, "2. Standard retrospective and action tracking.")
+    second_item = _find_paragraph(
+        loaded_doc, "2. Standard retrospective and action tracking."
+    )
 
     assert first_item.runs[0].text == "1. "
     assert first_item.runs[1].bold is True
@@ -2531,7 +2532,10 @@ async def test_add_blocks_tool_rejects_updates_after_finalize():
     )
 
     assert add_blocks_result["success"] is False
-    assert "add_blocks is only allowed while the document status is draft" in add_blocks_result["message"]
+    assert (
+        "add_blocks is only allowed while the document status is draft"
+        in add_blocks_result["message"]
+    )
 
 
 @pytest.mark.asyncio
@@ -2610,7 +2614,6 @@ async def test_export_pipeline_falls_back_to_python_backend(workspace_root: Path
     assert called_backends == ["node", "python"]
     assert output_path.read_bytes() == b"fallback-ok"
     assert exported_document.status.value == "exported"
-
 
 
 @pytest.mark.asyncio
@@ -3033,14 +3036,6 @@ async def test_mcp_server_exports_word_via_node_backend(workspace_root: Path):
     assert table.rows[3].cells[0].text == "第二天"
 
 
-
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_document_toolset_exports_toc_and_section_break(workspace_root: Path):
     docx = pytest.importorskip("docx")
@@ -3131,7 +3126,7 @@ async def test_document_toolset_exports_toc_and_section_break(workspace_root: Pa
     with zipfile.ZipFile(exported["file_path"]) as archive:
         document_xml = archive.read("word/document.xml").decode("utf-8")
     assert "w:fldSimple" in document_xml
-    assert '\\o &quot;1-2&quot;' in document_xml
+    assert "\\o &quot;1-2&quot;" in document_xml
     assert 'w:type w:val="nextPage"' in document_xml
 
 
@@ -3290,11 +3285,13 @@ async def test_add_blocks_tool_normalizes_landscape_section_payload_aliases(
     assert loaded_doc.sections[2].orientation == WD_ORIENT.PORTRAIT
     assert "横向页眉" in _story_texts(loaded_doc.sections[1].header)
     assert any(
-        text.startswith("横向页脚") for text in _story_texts(loaded_doc.sections[1].footer)
+        text.startswith("横向页脚")
+        for text in _story_texts(loaded_doc.sections[1].footer)
     )
     assert "竖向页眉" in _story_texts(loaded_doc.sections[2].header)
     assert any(
-        text.startswith("竖向页脚") for text in _story_texts(loaded_doc.sections[2].footer)
+        text.startswith("竖向页脚")
+        for text in _story_texts(loaded_doc.sections[2].footer)
     )
     toc_index = next(
         index
@@ -3405,66 +3402,6 @@ async def test_document_toolset_falls_back_when_metrics_table_style_is_missing(
     loaded_doc = docx.Document(exported["file_path"])
     assert len(loaded_doc.tables) == 1
     assert loaded_doc.tables[0].style.name == "Table Grid"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.asyncio

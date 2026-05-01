@@ -9,6 +9,7 @@ from astrbot.api.event import AstrMessageEvent
 
 from ..constants import (
     ALL_OFFICE_SUFFIXES,
+    EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY,
     EXECUTION_TOOLS,
     FILE_TOOLS,
     PDF_SUFFIX,
@@ -23,6 +24,7 @@ from ..internal_hooks import (
     run_tool_exposure_hooks,
 )
 from .prompt_context_service import PromptContextService, PromptSection
+from .excel_intent_router import ExcelIntentRouter
 from .request_follow_up import (
     FollowUpNoticeStrategy,
     IdentifierDescriptor,
@@ -32,9 +34,12 @@ from .request_follow_up import (
 from .request_hook_notice_helpers import (
     FollowUpNoticeHelper,
     FollowUpNoticeRule,
-    WorkbookGuideMatcher,
 )
 from .upload_types import UploadInfo
+from .runtime_config import (
+    SUPPORTED_COMPUTER_RUNTIME_MODES,
+    resolve_computer_runtime_mode,
+)
 
 
 def _normalize_string_list(value: object) -> list[str]:
@@ -102,12 +107,16 @@ class RequestHookService:
     )
     _DOCUMENT_CORE_NOTICE_KEY = "document_core_guide"
     _DOCUMENT_DETAIL_NOTICE_KEY = "document_detail_guide"
+    _EXCEL_ROUTING_NOTICE_KEY = "excel_routing_guide"
+    _EXCEL_READ_NOTICE_KEY = "excel_read_guide"
+    _EXCEL_SCRIPT_NOTICE_KEY = "excel_script_guide"
+    _EXCEL_DOMAIN_NOTICE_KEY_PREFIX = "excel_domain_guide:"
     _WORKBOOK_CORE_NOTICE_KEY = "workbook_core_guide"
-    _WORKBOOK_DETAIL_NOTICE_KEY = "workbook_detail_guide"
 
     def __init__(
         self,
         *,
+        astrbot_context=None,
         auto_block_execution_tools: bool,
         get_cached_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]],
         extract_upload_source: Callable[
@@ -117,9 +126,12 @@ class RequestHookService:
         consume_session_notice_once: Callable[[AstrMessageEvent, str], bool],
         allow_external_input_files: bool,
         prompt_context_service: PromptContextService | None = None,
-        lookup_document_summary: Callable[[str], dict[str, object] | None] | None = None,
-        lookup_workbook_summary: Callable[[str], dict[str, object] | None] | None = None,
+        lookup_document_summary: Callable[[str], dict[str, object] | None]
+        | None = None,
+        lookup_workbook_summary: Callable[[str], dict[str, object] | None]
+        | None = None,
     ) -> None:
+        self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
         self._get_cached_upload_infos = get_cached_upload_infos
         self._extract_upload_source = extract_upload_source
@@ -140,7 +152,9 @@ class RequestHookService:
             self.append_uploaded_file_notices,
         ]
         self._tool_exposure_hooks = [
+            self.apply_excel_script_retry_exhaustion_block,
             self.apply_execution_tool_block,
+            self.apply_excel_script_runtime_restriction,
             self.apply_explicit_file_tool_restriction,
         ]
 
@@ -182,7 +196,7 @@ class RequestHookService:
             context,
             request_text=request_text,
         )
-        self._append_workbook_tool_guides(
+        self._append_excel_tool_guides(
             context,
             request_text=request_text,
             exposed_tool_names=exposed_tool_names,
@@ -211,6 +225,9 @@ class RequestHookService:
         if not callable(names):
             return set()
         return {str(name) for name in names() if name}
+
+    def _resolve_excel_runtime_mode(self, event: AstrMessageEvent) -> str:
+        return resolve_computer_runtime_mode(self._astrbot_context, event)
 
     @classmethod
     def _has_workbook_tools_available(cls, *, exposed_tool_names: set[str]) -> bool:
@@ -280,41 +297,96 @@ class RequestHookService:
                 self.prompt_context_service.build_document_tool_detail_section(),
             )
 
-    def _append_workbook_tool_guides(
+    def _append_excel_tool_guides(
         self,
         context: NoticeBuildContext,
         *,
         request_text: str,
         exposed_tool_names: set[str],
     ) -> None:
-        if not self._has_full_workbook_toolset_available(
-            exposed_tool_names=exposed_tool_names
-        ):
-            return
-
-        workbook_guide_decision = WorkbookGuideMatcher.detect(
+        excel_route = ExcelIntentRouter.decide(
             request_text=request_text,
-            workbook_follow_up_re=self._WORKBOOK_IDENTIFIER.follow_up_re,
+            upload_infos=self._get_cached_upload_infos(context.event),
+            explicit_tool_name=context.explicit_tool_name,
+            exposed_tool_names=exposed_tool_names,
         )
-        should_inject_core = workbook_guide_decision.inject_core
-        should_inject_detail = workbook_guide_decision.inject_detail
-        if not should_inject_core and not should_inject_detail:
+        if excel_route is None:
             return
 
-        if should_inject_core and self._consume_session_notice_once(
+        if not excel_route.should_inject_guide:
+            return
+
+        if self._consume_session_notice_once(
+            context.event, self._EXCEL_ROUTING_NOTICE_KEY
+        ):
+            self._append_notice_section(
+                context,
+                self.prompt_context_service.build_excel_routing_section(),
+            )
+
+        read_tool_available = (
+            "read_workbook" in exposed_tool_names
+            and context.explicit_tool_name in (None, "read_workbook")
+        )
+        script_tool_available = (
+            "execute_excel_script" in exposed_tool_names
+            and context.explicit_tool_name in (None, "execute_excel_script")
+        )
+        workbook_tools_available = self._has_full_workbook_toolset_available(
+            exposed_tool_names=exposed_tool_names
+        ) and (
+            context.explicit_tool_name is None
+            or context.explicit_tool_name in self._WORKBOOK_TOOL_NAMES
+        )
+
+        if read_tool_available:
+            if self._consume_session_notice_once(
+                context.event, self._EXCEL_READ_NOTICE_KEY
+            ):
+                self._append_notice_section(
+                    context,
+                    self.prompt_context_service.build_excel_read_section(),
+                )
+
+        if script_tool_available:
+            if self._consume_session_notice_once(
+                context.event, self._EXCEL_SCRIPT_NOTICE_KEY
+            ):
+                self._append_notice_section(
+                    context,
+                    self.prompt_context_service.build_excel_script_section(),
+                )
+            for scenario in self._detect_excel_domain_scenarios(request_text):
+                notice_key = f"{self._EXCEL_DOMAIN_NOTICE_KEY_PREFIX}{scenario}"
+                if self._consume_session_notice_once(context.event, notice_key):
+                    self._append_notice_section(
+                        context,
+                        self.prompt_context_service.build_excel_domain_section(
+                            scenario
+                        ),
+                    )
+        if workbook_tools_available and self._consume_session_notice_once(
             context.event, self._WORKBOOK_CORE_NOTICE_KEY
         ):
             self._append_notice_section(
                 context,
                 self.prompt_context_service.build_workbook_tool_guide_section(),
             )
-        if should_inject_detail and self._consume_session_notice_once(
-            context.event, self._WORKBOOK_DETAIL_NOTICE_KEY
-        ):
-            self._append_notice_section(
-                context,
-                self.prompt_context_service.build_workbook_tool_detail_section(),
-            )
+
+    @staticmethod
+    def _detect_excel_domain_scenarios(request_text: str) -> list[str]:
+        normalized = request_text or ""
+        scenarios: list[str] = []
+        checks = (
+            ("schedule", r"(课表|课程表|排课|班级课表|CourseList|class_schedule)"),
+            ("dashboard", r"(Dashboard|仪表盘|看板)"),
+            ("chart", r"(饼图|pie chart|圆环图|doughnut|图表)"),
+            ("pivot", r"(PivotSummary|数据透视|透视表|SUMIFS|汇总透视)"),
+        )
+        for scenario, pattern in checks:
+            if re.search(pattern, normalized, flags=re.IGNORECASE):
+                scenarios.append(scenario)
+        return scenarios
 
     @classmethod
     def _should_inject_document_tool_guide(cls, *, request_text: str) -> bool:
@@ -637,6 +709,61 @@ class RequestHookService:
             for tool_name in EXECUTION_TOOLS:
                 context.request.func_tool.remove_tool(tool_name)
             logger.debug("[文件管理] 已自动屏蔽 shell/python 执行类工具")
+        return context
+
+    async def apply_excel_script_retry_exhaustion_block(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        if not (context.should_expose and context.request.func_tool):
+            return context
+        get_extra = getattr(context.event, "get_extra", None)
+        retry_exhausted = (
+            bool(get_extra(EXCEL_SCRIPT_RETRY_EXHAUSTED_EVENT_KEY, False))
+            if callable(get_extra)
+            else False
+        )
+        if not retry_exhausted:
+            return context
+        for tool_name in FILE_TOOLS:
+            context.request.func_tool.remove_tool(tool_name)
+        logger.info("[文件管理] Excel 脚本重试次数已用尽，已隐藏本次请求剩余文件工具")
+        return context
+
+    async def apply_excel_script_runtime_restriction(
+        self,
+        context: ToolExposureContext,
+    ) -> ToolExposureContext:
+        if not (context.should_expose and context.request.func_tool):
+            return context
+        try:
+            runtime_mode = self._resolve_excel_runtime_mode(context.event)
+        except Exception as exc:
+            logger.warning(
+                f"[文件管理] 读取 Excel runtime 配置失败，跳过 execute_excel_script 显隐控制: {exc}"
+            )
+            return context
+        if self._auto_block_execution_tools:
+            if runtime_mode == "sandbox":
+                return context
+            context.request.func_tool.remove_tool("execute_excel_script")
+            if runtime_mode == "local":
+                logger.info(
+                    "[文件管理] 已启用执行类工具自动屏蔽，当前 computer runtime 为 local，已隐藏 execute_excel_script"
+                )
+                return context
+        elif runtime_mode in {"local", "sandbox"}:
+            return context
+        context.request.func_tool.remove_tool("execute_excel_script")
+        if runtime_mode == "none":
+            logger.info(
+                "[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script"
+            )
+            return context
+        if runtime_mode not in SUPPORTED_COMPUTER_RUNTIME_MODES:
+            logger.warning(
+                f"[文件管理] 当前 computer runtime 配置不受支持：{runtime_mode}，已隐藏 execute_excel_script"
+            )
         return context
 
     async def apply_explicit_file_tool_restriction(

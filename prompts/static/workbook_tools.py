@@ -18,7 +18,7 @@ def build_workbook_tools_core_notice() -> str:
         "\n"
         "[边界说明]\n"
         "- 这条路径只覆盖结构化表格写入，不覆盖公式、图表、条件格式、数据验证\n"
-        "- `create_office_file` 仍是旧的简单一次性入口，不等价于上述结构化工作流\n"
+        "- 需要公式、图表、条件格式、数据验证时，改用 `execute_excel_script`\n"
     )
 
 
@@ -76,9 +76,8 @@ def build_workbook_tools_detail_notice() -> str:
         "\n[System Notice] Excel 原语工具细节指南\n"
         "\n"
         "[工具选择]\n"
-        "- 结构化 Excel（多 Sheet、分批写入）→ 使用 `create_workbook` / `write_rows` / `export_workbook`\n"
-        "- 简单一次性 Excel/PPT → 使用 `create_office_file`\n"
+        "- 结构化 Excel（多 Sheet、分批写入、无图表无公式）→ 使用 `create_workbook` / `write_rows` / `export_workbook`\n"
         "- `write_rows` 的 `rows` 传二维数组，避免超大单次 JSON\n"
         "- 多 Sheet 场景推荐每个 Sheet 分批写入，按需设置 `start_row`\n"
-        "- 需要公式、图表、条件格式、数据验证时，不要继续扩展这条原语路径\n"
+        "- 需要公式、图表、条件格式、数据验证时，切到 `execute_excel_script`\n"
     )

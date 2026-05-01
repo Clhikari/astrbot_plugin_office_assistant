@@ -1,25 +1,44 @@
 {
-    "trigger_settings": {
-        "description": "触发设置",
+    "feature_settings": {
+        "description": "功能开关",
         "type": "object",
-        "hint": "控制机器人何时允许调用文件工具",
+        "hint": "控制插件提供哪些文件能力。",
         "items": {
-            "require_at_in_group": {
-                "description": "群聊需要@/引用机器人",
+            "enable_office_files": {
+                "description": "启用 Office 文件生成",
                 "type": "bool",
-                "hint": "开启后，群聊中仅在@/引用机器人时模型才会获得文件操作能力。这能有效防止模型在群聊中误触发工具并节省Token。",
+                "hint": "是否允许生成 Word、Excel、PPT 文件。",
                 "default": true
             },
+            "enable_pdf_conversion": {
+                "description": "启用 PDF 转换",
+                "type": "bool",
+                "hint": "是否允许 Office 与 PDF 互转。需要额外安装依赖：LibreOffice、pdf2docx、tabula-py。",
+                "default": true
+            }
+        }
+    },
+    "trigger_settings": {
+        "description": "触发与响应",
+        "type": "object",
+        "hint": "控制群聊触发、工具屏蔽和发送文件时的提醒方式。",
+        "items": {
             "enable_features_in_group": {
                 "description": "群聊启用插件功能",
                 "type": "bool",
-                "hint": "关闭后，本插件在群聊中完全不生效（LLM工具、文件拦截与插件命令均禁用），仅私聊可用。默认关闭以降低群聊误触发风险。",
+                "hint": "关闭后，本插件在群聊中不启用文件拦截、LLM 工具和插件命令，仅私聊可用。",
                 "default": false
+            },
+            "require_at_in_group": {
+                "description": "群聊需要@/引用机器人",
+                "type": "bool",
+                "hint": "开启后，群聊中仅在@/引用机器人时模型才会获得文件操作能力。",
+                "default": true
             },
             "auto_block_execution_tools": {
                 "description": "自动屏蔽 shell/python 工具",
                 "type": "bool",
-                "hint": "开启后，当插件功能生效时会自动隐藏 astrbot_execute_shell / astrbot_execute_python / astrbot_execute_ipython，避免模型误用系统执行工具导致文件定位跑偏。",
+                "hint": "开启后，当插件功能生效时会自动隐藏 astrbot_execute_shell、astrbot_execute_python、astrbot_execute_ipython，减少模型误用系统执行工具。",
                 "default": true
             },
             "reply_to_user": {
@@ -33,112 +52,118 @@
     "permission_settings": {
         "description": "权限管理",
         "type": "object",
-        "hint": "配置可以使用插件的用户",
+        "hint": "配置可以使用插件的用户。",
         "items": {
             "whitelist_users": {
                 "description": "用户白名单",
                 "type": "list",
-                "hint": "允许使用插件的用户ID，每行一个。留空则仅管理员可用。",
+                "hint": "允许使用插件的用户 ID，每行一个。留空则仅管理员可用。",
                 "default": []
             }
         }
     },
-    "feature_settings": {
-        "description": "功能开关",
-        "type": "object",
-        "hint": "启用或禁用特定功能",
-        "items": {
-            "enable_office_files": {
-                "description": "启用 Office 文件生成",
-                "type": "bool",
-                "hint": "是否允许生成 Word/Excel/PPT 文件。",
-                "default": true
-            },
-            "enable_pdf_conversion": {
-                "description": "启用 PDF 转换",
-                "type": "bool",
-                "hint": "是否允许 Office⇄PDF 互转功能。需要额外安装依赖：LibreOffice (Office→PDF)、pdf2docx (PDF→Word)、tabula-py (PDF→Excel)。",
-                "default": true
-            }
-        }
-    },
     "file_settings": {
-        "description": "文件限制",
+        "description": "文件存储与大小",
         "type": "object",
-        "hint": "控制文件操作的限制",
+        "hint": "控制文件大小限制和生成文件的保存方式。",
         "items": {
             "max_file_size_mb": {
                 "description": "最大文件大小(MB)",
                 "type": "int",
-                "hint": "允许读取/发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
+                "hint": "允许读取或发送的最大文件大小，单位为 MB。设置过大可能导致内存不足或发送失败。",
                 "default": 20
+            },
+            "auto_delete_files": {
+                "description": "发送后自动删除文件",
+                "type": "bool",
+                "hint": "启用后，生成的文件会在发送完成后自动删除。关闭后，文件会保存在 data/plugin_data/astrbot_plugin_office_assistant/ 目录。",
+                "default": true
+            }
+        }
+    },
+    "upload_session_settings": {
+        "description": "上传合并与会话",
+        "type": "object",
+        "hint": "控制文件上传后的合并等待、会话内保留时间和旧流程文本缓存。",
+        "items": {
+            "message_buffer_seconds": {
+                "description": "文件合并等待时间(秒)",
+                "type": "float",
+                "hint": "上传文件后，系统会等待这段时间，把期间收到的文件和文本合并成同一批处理。",
+                "default": 4
+            },
+            "upload_session_ttl_seconds": {
+                "description": "上传文件保留时间(秒)",
+                "type": "int",
+                "hint": "上传完成后，文件会在当前会话里保留这段时间，供 /doc list、/doc use、/doc clear 使用。",
+                "default": 600
+            },
+            "recent_text_ttl_seconds": {
+                "description": "旧流程文本缓存时间(秒)",
+                "type": "int",
+                "hint": "兼容旧流程使用，一般不需要修改。",
+                "default": 20
+            }
+        }
+    },
+    "read_settings": {
+        "description": "文件读取与内容注入",
+        "type": "object",
+        "hint": "控制读取外部路径、Excel 预览规模和 Word 图片注入。",
+        "items": {
+            "allow_external_input_files": {
+                "description": "允许外部绝对路径",
+                "type": "bool",
+                "hint": "开启后，read_file、convert_to_pdf、convert_from_pdf 可读取工作区外绝对路径文件。delete_file 仍仅允许工作区内文件。",
+                "default": false
+            },
+            "max_excel_preview_rows": {
+                "description": "Excel预览最大行数",
+                "type": "int",
+                "hint": "读取 Excel 时，每个 Sheet 最多展示多少行。设为 0 表示不限制，仍受最大文件大小限制。",
+                "default": 2000
+            },
+            "max_excel_preview_chars": {
+                "description": "Excel预览最大字符数",
+                "type": "int",
+                "hint": "读取 Excel 时，每个 Sheet 最多展示多少个字符。设为 0 表示不限制，仍受最大文件大小限制。",
+                "default": 200000
+            },
+            "max_excel_preview_sheets": {
+                "description": "Excel预览最大Sheet数",
+                "type": "int",
+                "hint": "读取 Excel 时，最多展示多少个 Sheet。设为 0 表示不限制，仍受最大文件大小限制。",
+                "default": 0
             },
             "enable_docx_image_review": {
                 "description": "启用 Word 图片理解",
                 "type": "bool",
-                "hint": "读取 .docx 时，是否把文档里的嵌入图片注入模型上下文。关闭后按纯文本读取，不再输出 [插图N] 占位。",
+                "hint": "读取 .docx 时，是否把文档里的嵌入图片注入模型上下文。关闭后按纯文本读取。",
                 "default": true
             },
             "max_inline_docx_image_mb": {
                 "description": "Word图片注入大小上限(MB)",
                 "type": "int",
-                "hint": "读取 .docx 时，单张嵌入图片超过该大小就不注入多模态上下文，只在文本结果里保留说明。默认 2 MB。",
+                "hint": "读取 .docx 时，单张嵌入图片超过该大小就不注入多模态上下文，只在文本结果里保留说明。",
                 "default": 2
             },
             "max_inline_docx_image_count": {
                 "description": "Word图片最多注入张数",
                 "type": "int",
-                "hint": "读取 .docx 时，最多向多模态上下文注入多少张嵌入图片。超出的图片只在文本结果里保留说明。默认 3 张。",
+                "hint": "读取 .docx 时，最多向多模态上下文注入多少张嵌入图片。超出的图片只在文本结果里保留说明。",
                 "default": 3
-            },
-            "auto_delete_files": {
-                "description": "发送后自动删除文件",
-                "type": "bool",
-                "hint": "启用后，生成的文件会在发送完成后自动删除，不会占用磁盘空间。关闭则持久化存储在 data/plugin_data/astrbot_plugin_office_assistant/ 目录。",
-                "default": true
-            },
-            "message_buffer_seconds": {
-                "description": "文件合并等待时间(秒)",
-                "type": "float",
-                "hint": "上传文件后，系统会先等几秒，看看你是不是还要继续发别的文件。这个时间内发来的文件会被当成同一批处理。",
-                "default": 4
-            },
-            "recent_text_ttl_seconds": {
-                "description": "旧流程文本缓存时间(秒)",
-                "type": "int",
-                "hint": "兼容旧流程用，当前 `/doc` 模式下基本不会用到，一般不用改。",
-                "default": 20
-            },
-            "upload_session_ttl_seconds": {
-                "description": "上传文件保留时间(秒)",
-                "type": "int",
-                "hint": "上传完成后，文件会在当前会话里保留这段时间，供 `/doc list`、`/doc use`、`/doc clear` 使用。超过时间后会自动失效。",
-                "default": 600
-            }
-        }
-    },
-    "path_settings": {
-        "description": "路径访问设置",
-        "type": "object",
-        "hint": "控制 read_file / PDF 转换是否允许访问工作区外文件",
-        "items": {
-            "allow_external_input_files": {
-                "description": "允许外部绝对路径",
-                "type": "bool",
-                "hint": "开启后，read_file、convert_to_pdf、convert_from_pdf 可读取工作区外绝对路径文件。默认关闭更安全。delete_file 仍仅允许工作区内文件。",
-                "default": false
             }
         }
     },
     "preview_settings": {
-        "description": "预览图设置",
+        "description": "导出预览图",
         "type": "object",
-        "hint": "控制文件预览图生成",
+        "hint": "控制发送 Office/PDF 文件时是否附带第一页预览图。",
         "items": {
             "enable": {
                 "description": "启用预览图",
                 "type": "bool",
-                "hint": "发送 Office/PDF 文件时是否同时发送第一页预览图",
+                "hint": "发送 Office/PDF 文件时是否同时发送第一页预览图。",
                 "default": true
             },
             "dpi": {
@@ -183,12 +208,12 @@
     "debug_settings": {
         "description": "调试设置",
         "type": "object",
-        "hint": "用于插件报错的转发测试",
+        "hint": "用于插件报错的转发测试。",
         "items": {
             "debug_error_hook_target_session": {
                 "description": "报错转发目标会话",
                 "type": "string",
-                "hint": "格式: <platform.id>:<MessageType>:<target_id>。群聊示例: default:GroupMessage:123456789；私聊示例: default:FriendMessage:123456789。注意前缀是 platform.id（如 default），不是 platform.type（如 aiocqhttp）。留空则回落到当前会话。",
+                "hint": "格式: <platform.id>:<MessageType>:<target_id>。群聊示例: default:GroupMessage:123456789；私聊示例: default:FriendMessage:123456789。留空则回到当前会话。",
                 "default": ""
             }
         }
