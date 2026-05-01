@@ -89,6 +89,16 @@ def _schema_type_allows(schema: dict, expected_type: str) -> bool:
     return schema_type == expected_type
 
 
+def _schema_contains_type_list(schema: object) -> bool:
+    if isinstance(schema, dict):
+        if isinstance(schema.get("type"), list):
+            return True
+        return any(_schema_contains_type_list(value) for value in schema.values())
+    if isinstance(schema, list):
+        return any(_schema_contains_type_list(value) for value in schema)
+    return False
+
+
 def _paragraph_field_codes(paragraph) -> list[str]:
     from docx.oxml.ns import qn
 

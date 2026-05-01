@@ -1886,16 +1886,11 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
     list_item_schema = properties["items"]["items"]
     row_cell_schema = properties["rows"]["items"]["items"]
 
-    assert _schema_type_allows(row_cell_schema, "string")
-    assert _schema_type_allows(row_cell_schema, "object")
-    assert _schema_type_allows(list_item_schema, "string")
-    assert _schema_type_allows(list_item_schema, "object")
-    assert list_item_schema["properties"]["runs"]["items"]["properties"]["color"][
-        "type"
-    ] == "string"
-    assert row_cell_schema["properties"]["fill"]["type"] == "string"
-    assert row_cell_schema["properties"]["border"]["type"] == "object"
+    assert row_cell_schema == {"type": "string"}
+    assert list_item_schema == {"type": "string"}
     assert not _schema_contains_key(add_blocks_tool.parameters, "anyOf")
+    assert not _schema_contains_key(add_blocks_tool.parameters, "oneOf")
+    assert not _schema_contains_type_list(add_blocks_tool.parameters)
     assert not _schema_contains_key(row_cell_schema, "row_span")
     assert not _schema_contains_key(row_cell_schema, "col_span")
 
