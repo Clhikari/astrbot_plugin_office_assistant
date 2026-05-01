@@ -36,7 +36,7 @@ def _dump_result(result: ToolResult) -> str:
 
 
 _CONTINUE_UNTIL_EXPORT = (
-    "请继续调用文档工具，直到 export_document 成功。中途不要发自然语言回复。"
+    "请继续调用文档工具，直到 export_document 成功"
 )
 _FINALIZE_PROMPT = "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document"
 
