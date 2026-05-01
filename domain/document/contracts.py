@@ -580,6 +580,8 @@ def _apply_block_normalization_pipeline(block: dict) -> None:
 
 
 def _coerce_optional_mapping(value: object, field_name: str) -> dict[str, object]:
+    if value is None:
+        return {}
     if isinstance(value, Mapping):
         return dict(value)
     if not isinstance(value, str):
@@ -605,7 +607,10 @@ def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, 
     if "header_footer" in normalized:
         raw_header_footer = normalized.get("header_footer")
         header_footer = _coerce_optional_mapping(raw_header_footer, "header_footer")
-        normalized["header_footer"] = header_footer
+        if header_footer:
+            normalized["header_footer"] = header_footer
+        else:
+            normalized.pop("header_footer", None)
 
     document_style: dict[str, object] = {}
     if "document_style" in normalized:
@@ -616,6 +621,8 @@ def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, 
             document_style[key] = normalized[key]
     if document_style:
         normalized["document_style"] = document_style
+    else:
+        normalized.pop("document_style", None)
     return normalized
 
 

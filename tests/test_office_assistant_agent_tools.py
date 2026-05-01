@@ -534,6 +534,30 @@ async def test_create_document_tool_accepts_json_string_header_footer(
 
 
 @pytest.mark.asyncio
+async def test_create_document_tool_treats_null_style_and_footer_as_absent(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-null-style-footer"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            output_name="null-style-footer.docx",
+            document_style=None,
+            header_footer=None,
+        )
+    )
+
+    assert created["success"] is True
+    assert created["document"]["header_footer"] == {}
+    assert isinstance(created["document"]["document_style"], dict)
+
+
+@pytest.mark.asyncio
 async def test_create_document_tool_returns_incrementing_short_document_ids():
     tool = CreateDocumentTool()
 
