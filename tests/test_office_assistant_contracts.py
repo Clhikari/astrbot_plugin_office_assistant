@@ -108,6 +108,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from tests._docx_test_helpers import *  # noqa: F401,F403
 from tests._docx_test_helpers import _technical_resume_block
+from tests._schema_test_helpers import _schema_contains_key, _schema_contains_type_list
 
 
 
@@ -239,6 +240,15 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         block_properties["data"]["properties"]["auto_page_break"]["type"]
         == "boolean"
     )
+    resume_section_schema = block_properties["data"]["properties"]["sections"]["items"][
+        "properties"
+    ]
+    resume_detail_schema = resume_section_schema["entries"]["items"]["properties"][
+        "details"
+    ]["items"]
+    resume_line_schema = resume_section_schema["lines"]["items"]
+    assert resume_detail_schema == {"type": "string"}
+    assert resume_line_schema == {"type": "string"}
     assert block_properties["text"]["type"] == "string"
     assert block_properties["subtitle"]["type"] == "string"
     assert block_properties["runs"]["type"] == "array"

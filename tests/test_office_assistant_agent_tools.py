@@ -115,6 +115,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 from tests._docx_test_helpers import *  # noqa: F401,F403
+from tests._schema_test_helpers import _schema_contains_key, _schema_contains_type_list
 
 
 

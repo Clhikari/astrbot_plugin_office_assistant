@@ -197,9 +197,7 @@ _TABLE_CELL_SCHEMA = {
     },
 }
 
-_LIST_ITEM_PUBLIC_SCHEMA = {"type": "string"}
-
-_TABLE_CELL_PUBLIC_SCHEMA = {"type": "string"}
+_STRING_PUBLIC_SCHEMA = {"type": "string"}
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -564,7 +562,7 @@ class AddBlocksTool(DocumentToolBase):
                                                             "details": {
                                                                 "type": "array",
                                                                 "items": _schema_copy(
-                                                                    _LIST_ITEM_PUBLIC_SCHEMA
+                                                                    _STRING_PUBLIC_SCHEMA
                                                                 ),
                                                             },
                                                         },
@@ -574,7 +572,7 @@ class AddBlocksTool(DocumentToolBase):
                                                 "lines": {
                                                     "type": "array",
                                                     "items": _schema_copy(
-                                                        _LIST_ITEM_PUBLIC_SCHEMA
+                                                        _STRING_PUBLIC_SCHEMA
                                                     ),
                                                 },
                                             },
@@ -602,7 +600,7 @@ class AddBlocksTool(DocumentToolBase):
                             },
                             "items": {
                                 "type": "array",
-                                "items": _schema_copy(_LIST_ITEM_PUBLIC_SCHEMA),
+                                "items": _schema_copy(_STRING_PUBLIC_SCHEMA),
                             },
                             "ordered": {"type": "boolean"},
                             "headers": {
@@ -613,7 +611,7 @@ class AddBlocksTool(DocumentToolBase):
                                 "type": "array",
                                 "items": {
                                     "type": "array",
-                                    "items": _schema_copy(_TABLE_CELL_PUBLIC_SCHEMA),
+                                    "items": _schema_copy(_STRING_PUBLIC_SCHEMA),
                                 },
                             },
                             "header_groups": {
