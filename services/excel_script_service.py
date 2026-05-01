@@ -74,6 +74,7 @@ class ExcelScriptService:
         *,
         astrbot_context=None,
         auto_block_execution_tools: bool = False,
+        allow_local_excel_script: bool = False,
         workspace_service,
         file_delivery_service,
         allow_external_input_files: bool,
@@ -83,6 +84,7 @@ class ExcelScriptService:
     ) -> None:
         self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
+        self._allow_local_excel_script = allow_local_excel_script
         self._workspace_service = workspace_service
         self._file_delivery_service = file_delivery_service
         self._allow_external_input_files = allow_external_input_files
@@ -369,13 +371,17 @@ class ExcelScriptService:
                 ),
                 retry_exhausted=True,
             )
-        if self._auto_block_execution_tools and runtime_mode != "sandbox":
+        if (
+            runtime_mode == "local"
+            and self._auto_block_execution_tools
+            and not self._allow_local_excel_script
+        ):
             return self._build_non_retry_result(
                 event,
                 script=normalized_script,
                 error=(
-                    "错误：当前已启用执行类工具自动屏蔽，"
-                    "execute_excel_script 仅允许在 sandbox runtime 下执行"
+                    "错误：当前 computer runtime 为 local，"
+                    "但未开启 allow_local_excel_script，无法执行 Excel 脚本"
                 ),
                 retry_exhausted=True,
             )

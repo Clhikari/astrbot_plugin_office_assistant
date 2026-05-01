@@ -47,6 +47,7 @@ class FileToolService:
         *,
         astrbot_context=None,
         auto_block_execution_tools: bool = False,
+        allow_local_excel_script: bool = False,
         workspace_service=None,
         office_generator=None,
         pdf_converter=None,
@@ -134,6 +135,7 @@ class FileToolService:
             self._excel_script_service = ExcelScriptService(
                 astrbot_context=astrbot_context,
                 auto_block_execution_tools=auto_block_execution_tools,
+                allow_local_excel_script=allow_local_excel_script,
                 workspace_service=workspace_service,
                 file_delivery_service=generated_output_delivery_service,
                 allow_external_input_files=allow_external_input_files,

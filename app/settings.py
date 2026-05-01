@@ -25,6 +25,7 @@ class PluginSettings:
     require_at_in_group: bool
     enable_features_in_group: bool
     auto_block_execution_tools: bool
+    allow_local_excel_script: bool
     enable_preview: bool
     preview_dpi: int
     allow_external_input_files: bool
@@ -123,6 +124,7 @@ def load_plugin_settings(config) -> PluginSettings:
     auto_block_execution_tools = trigger_settings.get(
         "auto_block_execution_tools", True
     )
+    allow_local_excel_script = trigger_settings.get("allow_local_excel_script", False)
     enable_preview = preview_settings.get("enable", True)
     preview_dpi = preview_settings.get("dpi", 150)
     allow_external_input_files = read_settings.get(
@@ -187,6 +189,7 @@ def load_plugin_settings(config) -> PluginSettings:
         require_at_in_group=require_at_in_group,
         enable_features_in_group=enable_features_in_group,
         auto_block_execution_tools=auto_block_execution_tools,
+        allow_local_excel_script=allow_local_excel_script,
         enable_preview=enable_preview,
         preview_dpi=preview_dpi,
         allow_external_input_files=allow_external_input_files,

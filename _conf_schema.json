@@ -41,6 +41,12 @@
                 "hint": "开启后，当插件功能生效时会自动隐藏 astrbot_execute_shell、astrbot_execute_python、astrbot_execute_ipython，减少模型误用系统执行工具。",
                 "default": true
             },
+            "allow_local_excel_script": {
+                "description": "允许本地 Excel 脚本工具",
+                "type": "bool",
+                "hint": "开启后，当 computer_use_runtime 为 local 时，也会暴露 execute_excel_script。脚本会在机器人本机运行，请只在可信环境中开启。",
+                "default": false
+            },
             "reply_to_user": {
                 "description": "发送文件时@用户",
                 "type": "bool",

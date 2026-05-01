@@ -17,6 +17,7 @@ class CommandService:
         allow_external_input_files: bool,
         enable_features_in_group: bool,
         auto_block_execution_tools: bool,
+        allow_local_excel_script: bool,
         reply_to_user: bool,
         upload_session_service,
         is_group_feature_enabled,
@@ -31,6 +32,7 @@ class CommandService:
         self._allow_external_input_files = allow_external_input_files
         self._enable_features_in_group = enable_features_in_group
         self._auto_block_execution_tools = auto_block_execution_tools
+        self._allow_local_excel_script = allow_local_excel_script
         self._reply_to_user = reply_to_user
         self._upload_session_service = upload_session_service
         self._is_group_feature_enabled = is_group_feature_enabled
@@ -94,6 +96,7 @@ class CommandService:
             f"外部路径读取: {'开启' if self._allow_external_input_files else '关闭'}\n"
             f"群聊启用插件功能: {'开启' if self._enable_features_in_group else '关闭'}\n"
             f"自动屏蔽 shell/python 工具: {'开启' if self._auto_block_execution_tools else '关闭'}\n"
+            f"允许本地 Excel 脚本工具: {'开启' if self._allow_local_excel_script else '关闭'}\n"
             f"回复模式: {'开启' if self._reply_to_user else '关闭'}\n"
             f"Word工具链: {word_toolchain_status}\n"
             f"PDF转换: {', '.join(pdf_status)}"

@@ -182,6 +182,7 @@ def _build_request_hook_service(
     *,
     astrbot_context=None,
     auto_block_execution_tools: bool = True,
+    allow_local_excel_script: bool = False,
     get_cached_upload_infos=None,
     extract_upload_source=None,
     store_uploaded_file=None,
@@ -192,6 +193,7 @@ def _build_request_hook_service(
     return RequestHookService(
         astrbot_context=astrbot_context,
         auto_block_execution_tools=auto_block_execution_tools,
+        allow_local_excel_script=allow_local_excel_script,
         get_cached_upload_infos=get_cached_upload_infos or (lambda _event: []),
         extract_upload_source=extract_upload_source or AsyncMock(),
         store_uploaded_file=store_uploaded_file or MagicMock(),
@@ -284,6 +286,7 @@ def _managed_file_tool_service(
     max_file_size: int = 1024 * 1024,
     feature_settings=None,
     auto_block_execution_tools: bool = True,
+    allow_local_excel_script: bool = False,
     **service_kwargs,
 ):
     effective_office_libs = office_libs or {}
@@ -298,6 +301,7 @@ def _managed_file_tool_service(
             workspace_service=managed.workspace_service,
             office_libs=effective_office_libs,
             auto_block_execution_tools=auto_block_execution_tools,
+            allow_local_excel_script=allow_local_excel_script,
             **service_kwargs,
         )
         yield SimpleNamespace(
@@ -342,6 +346,7 @@ def _build_command_service(
     allow_external_input_files: bool = False,
     enable_features_in_group: bool = True,
     auto_block_execution_tools: bool = True,
+    allow_local_excel_script: bool = False,
     reply_to_user: bool = True,
     is_group_feature_enabled=None,
     check_permission=None,
@@ -363,6 +368,7 @@ def _build_command_service(
         allow_external_input_files=allow_external_input_files,
         enable_features_in_group=enable_features_in_group,
         auto_block_execution_tools=auto_block_execution_tools,
+        allow_local_excel_script=allow_local_excel_script,
         reply_to_user=reply_to_user,
         upload_session_service=upload_session_service or MagicMock(),
         is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
@@ -672,6 +678,7 @@ def _build_file_tool_service(
     *,
     astrbot_context=None,
     auto_block_execution_tools: bool = True,
+    allow_local_excel_script: bool = False,
     workspace_service,
     office_generator=None,
     pdf_converter=None,
@@ -693,6 +700,7 @@ def _build_file_tool_service(
     return FileToolService(
         astrbot_context=astrbot_context,
         auto_block_execution_tools=auto_block_execution_tools,
+        allow_local_excel_script=allow_local_excel_script,
         workspace_service=workspace_service,
         office_generator=office_generator or MagicMock(),
         pdf_converter=pdf_converter or MagicMock(),
@@ -1075,6 +1083,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.max_excel_preview_rows == 123
         assert runtime.settings.max_excel_preview_chars == 4567
         assert runtime.settings.max_excel_preview_sheets == 8
+        assert runtime.settings.allow_local_excel_script is False
         assert runtime.file_read_service._max_excel_preview_rows == 123
         assert runtime.file_read_service._max_excel_preview_chars == 4567
         assert runtime.file_read_service._max_excel_preview_sheets == 8
@@ -1359,6 +1368,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
             "require_at_in_group": False,
             "enable_features_in_group": True,
             "auto_block_execution_tools": False,
+            "allow_local_excel_script": True,
         },
         "preview_settings": {
             "enable": True,
@@ -1405,6 +1415,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.require_at_in_group is False
         assert runtime.settings.enable_features_in_group is True
         assert runtime.settings.auto_block_execution_tools is False
+        assert runtime.settings.allow_local_excel_script is True
         assert runtime.settings.enable_preview is True
         assert runtime.settings.preview_dpi == 180
         assert runtime.settings.allow_external_input_files is True
@@ -1856,6 +1867,36 @@ async def test_request_hook_service_hides_execute_excel_script_for_local_runtime
     assert "read_workbook" in tool_names
     assert "execute_excel_script" not in tool_names
     assert "astrbot_execute_shell" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_keeps_local_execute_excel_script_without_generic_execution_tools():
+    request = _build_provider_request(
+        "请生成一个带公式的 Excel 报表",
+        tool_names=[
+            "read_workbook",
+            "execute_excel_script",
+            "astrbot_execute_shell",
+            "astrbot_execute_python",
+            "astrbot_execute_ipython",
+        ],
+    )
+    service = _build_request_hook_service(
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=True,
+        allow_local_excel_script=True,
+    )
+    context = _build_tool_exposure_context(request)
+
+    for hook in service.build_tool_exposure_hooks():
+        context = await hook(context)
+
+    tool_names = set(request.func_tool.names())
+    assert "read_workbook" in tool_names
+    assert "execute_excel_script" in tool_names
+    assert "astrbot_execute_shell" not in tool_names
+    assert "astrbot_execute_python" not in tool_names
+    assert "astrbot_execute_ipython" not in tool_names
 
 
 @pytest.mark.asyncio
@@ -7499,6 +7540,34 @@ async def test_file_tool_service_execute_excel_script_runs_in_local_runtime():
 
 
 @pytest.mark.asyncio
+async def test_file_tool_service_execute_excel_script_runs_in_local_runtime_when_allowed():
+    event = _build_event()
+
+    with _managed_file_tool_service(
+        workspace_name="execute-excel-script-local-runtime-separate-allow",
+        office_libs={"openpyxl": object()},
+        astrbot_context=_build_astrbot_context(runtime="local"),
+        auto_block_execution_tools=True,
+        allow_local_excel_script=True,
+    ) as managed:
+        service = managed.service
+        with patch(
+            "astrbot_plugin_office_assistant.services.excel_script_service._get_computer_booter",
+            new=AsyncMock(),
+        ) as mocked_get_booter:
+            result = await service.execute_excel_script(
+                event,
+                script="result_text = 'ok'",
+            )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    assert payload["mode"] == "text"
+    assert payload["result_text"] == "ok"
+    mocked_get_booter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_service_execute_excel_script_repairs_double_escaped_quotes():
     event = _build_event()
 
@@ -7895,7 +7964,7 @@ async def test_file_tool_service_execute_excel_script_rejects_local_runtime_when
 
     payload = json.loads(result)
     assert payload["success"] is False
-    assert "仅允许在 sandbox runtime 下执行" in payload["error"]
+    assert "未开启 allow_local_excel_script" in payload["error"]
     assert payload["retry_count"] == 0
     assert payload["retry_exhausted"] is True
     runner.assert_not_awaited()

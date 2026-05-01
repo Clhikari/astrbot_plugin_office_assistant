@@ -8,9 +8,11 @@ from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from ..agent_tools import build_document_toolset
+
+# workbook toolset may be introduced incrementally
 try:
     from ..agent_tools import build_workbook_toolset
-except ImportError:  # pragma: no cover - workbook toolset may be introduced incrementally
+except ImportError:  # pragma: no cover
     build_workbook_toolset = None
 from ..app.runtime import (
     AdminUsersResolver,
@@ -159,6 +161,7 @@ def build_plugin_runtime(
         allow_external_input_files=settings.allow_external_input_files,
         enable_features_in_group=settings.enable_features_in_group,
         auto_block_execution_tools=settings.auto_block_execution_tools,
+        allow_local_excel_script=settings.allow_local_excel_script,
         reply_to_user=settings.reply_to_user,
         upload_session_service=upload_session_service,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
@@ -253,6 +256,7 @@ def _build_request_pipeline_services(
     request_hook_service = RequestHookService(
         astrbot_context=astrbot_context,
         auto_block_execution_tools=settings.auto_block_execution_tools,
+        allow_local_excel_script=settings.allow_local_excel_script,
         get_cached_upload_infos=upload_session_service.get_cached_upload_infos,
         extract_upload_source=extract_upload_source,
         store_uploaded_file=store_uploaded_file,
@@ -292,7 +296,9 @@ def _build_document_summary_lookup(document_toolset):
 
 def _build_workbook_toolset(*, workspace_dir: Path, after_export):
     if build_workbook_toolset is None:
-        logger.info("[文件管理] build_workbook_toolset 不可用，跳过 workbook 原语工具挂载")
+        logger.info(
+            "[文件管理] build_workbook_toolset 不可用，跳过 workbook 原语工具挂载"
+        )
         return None
     try:
         return build_workbook_toolset(
@@ -373,6 +379,7 @@ def _build_file_processing_services(
     file_tool_service = FileToolService(
         astrbot_context=astrbot_context,
         auto_block_execution_tools=settings.auto_block_execution_tools,
+        allow_local_excel_script=settings.allow_local_excel_script,
         workspace_service=workspace_service,
         office_generator=office_gen,
         pdf_converter=pdf_converter,

@@ -118,6 +118,7 @@ class RequestHookService:
         *,
         astrbot_context=None,
         auto_block_execution_tools: bool,
+        allow_local_excel_script: bool = False,
         get_cached_upload_infos: Callable[[AstrMessageEvent], list[UploadInfo]],
         extract_upload_source: Callable[
             [Comp.File], Awaitable[tuple[Path | None, str]]
@@ -133,6 +134,7 @@ class RequestHookService:
     ) -> None:
         self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
+        self._allow_local_excel_script = allow_local_excel_script
         self._get_cached_upload_infos = get_cached_upload_infos
         self._extract_upload_source = extract_upload_source
         self._store_uploaded_file = store_uploaded_file
@@ -743,18 +745,18 @@ class RequestHookService:
                 f"[文件管理] 读取 Excel runtime 配置失败，跳过 execute_excel_script 显隐控制: {exc}"
             )
             return context
-        if self._auto_block_execution_tools:
-            if runtime_mode == "sandbox":
-                return context
-            context.request.func_tool.remove_tool("execute_excel_script")
-            if runtime_mode == "local":
-                logger.info(
-                    "[文件管理] 已启用执行类工具自动屏蔽，当前 computer runtime 为 local，已隐藏 execute_excel_script"
-                )
-                return context
-        elif runtime_mode in {"local", "sandbox"}:
+        if runtime_mode == "sandbox":
+            return context
+        if runtime_mode == "local" and (
+            self._allow_local_excel_script or not self._auto_block_execution_tools
+        ):
             return context
         context.request.func_tool.remove_tool("execute_excel_script")
+        if runtime_mode == "local":
+            logger.info(
+                "[文件管理] 当前 computer runtime 为 local，未开启 allow_local_excel_script，已隐藏 execute_excel_script"
+            )
+            return context
         if runtime_mode == "none":
             logger.info(
                 "[文件管理] 当前 computer runtime 为 none，已隐藏 execute_excel_script"
