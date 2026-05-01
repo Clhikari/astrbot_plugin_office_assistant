@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -550,15 +551,42 @@ def _apply_block_normalization_pipeline(block: dict) -> None:
             normalizer(block)
 
 
+def _coerce_optional_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if not isinstance(value, str):
+        return {}
+
+    text = value.strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, Mapping):
+        return dict(parsed)
+    return {}
+
+
 def normalize_create_document_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
     normalized = dict(kwargs)
+    raw_header_footer = normalized.get("header_footer")
+    header_footer = _coerce_optional_mapping(raw_header_footer)
+    if header_footer:
+        normalized["header_footer"] = header_footer
+    elif "header_footer" in normalized and not isinstance(raw_header_footer, Mapping):
+        normalized.pop("header_footer", None)
+
     raw_document_style = normalized.get("document_style")
-    document_style = dict(raw_document_style) if isinstance(raw_document_style, Mapping) else {}
+    document_style = _coerce_optional_mapping(raw_document_style)
     for key in _DOCUMENT_STYLE_COMPAT_KEYS:
         if key in normalized and key not in document_style:
             document_style[key] = normalized[key]
     if document_style:
         normalized["document_style"] = document_style
+    elif "document_style" in normalized and not isinstance(raw_document_style, Mapping):
+        normalized.pop("document_style", None)
     return normalized
 
 
@@ -586,7 +614,7 @@ def _extract_compat_section_break(block: dict) -> dict | None:
 
 
 def normalize_raw_block_payloads(
-    blocks: list[object],
+    blocks: object,
     *,
     _depth: int = 0,
 ) -> list[object]:
@@ -594,6 +622,14 @@ def normalize_raw_block_payloads(
         raise ValueError(
             f"block payload nesting exceeds limit ({MAX_BLOCK_NORMALIZE_DEPTH})"
         )
+    if isinstance(blocks, str):
+        try:
+            blocks = json.loads(blocks)
+        except json.JSONDecodeError as exc:
+            raise ValueError("blocks must be a JSON array when passed as a string") from exc
+    if not isinstance(blocks, list):
+        raise ValueError("blocks must be a list")
+
     normalized_blocks: list[object] = []
     for raw_block in blocks:
         block = _copy_raw_block(raw_block)
@@ -1348,6 +1384,7 @@ class TechnicalResumeDataInput(BaseModel):
     headline: str = ""
     contact_line: str = Field(min_length=1)
     sections: list[ResumeSectionInput] = Field(min_length=1)
+    auto_page_break: bool = False
 
 
 class SectionPageTemplateInput(BaseModel):

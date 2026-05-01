@@ -38,9 +38,7 @@ def _dump_result(result: ToolResult) -> str:
 _CONTINUE_UNTIL_EXPORT = (
     "请继续调用文档工具，直到 export_document 成功。中途不要发自然语言回复。"
 )
-_FINALIZE_PROMPT = (
-    "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document，也不要发自然语言回复。"
-)
+_FINALIZE_PROMPT = "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document，也不要发自然语言回复。"
 
 
 _STYLE_SCHEMA = {
@@ -198,6 +196,17 @@ _TABLE_CELL_SCHEMA = {
 }
 
 _STRING_PUBLIC_SCHEMA = {"type": "string"}
+_RICH_LIST_ITEM_PUBLIC_SCHEMA = {
+    "description": "Plain string, or rich list item object with text/runs.",
+    "properties": {
+        "text": {"type": "string"},
+        "runs": {
+            "type": "array",
+            "description": "Optional inline rich-text runs for this list item.",
+            "items": _schema_copy(_INLINE_RUN_SCHEMA),
+        },
+    },
+}
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -556,13 +565,17 @@ class AddBlocksTool(DocumentToolBase):
                                                     "items": {
                                                         "type": "object",
                                                         "properties": {
-                                                            "heading": {"type": "string"},
+                                                            "heading": {
+                                                                "type": "string"
+                                                            },
                                                             "date": {"type": "string"},
-                                                            "subtitle": {"type": "string"},
+                                                            "subtitle": {
+                                                                "type": "string"
+                                                            },
                                                             "details": {
                                                                 "type": "array",
                                                                 "items": _schema_copy(
-                                                                    _STRING_PUBLIC_SCHEMA
+                                                                    _RICH_LIST_ITEM_PUBLIC_SCHEMA
                                                                 ),
                                                             },
                                                         },
@@ -572,7 +585,7 @@ class AddBlocksTool(DocumentToolBase):
                                                 "lines": {
                                                     "type": "array",
                                                     "items": _schema_copy(
-                                                        _STRING_PUBLIC_SCHEMA
+                                                        _RICH_LIST_ITEM_PUBLIC_SCHEMA
                                                     ),
                                                 },
                                             },
@@ -876,7 +889,7 @@ class AddBlocksTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         try:
-            raw_blocks = normalize_raw_block_payloads(list(kwargs.get("blocks") or []))
+            raw_blocks = normalize_raw_block_payloads(kwargs.get("blocks") or [])
             request = AddBlocksRequest(
                 document_id=str(kwargs.get("document_id") or ""),
                 blocks=raw_blocks,
@@ -992,8 +1005,7 @@ class ExportDocumentTool(DocumentToolBase):
             resolved_render_backends = (
                 build_document_render_backends(
                     document_for_routing.format,
-                    self.render_backend_config
-                    or get_render_backend_config(self.store),
+                    self.render_backend_config or get_render_backend_config(self.store),
                 )
                 if self.render_backend_config is not None
                 or document_for_routing.format != "word"
