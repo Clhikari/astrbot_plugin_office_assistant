@@ -594,6 +594,16 @@ def test_normalize_raw_block_payloads_accepts_json_string_array():
     assert normalized == [{"type": "paragraph", "text": "正文"}]
 
 
+def test_normalize_raw_block_payloads_rejects_invalid_json_string():
+    with pytest.raises(ValueError, match="valid JSON array"):
+        normalize_raw_block_payloads("not-json")
+
+
+def test_normalize_raw_block_payloads_rejects_non_list_json_string():
+    with pytest.raises(ValueError, match="blocks must be a list"):
+        normalize_raw_block_payloads('{"type": "paragraph"}')
+
+
 def test_normalize_raw_block_payloads_repairs_technical_resume_section_heading_alias():
     normalized = normalize_raw_block_payloads(
         [
@@ -777,6 +787,20 @@ def test_normalize_create_document_kwargs_accepts_json_string_objects():
     assert normalized["document_style"]["font_name"] == "Microsoft YaHei"
     assert normalized["document_style"]["heading_color"] == "1F4E79"
     assert normalized["header_footer"]["footer_text"] == "内部资料"
+
+
+@pytest.mark.parametrize("field_name", ["document_style", "header_footer"])
+def test_normalize_create_document_kwargs_rejects_invalid_json_string(field_name: str):
+    with pytest.raises(ValueError, match=f"{field_name} must be valid JSON"):
+        normalize_create_document_kwargs({field_name: "not-json"})
+
+
+@pytest.mark.parametrize("field_name", ["document_style", "header_footer"])
+def test_normalize_create_document_kwargs_rejects_non_mapping_json_string(
+    field_name: str,
+):
+    with pytest.raises(ValueError, match=f"{field_name} must be a JSON object"):
+        normalize_create_document_kwargs({field_name: '["not", "an", "object"]'})
 
 
 def test_normalize_raw_block_payloads_rejects_excessive_nesting():

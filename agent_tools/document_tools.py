@@ -35,9 +35,7 @@ def _dump_result(result: ToolResult) -> str:
     return result.model_dump_json(exclude_none=True)
 
 
-_CONTINUE_UNTIL_EXPORT = (
-    "请继续调用文档工具，直到 export_document 成功"
-)
+_CONTINUE_UNTIL_EXPORT = "请继续调用文档工具，直到 export_document 成功"
 _FINALIZE_PROMPT = "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document"
 
 
@@ -197,7 +195,7 @@ _TABLE_CELL_SCHEMA = {
 
 _STRING_PUBLIC_SCHEMA = {"type": "string"}
 _RICH_LIST_ITEM_PUBLIC_SCHEMA = {
-    "description": "Plain string, or rich list item object with text/runs.",
+    "description": "Rich list item object with text/runs. Plain strings are also accepted by runtime validation.",
     "properties": {
         "text": {"type": "string"},
         "runs": {
