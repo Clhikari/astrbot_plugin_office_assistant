@@ -38,7 +38,7 @@ def _dump_result(result: ToolResult) -> str:
 _CONTINUE_UNTIL_EXPORT = (
     "请继续调用文档工具，直到 export_document 成功。中途不要发自然语言回复。"
 )
-_FINALIZE_PROMPT = "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document，也不要发自然语言回复。"
+_FINALIZE_PROMPT = "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document"
 
 
 _STYLE_SCHEMA = {
@@ -555,11 +555,14 @@ class AddBlocksTool(DocumentToolBase):
                                     },
                                     "sections": {
                                         "type": "array",
-                                        "description": "Resume sections for technical_resume. Each section needs a title plus entries or lines.",
+                                        "description": "Resume sections for technical_resume. Each section MUST use title for the section name, plus entries or lines.",
                                         "items": {
                                             "type": "object",
                                             "properties": {
-                                                "title": {"type": "string"},
+                                                "title": {
+                                                    "type": "string",
+                                                    "description": "Required section name, such as 项目经历 or 技术栈. Use title here; do not use heading.",
+                                                },
                                                 "entries": {
                                                     "type": "array",
                                                     "items": {
@@ -589,6 +592,7 @@ class AddBlocksTool(DocumentToolBase):
                                                     ),
                                                 },
                                             },
+                                            "required": ["title"],
                                         },
                                     },
                                 },

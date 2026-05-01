@@ -242,10 +242,15 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     resume_section_schema = block_properties["data"]["properties"]["sections"]["items"][
         "properties"
     ]
+    resume_section_item_schema = block_properties["data"]["properties"]["sections"][
+        "items"
+    ]
     resume_detail_schema = resume_section_schema["entries"]["items"]["properties"][
         "details"
     ]["items"]
     resume_line_schema = resume_section_schema["lines"]["items"]
+    assert resume_section_item_schema["required"] == ["title"]
+    assert resume_section_schema["title"]["type"] == "string"
     assert "type" not in resume_detail_schema
     assert resume_detail_schema["properties"]["text"]["type"] == "string"
     assert resume_detail_schema["properties"]["runs"]["type"] == "array"
@@ -587,6 +592,29 @@ def test_normalize_raw_block_payloads_accepts_json_string_array():
     normalized = normalize_raw_block_payloads('[{"type": "paragraph", "text": "正文"}]')
 
     assert normalized == [{"type": "paragraph", "text": "正文"}]
+
+
+def test_normalize_raw_block_payloads_repairs_technical_resume_section_heading_alias():
+    normalized = normalize_raw_block_payloads(
+        [
+            _technical_resume_block(
+                sections=[
+                    {
+                        "heading": "项目经历",
+                        "entries": [
+                            {
+                                "heading": "Office Assistant Word 输出验证",
+                                "details": [{"text": "普通字符串 detail 保持可渲染。"}],
+                            }
+                        ],
+                    }
+                ]
+            )
+        ]
+    )
+
+    assert normalized[0]["data"]["sections"][0]["title"] == "项目经历"
+    assert "heading" not in normalized[0]["data"]["sections"][0]
 
 
 def test_normalize_raw_block_payloads_repairs_paragraph_items_alias():

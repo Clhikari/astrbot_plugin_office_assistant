@@ -1937,6 +1937,7 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
     resume_sections = properties["data"]["properties"]["sections"]["items"][
         "properties"
     ]
+    resume_section_schema = properties["data"]["properties"]["sections"]["items"]
     resume_detail_schema = resume_sections["entries"]["items"]["properties"]["details"][
         "items"
     ]
@@ -1944,6 +1945,10 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
 
     assert row_cell_schema == {"type": "string"}
     assert list_item_schema == {"type": "string"}
+    assert resume_section_schema["required"] == ["title"]
+    assert resume_sections["title"]["description"].endswith(
+        "Use title here; do not use heading."
+    )
     assert "type" not in resume_detail_schema
     assert (
         resume_detail_schema["properties"]["runs"]["items"]["properties"]["bold"][

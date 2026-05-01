@@ -194,7 +194,9 @@ def _normalize_table_header_alias(block: dict) -> None:
     if isinstance(raw_headers, list) and raw_headers:
         normalized_headers = [
             text
-            for text in (_extract_text_from_column_alias(header) for header in raw_headers)
+            for text in (
+                _extract_text_from_column_alias(header) for header in raw_headers
+            )
             if text
         ]
         if normalized_headers:
@@ -332,7 +334,11 @@ def _normalize_nested_block_payload_alias(block: dict) -> None:
             block["text"] = content.strip()
     elif block_type == "hero_banner":
         title_color = block.pop("title_color", None)
-        if isinstance(title_color, str) and title_color.strip() and not block.get("text_color"):
+        if (
+            isinstance(title_color, str)
+            and title_color.strip()
+            and not block.get("text_color")
+        ):
             block["text_color"] = title_color.strip()
         text = block.pop("text", None)
         if isinstance(text, str) and text.strip() and not block.get("title"):
@@ -433,7 +439,11 @@ def _normalize_runs_color_aliases(runs: object) -> None:
         if not isinstance(raw_run, dict):
             continue
         text_color = raw_run.pop("text_color", None)
-        if "color" not in raw_run and isinstance(text_color, str) and text_color.strip():
+        if (
+            "color" not in raw_run
+            and isinstance(text_color, str)
+            and text_color.strip()
+        ):
             raw_run["color"] = text_color.strip()
 
 
@@ -455,6 +465,26 @@ def _normalize_block_run_aliases(block: dict) -> None:
         if not isinstance(item, dict):
             continue
         _normalize_runs_color_aliases(item.get("runs"))
+
+
+def _normalize_technical_resume_section_aliases(block: dict) -> None:
+    if (
+        block.get("type") != "page_template"
+        or block.get("template") != "technical_resume"
+    ):
+        return
+    data = block.get("data")
+    if not isinstance(data, Mapping):
+        return
+    sections = data.get("sections")
+    if not isinstance(sections, list):
+        return
+    for section in sections:
+        if not isinstance(section, dict) or section.get("title"):
+            continue
+        heading = section.pop("heading", None)
+        if isinstance(heading, str) and heading.strip():
+            section["title"] = heading.strip()
 
 
 def _normalize_table_cell_aliases(block: dict) -> None:
@@ -490,10 +520,7 @@ def _normalize_legacy_paragraph_border_aliases(block: dict) -> None:
         bottom_border is True
         or bottom_border_color not in (None, "")
         or bottom_border_size_pt is not None
-        or (
-            isinstance(bottom_border_style, str)
-            and bottom_border_style.strip() != ""
-        )
+        or (isinstance(bottom_border_style, str) and bottom_border_style.strip() != "")
     )
     if not has_legacy_border:
         return
@@ -530,6 +557,7 @@ _BLOCK_CONTENT_NORMALIZERS = (
     _normalize_heading_title_alias,
     _normalize_paragraph_items_alias,
     _normalize_block_run_aliases,
+    _normalize_technical_resume_section_aliases,
     _normalize_legacy_paragraph_border_aliases,
 )
 _TABLE_BLOCK_NORMALIZERS = (
@@ -626,7 +654,9 @@ def normalize_raw_block_payloads(
         try:
             blocks = json.loads(blocks)
         except json.JSONDecodeError as exc:
-            raise ValueError("blocks must be a JSON array when passed as a string") from exc
+            raise ValueError(
+                "blocks must be a JSON array when passed as a string"
+            ) from exc
     if not isinstance(blocks, list):
         raise ValueError("blocks must be a list")
 
@@ -726,6 +756,7 @@ def _coerce_table_input_rows_to_runtime(
         ]
         for row in rows
     ]
+
 
 class CreateDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1415,7 +1446,9 @@ class SectionPageTemplateInput(BaseModel):
         )
         if isinstance(self.data, expected_type):
             return self
-        raise ValueError(f"page_template data does not match template {self.template!r}")
+        raise ValueError(
+            f"page_template data does not match template {self.template!r}"
+        )
 
 
 class AddSummaryCardRequest(BaseModel):
