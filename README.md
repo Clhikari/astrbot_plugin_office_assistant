@@ -101,6 +101,7 @@ npm run build
 | --- | --- | --- |
 | `enable_features_in_group` | `false` | 要在群聊里用插件 |
 | `require_at_in_group` | `true` | 群聊里不想强制 @ |
+| `allow_all_users` | `false` | 可信环境里不想逐个维护白名单 |
 | `enable_docx_image_review` | `true` | 不需要模型读 Word 里的图片 |
 | `auto_block_execution_tools` | `true` | 建议保持开启，用来隐藏通用 shell/python 执行工具 |
 | `allow_local_excel_script` | `false` | `computer_use_runtime=local` 时开放 `execute_excel_script` |
@@ -129,6 +130,7 @@ npm run build
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
+| 允许所有用户使用 (`allow_all_users`) | bool | false | 开启后所有用户都能通过用户权限检查；群聊开关、群聊 @ 限制和执行类工具屏蔽仍按各自配置生效 |
 | 用户白名单 (`whitelist_users`) | list | [] | 允许使用插件的用户 ID，留空则仅管理员可用 |
 
 ### 功能开关（`feature_settings`）
@@ -347,7 +349,7 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress
 ## 安全说明
 
 - 默认只能访问插件工作区。开了外部路径也只放开读取和转换，删除不受影响。
-- 群聊默认关闭，按需开。白名单留空 = 仅管理员可用。
+- 群聊默认关闭，按需开。白名单留空 = 仅管理员可用；可信环境可以打开 `allow_all_users` 省去逐个维护白名单。
 - 大文件超限直接拒绝，纯文本超出分块上限会截断并提示。
 
 ---

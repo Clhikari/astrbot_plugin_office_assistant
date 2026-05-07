@@ -60,6 +60,12 @@
         "type": "object",
         "hint": "配置可以使用插件的用户。",
         "items": {
+            "allow_all_users": {
+                "description": "允许所有用户使用",
+                "type": "bool",
+                "hint": "开启后，所有用户都能通过插件用户权限检查。群聊启用、群聊@限制和执行类工具屏蔽仍按各自配置生效。请只在可信环境中开启。",
+                "default": false
+            },
             "whitelist_users": {
                 "description": "用户白名单",
                 "type": "list",

@@ -345,6 +345,7 @@ def _build_command_service(
     auto_delete: bool = False,
     allow_external_input_files: bool = False,
     enable_features_in_group: bool = True,
+    allow_all_users: bool = False,
     auto_block_execution_tools: bool = True,
     allow_local_excel_script: bool = False,
     reply_to_user: bool = True,
@@ -367,6 +368,7 @@ def _build_command_service(
         auto_delete=auto_delete,
         allow_external_input_files=allow_external_input_files,
         enable_features_in_group=enable_features_in_group,
+        allow_all_users=allow_all_users,
         auto_block_execution_tools=auto_block_execution_tools,
         allow_local_excel_script=allow_local_excel_script,
         reply_to_user=reply_to_user,
@@ -852,6 +854,29 @@ def test_access_policy_service_handles_whitelist_and_group_flags():
     assert service.is_group_feature_enabled(group_event) is False
 
 
+def test_access_policy_service_allows_everyone_when_enabled():
+    service = AccessPolicyService(
+        whitelist_users=[],
+        admin_users=[],
+        allow_all_users=True,
+        enable_features_in_group=False,
+    )
+    friend_event = _build_event(
+        sender_id="user-2",
+        message_type=MessageType.FRIEND_MESSAGE,
+    )
+    friend_event.is_admin.return_value = False
+    group_event = _build_event(
+        sender_id="user-3",
+        message_type=MessageType.GROUP_MESSAGE,
+    )
+    group_event.is_admin.return_value = False
+
+    assert service.check_permission(friend_event) is True
+    assert service.check_permission(group_event) is True
+    assert service.is_group_feature_enabled(group_event) is False
+
+
 def test_access_policy_service_detects_bot_mention():
     service = AccessPolicyService(
         whitelist_users=["user-1"],
@@ -972,6 +997,39 @@ async def test_llm_request_policy_logs_missing_group_trigger():
 
 
 @pytest.mark.asyncio
+async def test_llm_request_policy_allow_all_users_still_requires_group_trigger():
+    event = _build_event(
+        sender_id="user-2",
+        message_type=MessageType.GROUP_MESSAGE,
+    )
+    event.is_admin.return_value = False
+    request = ProviderRequest(
+        prompt="请读取 report.docx",
+        system_prompt="base",
+        func_tool=ToolSet([_tool("read_file")]),
+    )
+    access_policy = AccessPolicyService(
+        whitelist_users=[],
+        admin_users=[],
+        allow_all_users=True,
+        enable_features_in_group=True,
+    )
+    policy = LLMRequestPolicy(
+        document_toolset=ToolSet([_tool("read_file")]),
+        require_at_in_group=True,
+        is_group_feature_enabled=access_policy.is_group_feature_enabled,
+        check_permission=access_policy.check_permission,
+        is_bot_mentioned=lambda _event: False,
+        notice_hooks=[],
+        tool_exposure_hooks=[],
+    )
+
+    await policy.apply(event, request)
+
+    assert "read_file" not in set(request.func_tool.names())
+
+
+@pytest.mark.asyncio
 async def test_llm_request_policy_handles_events_without_get_extra():
     event = SimpleNamespace(
         message_obj=SimpleNamespace(type=MessageType.GROUP_MESSAGE),
@@ -1083,6 +1141,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert runtime.settings.max_excel_preview_rows == 123
         assert runtime.settings.max_excel_preview_chars == 4567
         assert runtime.settings.max_excel_preview_sheets == 8
+        assert runtime.settings.allow_all_users is False
         assert runtime.settings.allow_local_excel_script is False
         assert runtime.file_read_service._max_excel_preview_rows == 123
         assert runtime.file_read_service._max_excel_preview_chars == 4567
@@ -1375,6 +1434,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
             "dpi": 180,
         },
         "permission_settings": {
+            "allow_all_users": True,
             "whitelist_users": ["user-2"],
         },
         "feature_settings": {
@@ -1414,6 +1474,7 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.reply_to_user is False
         assert runtime.settings.require_at_in_group is False
         assert runtime.settings.enable_features_in_group is True
+        assert runtime.settings.allow_all_users is True
         assert runtime.settings.auto_block_execution_tools is False
         assert runtime.settings.allow_local_excel_script is True
         assert runtime.settings.enable_preview is True
@@ -1424,6 +1485,9 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.recent_text_cleanup_interval_seconds == 45
         assert runtime.settings.upload_session_cleanup_interval_seconds == 300
         assert runtime.command_service._plugin_data_path == data_root / "files"
+        event = _build_event(sender_id="user-3")
+        event.is_admin.return_value = False
+        assert runtime.access_policy_service.check_permission(event) is True
         assert runtime.workspace_service.plugin_data_path == data_root / "files"
         assert runtime.post_export_hook_service is not None
         assert called["plugin_name"] == "astrbot_plugin_office_assistant"
