@@ -1159,6 +1159,8 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
         assert export_tool.render_backend_config.ppt_preferred_backend == "python"
         assert export_tool.render_backend_config.excel_preferred_backend == "python"
+        fileinfo_output = runtime.command_service.fileinfo(_build_event())
+        assert "允许所有用户使用: 关闭" in fileinfo_output
         assert runtime.workspace_service.plugin_data_path == runtime.plugin_data_path
         assert runtime.post_export_hook_service is not None
         assert runtime.message_buffer is not None
@@ -1485,6 +1487,8 @@ def test_build_plugin_runtime_uses_persistent_workspace_when_auto_delete_disable
         assert runtime.settings.recent_text_cleanup_interval_seconds == 45
         assert runtime.settings.upload_session_cleanup_interval_seconds == 300
         assert runtime.command_service._plugin_data_path == data_root / "files"
+        fileinfo_output = runtime.command_service.fileinfo(_build_event())
+        assert "允许所有用户使用: 开启" in fileinfo_output
         event = _build_event(sender_id="user-3")
         event.is_admin.return_value = False
         assert runtime.access_policy_service.check_permission(event) is True
