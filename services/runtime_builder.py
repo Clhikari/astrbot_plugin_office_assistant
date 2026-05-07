@@ -95,6 +95,7 @@ def build_plugin_runtime(
         ),
         admin_users=list(admin_users),
         get_admin_users=get_admin_users,
+        allow_all_users=settings.allow_all_users,
         enable_features_in_group=settings.enable_features_in_group,
     )
     upload_session_service = UploadSessionService(
@@ -160,6 +161,7 @@ def build_plugin_runtime(
         auto_delete=settings.auto_delete,
         allow_external_input_files=settings.allow_external_input_files,
         enable_features_in_group=settings.enable_features_in_group,
+        allow_all_users=settings.allow_all_users,
         auto_block_execution_tools=settings.auto_block_execution_tools,
         allow_local_excel_script=settings.allow_local_excel_script,
         reply_to_user=settings.reply_to_user,

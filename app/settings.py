@@ -24,6 +24,7 @@ class PluginSettings:
     reply_to_user: bool
     require_at_in_group: bool
     enable_features_in_group: bool
+    allow_all_users: bool
     auto_block_execution_tools: bool
     allow_local_excel_script: bool
     enable_preview: bool
@@ -121,6 +122,8 @@ def load_plugin_settings(config) -> PluginSettings:
     reply_to_user = trigger_settings.get("reply_to_user", True)
     require_at_in_group = trigger_settings.get("require_at_in_group", True)
     enable_features_in_group = trigger_settings.get("enable_features_in_group", False)
+    permission_settings = config.get("permission_settings", {})
+    allow_all_users = permission_settings.get("allow_all_users", False)
     auto_block_execution_tools = trigger_settings.get(
         "auto_block_execution_tools", True
     )
@@ -188,6 +191,7 @@ def load_plugin_settings(config) -> PluginSettings:
         reply_to_user=reply_to_user,
         require_at_in_group=require_at_in_group,
         enable_features_in_group=enable_features_in_group,
+        allow_all_users=allow_all_users,
         auto_block_execution_tools=auto_block_execution_tools,
         allow_local_excel_script=allow_local_excel_script,
         enable_preview=enable_preview,

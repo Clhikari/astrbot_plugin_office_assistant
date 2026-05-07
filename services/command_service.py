@@ -16,6 +16,7 @@ class CommandService:
         auto_delete: bool,
         allow_external_input_files: bool,
         enable_features_in_group: bool,
+        allow_all_users: bool,
         auto_block_execution_tools: bool,
         allow_local_excel_script: bool,
         reply_to_user: bool,
@@ -31,6 +32,7 @@ class CommandService:
         self._auto_delete = auto_delete
         self._allow_external_input_files = allow_external_input_files
         self._enable_features_in_group = enable_features_in_group
+        self._allow_all_users = allow_all_users
         self._auto_block_execution_tools = auto_block_execution_tools
         self._allow_local_excel_script = allow_local_excel_script
         self._reply_to_user = reply_to_user
@@ -95,6 +97,7 @@ class CommandService:
             f"工作目录: {self._plugin_data_path}\n"
             f"外部路径读取: {'开启' if self._allow_external_input_files else '关闭'}\n"
             f"群聊启用插件功能: {'开启' if self._enable_features_in_group else '关闭'}\n"
+            f"允许所有用户使用: {'开启' if self._allow_all_users else '关闭'}\n"
             f"自动屏蔽 shell/python 工具: {'开启' if self._auto_block_execution_tools else '关闭'}\n"
             f"允许本地 Excel 脚本工具: {'开启' if self._allow_local_excel_script else '关闭'}\n"
             f"回复模式: {'开启' if self._reply_to_user else '关闭'}\n"
