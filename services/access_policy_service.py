@@ -12,14 +12,17 @@ class AccessPolicyService:
         whitelist_users: list[str] | None = None,
         admin_users: list[str] | None = None,
         get_admin_users: Callable[[], set[str] | list[str] | None] | None = None,
-        allow_all_users: bool = False,
         enable_features_in_group: bool,
+        allow_all_users: bool = False,
     ) -> None:
         self._whitelist_users = {str(user_id) for user_id in whitelist_users or []}
         self._admin_users = {str(user_id) for user_id in admin_users or []}
         self._get_admin_users = get_admin_users
         self._allow_all_users = bool(allow_all_users)
         self._enable_features_in_group = bool(enable_features_in_group)
+
+    def is_all_users_allowed(self) -> bool:
+        return self._allow_all_users
 
     def check_permission(self, event) -> bool:
         logger.debug("正在检查用户权限")
