@@ -104,6 +104,7 @@ from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
 from astrbot_plugin_office_assistant.tools.registry import (
     DocumentToolSpec,
     get_document_tool_specs,
+    get_workbook_tool_specs,
 )
 from pydantic import ValidationError
 
@@ -2177,15 +2178,9 @@ def test_add_blocks_request_rejects_table_cell_col_span():
 
 
 def _all_agent_tool_names() -> list[str]:
-    return [
-        "create_document",
-        "add_blocks",
-        "finalize_document",
-        "export_document",
-        "create_workbook",
-        "write_rows",
-        "export_workbook",
-    ]
+    document_names = [spec.name for spec in get_document_tool_specs()]
+    workbook_names = [spec.name for spec in get_workbook_tool_specs()]
+    return document_names + workbook_names
 
 
 @pytest.fixture(scope="module")
