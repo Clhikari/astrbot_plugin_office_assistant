@@ -16,3 +16,13 @@ def _schema_contains_type_list(schema: object) -> bool:
     if isinstance(schema, list):
         return any(_schema_contains_type_list(value) for value in schema)
     return False
+
+
+def _schema_has_array_without_items(schema: object) -> bool:
+    if isinstance(schema, dict):
+        if schema.get("type") == "array" and "items" not in schema:
+            return True
+        return any(_schema_has_array_without_items(value) for value in schema.values())
+    if isinstance(schema, list):
+        return any(_schema_has_array_without_items(value) for value in schema)
+    return False

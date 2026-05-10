@@ -145,8 +145,15 @@ class WriteRowsTool(WorkbookToolBase):
                 },
                 "rows": {
                     "type": "array",
-                    "items": {"type": "array"},
-                    "description": "2D row array. Cells can be string/number/bool/null.",
+                    "description": "2D row array. Outer list is rows; inner list is cells in one row.",
+                    "items": {
+                        "type": "array",
+                        "description": (
+                            "Cells in one row. Cell values may be string, number, "
+                            "boolean or null; strings starting with '=' are rejected."
+                        ),
+                        "items": {},
+                    },
                 },
                 "start_row": {
                     "type": "integer",
