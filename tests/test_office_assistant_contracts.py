@@ -17,9 +17,13 @@ import pytest
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
+    build_workbook_toolset,
 )
 from astrbot_plugin_office_assistant.agent_tools.document_tools import (
     CreateDocumentTool,
+)
+from astrbot_plugin_office_assistant.agent_tools.workbook_tools import (
+    WriteRowsTool,
 )
 from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
     DOCX_TABLE_STYLES,
@@ -108,7 +112,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from tests._docx_test_helpers import *  # noqa: F401,F403
 from tests._docx_test_helpers import _technical_resume_block
-from tests._schema_test_helpers import _schema_contains_key, _schema_contains_type_list
+from tests._schema_test_helpers import (
+    _schema_contains_key,
+    _schema_contains_type_list,
+    _schema_has_array_without_items,
+)
 
 
 def test_create_document_tool_schema_exposes_document_style():
@@ -2166,3 +2174,37 @@ def test_add_blocks_request_rejects_table_cell_col_span():
                 }
             ],
         )
+
+
+def _collect_all_agent_tools() -> list:
+    document_tools = list(build_document_toolset().tools)
+    workbook_tools = list(build_workbook_toolset().tools)
+    return document_tools + workbook_tools
+
+
+def test_write_rows_tool_schema_has_no_array_without_items():
+    tool = WriteRowsTool()
+
+    assert _schema_has_array_without_items(tool.parameters) is False
+    assert _schema_contains_key(tool.parameters, "anyOf") is False
+    assert _schema_contains_key(tool.parameters, "oneOf") is False
+    assert _schema_contains_type_list(tool.parameters) is False
+
+
+def test_write_rows_tool_schema_rows_shape_is_stable():
+    tool = WriteRowsTool()
+
+    rows_schema = tool.parameters["properties"]["rows"]
+    assert rows_schema["type"] == "array"
+    assert rows_schema["items"]["type"] == "array"
+    assert rows_schema["items"]["items"] == {}
+    assert "description" in rows_schema["items"]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    _collect_all_agent_tools(),
+    ids=lambda tool: tool.name,
+)
+def test_agent_tool_schemas_declare_items_for_every_array(tool):
+    assert _schema_has_array_without_items(tool.parameters) is False
