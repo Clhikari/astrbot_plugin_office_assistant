@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .models import WorkbookCellValue, WorkbookModel
+from .models import WorkbookCellValue, WorkbookModel, validate_workbook_cell_value
 
 DEFAULT_XLSX_FILENAME = "workbook.xlsx"
 MAX_WORKBOOK_ROW_INDEX = 100_000
@@ -101,20 +100,24 @@ class WriteRowsRequest(BaseModel):
     def validate_sheet(cls, value: str) -> str:
         return _normalize_sheet_name(value)
 
-    @field_validator("rows")
+    @field_validator("rows", mode="before")
     @classmethod
-    def validate_rows(
-        cls,
-        value: list[list[WorkbookCellValue]],
-    ) -> list[list[WorkbookCellValue]]:
+    def validate_rows(cls, value: object) -> list[list[WorkbookCellValue]]:
+        if not isinstance(value, list):
+            raise ValueError("rows must be a two-dimensional array")
         normalized_rows: list[list[WorkbookCellValue]] = []
         for row in value:
             if not isinstance(row, list):
-                raise TypeError("rows must be a two-dimensional array")
+                raise ValueError("rows must be a two-dimensional array")
+            normalized_row: list[WorkbookCellValue] = []
             for cell in row:
-                if isinstance(cell, str) and cell.startswith("="):
-                    raise ValueError("formula cell values are not supported in write_rows")
-            normalized_rows.append(list(row))
+                validated_cell = validate_workbook_cell_value(cell)
+                if isinstance(validated_cell, str) and validated_cell.startswith("="):
+                    raise ValueError(
+                        "formula cell values are not supported in write_rows"
+                    )
+                normalized_row.append(validated_cell)
+            normalized_rows.append(normalized_row)
         if not normalized_rows:
             raise ValueError("rows must contain at least one row")
         return normalized_rows

@@ -13,6 +13,19 @@ def _utc_now() -> datetime:
 WorkbookCellValue = str | int | float | bool | None
 
 
+def validate_workbook_cell_value(value: object) -> WorkbookCellValue:
+    """Runtime enforcement for WorkbookCellValue.
+
+    The write_rows tool schema omits a cell `type` for strict validator
+    compatibility, so this helper is the source of truth at runtime.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise ValueError(
+        f"cell value must be string, number, boolean or null, got {type(value).__name__}"
+    )
+
+
 class WorkbookStatus(str, Enum):
     DRAFT = "draft"
     EXPORTING = "exporting"
