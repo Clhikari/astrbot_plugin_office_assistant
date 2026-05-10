@@ -2176,10 +2176,22 @@ def test_add_blocks_request_rejects_table_cell_col_span():
         )
 
 
-def _collect_all_agent_tools() -> list:
-    document_tools = list(build_document_toolset().tools)
-    workbook_tools = list(build_workbook_toolset().tools)
-    return document_tools + workbook_tools
+def _all_agent_tool_names() -> list[str]:
+    return [
+        "create_document",
+        "add_blocks",
+        "finalize_document",
+        "export_document",
+        "create_workbook",
+        "write_rows",
+        "export_workbook",
+    ]
+
+
+@pytest.fixture(scope="module")
+def _agent_tools_by_name() -> dict:
+    tools = list(build_document_toolset().tools) + list(build_workbook_toolset().tools)
+    return {tool.name: tool for tool in tools}
 
 
 def test_write_rows_tool_schema_has_no_array_without_items():
@@ -2196,15 +2208,17 @@ def test_write_rows_tool_schema_rows_shape_is_stable():
 
     rows_schema = tool.parameters["properties"]["rows"]
     assert rows_schema["type"] == "array"
+    assert rows_schema["minItems"] == 1
     assert rows_schema["items"]["type"] == "array"
-    assert rows_schema["items"]["items"] == {}
+    assert rows_schema["items"]["items"] == {
+        "description": "Cell value (string, number, boolean or null).",
+    }
     assert "description" in rows_schema["items"]
 
 
-@pytest.mark.parametrize(
-    "tool",
-    _collect_all_agent_tools(),
-    ids=lambda tool: tool.name,
-)
-def test_agent_tool_schemas_declare_items_for_every_array(tool):
+@pytest.mark.parametrize("tool_name", _all_agent_tool_names())
+def test_agent_tool_schemas_declare_items_for_every_array(
+    tool_name, _agent_tools_by_name
+):
+    tool = _agent_tools_by_name[tool_name]
     assert _schema_has_array_without_items(tool.parameters) is False
