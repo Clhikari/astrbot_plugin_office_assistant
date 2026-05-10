@@ -145,6 +145,7 @@ class WriteRowsTool(WorkbookToolBase):
                 },
                 "rows": {
                     "type": "array",
+                    "minItems": 1,
                     "description": "2D row array. Outer list is rows; inner list is cells in one row.",
                     "items": {
                         "type": "array",
@@ -152,7 +153,9 @@ class WriteRowsTool(WorkbookToolBase):
                             "Cells in one row. Cell values may be string, number, "
                             "boolean or null; strings starting with '=' are rejected."
                         ),
-                        "items": {},
+                        "items": {
+                            "description": "Cell value (string, number, boolean or null).",
+                        },
                     },
                 },
                 "start_row": {
