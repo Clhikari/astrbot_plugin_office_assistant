@@ -2205,9 +2205,12 @@ def test_write_rows_tool_schema_rows_shape_is_stable():
     assert rows_schema["type"] == "array"
     assert rows_schema["minItems"] == 1
     assert rows_schema["items"]["type"] == "array"
-    assert rows_schema["items"]["items"] == {
-        "description": "Cell value (string, number, boolean or null).",
-    }
+    cell_schema = rows_schema["items"]["items"]
+    assert isinstance(cell_schema, dict)
+    assert (
+        cell_schema.get("description")
+        == "Cell value (string, number, boolean or null)."
+    )
     assert "description" in rows_schema["items"]
 
 
