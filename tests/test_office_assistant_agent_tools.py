@@ -465,6 +465,24 @@ async def test_add_blocks_failure_message_keeps_model_on_same_tool(
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_returns_hint_when_dispatcher_degrades_to_empty_kwargs(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-add-blocks-empty-kwargs"
+    )
+    toolset = build_document_toolset(workspace_dir=workspace_dir)
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    result = json.loads(await tool_by_name["add_blocks"].call(None))
+
+    assert result["success"] is False
+    assert "add_blocks 收到空参数调用" in result["message"]
+    assert "拆分" in result["message"]
+    assert "3-5 个短 block" in result["message"]
+
+
+@pytest.mark.asyncio
 async def test_add_blocks_tool_accepts_json_string_blocks(workspace_root: Path):
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-json-blocks")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
