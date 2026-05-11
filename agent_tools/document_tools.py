@@ -896,6 +896,11 @@ class AddBlocksTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         if not kwargs:
+            logger.warning(
+                "add_blocks received empty kwargs; dispatcher likely degraded "
+                "upstream JSON parsing (payload too large or contains unescaped "
+                "characters). Returning split-payload hint to the model."
+            )
             return _dump_result(
                 ToolResult(
                     success=False,
