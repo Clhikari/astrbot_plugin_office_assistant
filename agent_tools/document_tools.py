@@ -37,6 +37,11 @@ def _dump_result(result: ToolResult) -> str:
 
 _CONTINUE_UNTIL_EXPORT = "请继续调用文档工具，直到 export_document 成功"
 _FINALIZE_PROMPT = "文档已定稿。下一步只能调用 export_document 导出文件，不要再调用 add_blocks、create_document 或 finalize_document"
+_ADD_BLOCKS_EMPTY_KWARGS_HINT = (
+    "add_blocks 收到空参数调用。这通常是因为上一轮工具调用的 JSON 过长或含"
+    "未转义字符，在上游解析失败后被降级为空参数。请拆分内容为多次 add_blocks 调用："
+    "每次只放 3-5 个短 block，长段落可分段写入，使用同一个 document_id 继续调用。"
+)
 
 
 _STYLE_SCHEMA = {
@@ -890,6 +895,13 @@ class AddBlocksTool(DocumentToolBase):
     async def call(
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
+        if not kwargs:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=_ADD_BLOCKS_EMPTY_KWARGS_HINT,
+                )
+            )
         try:
             raw_blocks = normalize_raw_block_payloads(kwargs.get("blocks") or [])
             request = AddBlocksRequest(
