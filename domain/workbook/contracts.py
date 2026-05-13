@@ -8,8 +8,12 @@ from .models import WorkbookCellValue, WorkbookModel, validate_workbook_cell_val
 
 DEFAULT_XLSX_FILENAME = "workbook.xlsx"
 MAX_WORKBOOK_ROW_INDEX = 100_000
+MAX_EXCEL_ROW = 1_048_576
+MAX_EXCEL_COLUMN = 16_384
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 SHEET_NAME_FORBIDDEN_CHARS = set("[]:*?/\\")
+_CELL_REF_PATTERN = re.compile(r"^([A-Z]{1,3})([1-9][0-9]*)$")
+_COLUMN_LETTER_PATTERN = re.compile(r"^[A-Z]{1,3}$")
 
 
 def _split_path_parts(value: str) -> list[str]:
@@ -66,6 +70,70 @@ def _normalize_sheet_name(value: str) -> str:
     return candidate
 
 
+def _column_letter_to_index(letter: str) -> int:
+    result = 0
+    for char in letter:
+        result = result * 26 + (ord(char) - ord("A") + 1)
+    return result
+
+
+class WriteRowsOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    freeze_panes: str | None = None
+    column_widths: dict[str, float] | None = None
+    autofilter: bool | None = None
+
+    @field_validator("freeze_panes")
+    @classmethod
+    def validate_freeze_panes(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        candidate = value.strip().upper()
+        if not candidate:
+            return ""
+        match = _CELL_REF_PATTERN.match(candidate)
+        if not match:
+            raise ValueError(
+                "freeze_panes must be a valid cell reference (e.g. 'A2', 'B3')"
+            )
+        col_letter, row_str = match.group(1), match.group(2)
+        if _column_letter_to_index(col_letter) > MAX_EXCEL_COLUMN:
+            raise ValueError(
+                f"freeze_panes column must not exceed XFD ({MAX_EXCEL_COLUMN} columns)"
+            )
+        if int(row_str) > MAX_EXCEL_ROW:
+            raise ValueError(
+                f"freeze_panes row must not exceed {MAX_EXCEL_ROW}"
+            )
+        return candidate
+
+    @field_validator("column_widths")
+    @classmethod
+    def validate_column_widths(
+        cls, value: dict[str, float] | None
+    ) -> dict[str, float] | None:
+        if value is None:
+            return None
+        normalized: dict[str, float] = {}
+        for key, width in value.items():
+            col = str(key).strip().upper()
+            if not _COLUMN_LETTER_PATTERN.match(col):
+                raise ValueError(
+                    f"column_widths key must be a column letter (A-XFD), got '{key}'"
+                )
+            if _column_letter_to_index(col) > MAX_EXCEL_COLUMN:
+                raise ValueError(
+                    f"column_widths key '{key}' exceeds maximum column XFD"
+                )
+            if not (1.0 <= width <= 255.0):
+                raise ValueError(
+                    f"column_widths value must be between 1.0 and 255.0, got {width} for column '{col}'"
+                )
+            normalized[col] = width
+        return normalized
+
+
 class CreateWorkbookRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -86,6 +154,7 @@ class WriteRowsRequest(BaseModel):
     sheet: str
     rows: list[list[WorkbookCellValue]] = Field(min_length=1)
     start_row: int = Field(default=1, ge=1, le=MAX_WORKBOOK_ROW_INDEX)
+    options: WriteRowsOptions | None = None
 
     @field_validator("workbook_id")
     @classmethod
@@ -210,8 +279,11 @@ __all__ = [
     "DEFAULT_XLSX_FILENAME",
     "ExportWorkbookRequest",
     "ExportWorkbookResult",
+    "MAX_EXCEL_COLUMN",
+    "MAX_EXCEL_ROW",
     "ToolResult",
     "WorkbookSummary",
+    "WriteRowsOptions",
     "WriteRowsRequest",
     "build_workbook_summary",
 ]

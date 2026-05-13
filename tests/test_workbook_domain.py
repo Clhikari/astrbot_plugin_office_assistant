@@ -10,6 +10,7 @@ from astrbot_plugin_office_assistant.domain.workbook.contracts import (
     CreateWorkbookRequest,
     ExportWorkbookRequest,
     MAX_WORKBOOK_ROW_INDEX,
+    WriteRowsOptions,
     WriteRowsRequest,
     build_workbook_summary,
 )
@@ -776,3 +777,172 @@ def test_case_insensitive_sheet_lookup_preserves_exported_sheet_name(
     assert loaded.sheetnames == ["Sales"]
     sheet = loaded["Sales"]
     assert sheet["A3"].value == "B"
+
+
+# --- WriteRowsOptions tests ---
+
+
+def test_write_rows_merges_options_freeze_panes(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1", "h2"], ["v1", "v2"]],
+            options=WriteRowsOptions(freeze_panes="A2"),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    assert loaded["Data"].freeze_panes == "A2"
+
+
+def test_write_rows_merges_options_column_widths(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1", "h2"], ["v1", "v2"]],
+            options=WriteRowsOptions(column_widths={"A": 20.0}),
+        )
+    )
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["v3", "v4"]],
+            start_row=3,
+            options=WriteRowsOptions(column_widths={"B": 35.0}),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    sheet = loaded["Data"]
+    assert sheet.column_dimensions["A"].width == 20.0
+    assert sheet.column_dimensions["B"].width == 35.0
+
+
+def test_write_rows_merges_options_autofilter(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1", "h2"], ["v1", "v2"]],
+            options=WriteRowsOptions(autofilter=True),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    assert loaded["Data"].auto_filter.ref == "A1:B2"
+
+
+def test_write_rows_options_none_preserves_existing(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1"], ["v1"]],
+            options=WriteRowsOptions(freeze_panes="A2", autofilter=True),
+        )
+    )
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["v2"]],
+            start_row=3,
+        )
+    )
+
+    worksheet = workbook.get_sheet("Data")
+    assert worksheet.options.freeze_panes == "A2"
+    assert worksheet.options.autofilter is True
+
+
+def test_write_rows_options_validation_freeze_panes_invalid():
+    with pytest.raises(ValidationError, match="valid cell reference"):
+        WriteRowsOptions(freeze_panes="ZZZ")
+
+
+def test_write_rows_options_validation_freeze_panes_row_exceeds_max():
+    with pytest.raises(ValidationError, match="row must not exceed"):
+        WriteRowsOptions(freeze_panes="A1048577")
+
+
+def test_write_rows_options_validation_freeze_panes_column_exceeds_max():
+    with pytest.raises(ValidationError, match="column must not exceed"):
+        WriteRowsOptions(freeze_panes="XFE1")
+
+
+def test_write_rows_options_validation_column_widths_out_of_range():
+    with pytest.raises(ValidationError, match="between 1.0 and 255.0"):
+        WriteRowsOptions(column_widths={"A": 0.5})
+
+    with pytest.raises(ValidationError, match="between 1.0 and 255.0"):
+        WriteRowsOptions(column_widths={"A": 256.0})
+
+
+def test_write_rows_options_validation_column_widths_invalid_key():
+    with pytest.raises(ValidationError, match="column letter"):
+        WriteRowsOptions(column_widths={"123": 10.0})
+
+
+def test_write_rows_options_validation_column_widths_exceeds_max_column():
+    with pytest.raises(ValidationError, match="exceeds maximum column"):
+        WriteRowsOptions(column_widths={"XFE": 10.0})
+
+
+def test_write_rows_options_freeze_panes_normalizes_to_uppercase():
+    opts = WriteRowsOptions(freeze_panes="b3")
+    assert opts.freeze_panes == "B3"
+
+
+def test_write_rows_options_column_widths_normalizes_keys_to_uppercase():
+    opts = WriteRowsOptions(column_widths={"a": 15.0, "bc": 20.0})
+    assert opts.column_widths == {"A": 15.0, "BC": 20.0}
+
+
+def test_full_chain_with_options_produces_correct_xlsx(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="full.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Report",
+            rows=[["Name", "Score"], ["Alice", 95], ["Bob", 87]],
+            options=WriteRowsOptions(
+                freeze_panes="A2",
+                column_widths={"A": 25.0, "B": 12.0},
+                autofilter=True,
+            ),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+
+    loaded = load_workbook(output_path)
+    sheet = loaded["Report"]
+    assert sheet.freeze_panes == "A2"
+    assert sheet.column_dimensions["A"].width == 25.0
+    assert sheet.column_dimensions["B"].width == 12.0
+    assert sheet.auto_filter.ref == "A1:B3"
+    assert sheet["A1"].value == "Name"
+    assert sheet["B3"].value == 87
