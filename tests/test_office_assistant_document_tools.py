@@ -1759,14 +1759,14 @@ def test_add_blocks_tool_schema_hides_table_cell_spans():
     assert resume_sections["title"]["description"].endswith(
         "Use title here; do not use heading."
     )
-    assert "type" not in resume_detail_schema
+    assert resume_detail_schema["type"] == "object"
     assert (
         resume_detail_schema["properties"]["runs"]["items"]["properties"]["bold"][
             "type"
         ]
         == "boolean"
     )
-    assert "type" not in resume_line_schema
+    assert resume_line_schema["type"] == "object"
     assert (
         resume_line_schema["properties"]["runs"]["items"]["properties"]["bold"]["type"]
         == "boolean"
