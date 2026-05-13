@@ -4,6 +4,22 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [v1.7.1-preview] - 2026-05-13
+
+### Added
+
+- 新增 `permission_settings.allow_all_users` 配置，可在受信环境中跳过管理员校验，让所有用户直接使用插件功能。
+
+### Changed
+
+- `write_rows` schema 兼容性优化：通过运行时 helper 强制保证 cell 类型一致性，适配严格 schema 校验的模型 provider。
+- `add_blocks` 在上游调度器把参数降级为空 kwargs 时，现在会打一条 warning 日志并返回明确的拆分指引，便于运维关联上游 JSON 解析问题。
+
+### Fixed
+
+- 修复 `add_blocks` 收到空参数时静默失败的问题，现在直接返回可操作的拆分指引，模型可据此修正调用策略。
+- 修复 `allow_all_users` 权限设置在 review 反馈后的若干边界问题。
+
 ## [v1.7.0-preview] - 2026-05-01
 
 ### Added
