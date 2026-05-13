@@ -19,6 +19,7 @@ from ..domain.workbook.contracts import (
     ExportWorkbookRequest,
     ExportWorkbookResult,
     ToolResult,
+    WriteRowsOptions,
     WriteRowsRequest,
     build_workbook_summary,
 )
@@ -163,6 +164,25 @@ class WriteRowsTool(WorkbookToolBase):
                     "minimum": 1,
                     "description": "1-based start row. Defaults to 1.",
                 },
+                "options": {
+                    "type": "object",
+                    "description": "Optional worksheet display options.",
+                    "properties": {
+                        "freeze_panes": {
+                            "type": "string",
+                            "description": "Cell reference to freeze at, e.g. 'A2' freezes the first row.",
+                        },
+                        "column_widths": {
+                            "type": "object",
+                            "description": "Column letter to width mapping, e.g. {'A': 20, 'B': 35}.",
+                            "additionalProperties": {"type": "number"},
+                        },
+                        "autofilter": {
+                            "type": "boolean",
+                            "description": "Enable autofilter on the sheet header row.",
+                        },
+                    },
+                },
             },
             "required": ["workbook_id", "sheet", "rows"],
         }
@@ -176,11 +196,13 @@ class WriteRowsTool(WorkbookToolBase):
             return blocked_result
         try:
             raw_start_row = kwargs.get("start_row")
+            raw_options = kwargs.get("options")
             request = WriteRowsRequest(
                 workbook_id=str(kwargs.get("workbook_id") or ""),
                 sheet=str(kwargs.get("sheet") or ""),
                 rows=list(kwargs.get("rows") or []),
                 start_row=1 if raw_start_row is None else raw_start_row,
+                options=WriteRowsOptions(**raw_options) if isinstance(raw_options, dict) else None,
             )
             workbook = self.store.write_rows(request)
         except ValidationError as exc:

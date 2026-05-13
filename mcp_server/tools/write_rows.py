@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from ...domain.workbook.session_store import WorkbookSessionStore
 from ...domain.workbook.contracts import (
     ToolResult,
+    WriteRowsOptions,
     WriteRowsRequest,
     build_workbook_summary,
 )
@@ -22,6 +23,7 @@ def register_write_rows_tool(server: FastMCP, store: WorkbookSessionStore) -> No
         sheet: str,
         rows: list[list[Any]],
         start_row: int = 1,
+        options: dict | None = None,
     ) -> ToolResult:
         try:
             request = WriteRowsRequest(
@@ -29,6 +31,7 @@ def register_write_rows_tool(server: FastMCP, store: WorkbookSessionStore) -> No
                 sheet=sheet,
                 rows=rows,
                 start_row=start_row,
+                options=WriteRowsOptions(**options) if isinstance(options, dict) else None,
             )
             workbook = store.write_rows(request)
         except ValidationError as exc:

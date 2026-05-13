@@ -399,3 +399,95 @@ def test_mcp_create_server_constructs_workbook_store_once(
 
     assert constructed_workspaces == [None]
     register_mock.assert_called_once()
+
+
+# --- WriteRowsOptions tool-layer tests ---
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_passes_options_to_store(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1", "h2"], ["v1", "v2"]],
+            options={"freeze_panes": "A2", "column_widths": {"A": 20}, "autofilter": True},
+        )
+    )
+
+    assert result["success"] is True
+    worksheet = workbook.get_sheet("Data")
+    assert worksheet.options.freeze_panes == "A2"
+    assert worksheet.options.column_widths == {"A": 20.0}
+    assert worksheet.options.autofilter is True
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_returns_validation_error_for_bad_options(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+            options={"freeze_panes": "INVALID"},
+        )
+    )
+
+    assert result["success"] is False
+    assert "only fix invalid fields" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_write_rows_passes_options():
+    server = create_server()
+    _, created_payload = await server.call_tool(
+        "create_workbook",
+        {"filename": "opts.xlsx"},
+    )
+
+    _, payload = await server.call_tool(
+        "write_rows",
+        {
+            "workbook_id": created_payload["workbook"]["workbook_id"],
+            "sheet": "Data",
+            "rows": [["h1", "h2"], ["v1", "v2"]],
+            "options": {"freeze_panes": "A2", "autofilter": True},
+        },
+    )
+
+    assert payload["success"] is True
+
+
+def test_write_rows_schema_options_column_widths_uses_number_type(
+    workspace_root: Path,
+):
+    tool = WriteRowsTool(store=WorkbookSessionStore(workspace_dir=workspace_root))
+    options_schema = tool.parameters["properties"]["options"]
+    col_widths = options_schema["properties"]["column_widths"]
+
+    assert col_widths["additionalProperties"] == {"type": "number"}
+
+    def _assert_no_anyof_oneof(obj, path="options"):
+        if isinstance(obj, dict):
+            assert "anyOf" not in obj, f"{path} contains anyOf"
+            assert "oneOf" not in obj, f"{path} contains oneOf"
+            for key, value in obj.items():
+                if isinstance(value, (dict, list)):
+                    _assert_no_anyof_oneof(value, f"{path}.{key}")
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _assert_no_anyof_oneof(item, f"{path}[{i}]")
+
+    _assert_no_anyof_oneof(options_schema)

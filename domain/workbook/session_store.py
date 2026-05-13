@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - test fallback
 from .contracts import (
     CreateWorkbookRequest,
     ExportWorkbookRequest,
+    WriteRowsOptions,
     WriteRowsRequest,
     _build_workbook_summary_payload,
     _normalize_xlsx_filename,
@@ -163,8 +164,22 @@ class WorkbookSessionStore:
             for offset, row in enumerate(request.rows):
                 worksheet.rows[start_index + offset] = list(row)
 
+            if request.options is not None:
+                self._merge_options_locked(worksheet, request.options)
+
             workbook.remember_written_sheet(worksheet.name)
             return workbook
+
+    @staticmethod
+    def _merge_options_locked(
+        worksheet: WorksheetModel, options: WriteRowsOptions
+    ) -> None:
+        if options.freeze_panes is not None:
+            worksheet.options.freeze_panes = options.freeze_panes
+        if options.column_widths:
+            worksheet.options.column_widths.update(options.column_widths)
+        if options.autofilter is not None:
+            worksheet.options.autofilter = options.autofilter
 
     def _prepare_export_path_locked(
         self,
