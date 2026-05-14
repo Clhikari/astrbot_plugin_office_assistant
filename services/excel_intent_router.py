@@ -7,9 +7,7 @@ from typing import Literal
 from ..constants import EXCEL_SUFFIXES
 from .upload_types import UploadInfo
 
-ExcelIntentRoute = Literal[
-    "excel_context",
-]
+ExcelIntentRoute = Literal["excel_context",]
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,5 +120,6 @@ class ExcelIntentRouter:
             cls._EXCEL_FILE_TOOL_NAMES.intersection(exposed_tool_names)
             or cls._WORKBOOK_TOOL_NAMES.issubset(exposed_tool_names)
         )
+
 
 __all__ = ["ExcelIntentRoute", "ExcelIntentRouter", "ExcelRouteDecision"]

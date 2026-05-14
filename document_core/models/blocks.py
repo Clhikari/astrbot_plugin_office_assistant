@@ -268,7 +268,9 @@ class PageTemplateBlock(BaseModel):
         )
         if isinstance(self.data, expected_type):
             return self
-        raise ValueError(f"page_template data does not match template {self.template!r}")
+        raise ValueError(
+            f"page_template data does not match template {self.template!r}"
+        )
 
 
 class ParagraphRun(BaseModel):
@@ -445,7 +447,9 @@ def _resolve_table_body_column_count(
     *,
     explicit_column_count: int | None = None,
 ) -> int:
-    active_spans = [0] * explicit_column_count if explicit_column_count is not None else []
+    active_spans = (
+        [0] * explicit_column_count if explicit_column_count is not None else []
+    )
     max_columns = explicit_column_count or 0
 
     for row_index, row in enumerate(rows, start=1):
@@ -461,7 +465,10 @@ def _resolve_table_body_column_count(
                 column_index += 1
             if consumed_placeholder:
                 continue
-            if explicit_column_count is not None and column_index >= explicit_column_count:
+            if (
+                explicit_column_count is not None
+                and column_index >= explicit_column_count
+            ):
                 raise ValueError(
                     f"table row {row_index} exceeds column count ({explicit_column_count})"
                 )
@@ -504,7 +511,9 @@ def _resolve_table_body_column_count(
     return max_columns
 
 
-def resolve_table_column_count(headers: list[str], rows: list[list[str | TableCell]]) -> int:
+def resolve_table_column_count(
+    headers: list[str], rows: list[list[str | TableCell]]
+) -> int:
     if headers:
         return len(headers)
     if rows:

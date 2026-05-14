@@ -229,8 +229,7 @@ class FileReadService:
             yield (
                 f"[文件信息] 文件名: {target.display_name}, 类型: {target.suffix}, "
                 f"大小: {format_file_size(target.file_size)}\n"
-                f"[Sheet 列表] {sheet_names}\n"
-                + "\n\n".join(sheet_sections)
+                f"[Sheet 列表] {sheet_names}\n" + "\n\n".join(sheet_sections)
             )
         except Exception as exc:
             logger.error(f"读取工作簿失败: {exc}")

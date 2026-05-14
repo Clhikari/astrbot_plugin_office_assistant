@@ -33,6 +33,7 @@ def build_document_toolset(
         default_document_style=default_document_style,
     )
 
+
 def build_workbook_toolset(
     workspace_dir: Path | None = None,
     after_export: (

@@ -7,8 +7,10 @@ from threading import RLock
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 except ModuleNotFoundError:  # pragma: no cover - test fallback
+
     def get_astrbot_plugin_data_path() -> str:
         return str(Path.cwd() / ".tmp_services")
+
 
 from .contracts import (
     CreateWorkbookRequest,
@@ -236,7 +238,9 @@ class WorkbookSessionStore:
             workbook = self.require_workbook(workbook_id)
             return self._build_prompt_summary_locked(workbook)
 
-    def _build_prompt_summary_locked(self, workbook: WorkbookModel) -> dict[str, object]:
+    def _build_prompt_summary_locked(
+        self, workbook: WorkbookModel
+    ) -> dict[str, object]:
         summary_payload = _build_workbook_summary_payload(workbook)
         next_allowed_actions: list[str]
         if workbook.status == WorkbookStatus.DRAFT:

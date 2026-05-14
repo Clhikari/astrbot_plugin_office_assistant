@@ -33,7 +33,9 @@ def _paragraph_xml_by_text(document_xml: str, paragraph_text: str) -> ET.Element
 def _run_props_by_text(paragraph: ET.Element, run_text: str) -> ET.Element:
     for run in paragraph.findall(".//w:r", NS):
         text = "".join(
-            node.text or "" for node in run.findall(".//w:t", NS) if node.text is not None
+            node.text or ""
+            for node in run.findall(".//w:t", NS)
+            if node.text is not None
         )
         if text == run_text:
             return run

@@ -208,7 +208,9 @@ def test_export_rejects_output_path_outside_workspace(workspace_root: Path):
         store.export_workbook(escaped_request)
 
 
-def test_prepare_export_path_keeps_workbook_exports_inside_workspace(workspace_root: Path):
+def test_prepare_export_path_keeps_workbook_exports_inside_workspace(
+    workspace_root: Path,
+):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="status.xlsx"))
 
@@ -219,7 +221,10 @@ def test_prepare_export_path_keeps_workbook_exports_inside_workspace(workspace_r
         )
     )
 
-    assert output_path == (workspace_root / "reports" / "q1" / "final-report.xlsx").resolve()
+    assert (
+        output_path
+        == (workspace_root / "reports" / "q1" / "final-report.xlsx").resolve()
+    )
 
     _, windows_style_output_path = store.prepare_export_path(
         ExportWorkbookRequest(
@@ -336,9 +341,7 @@ def test_exported_workbook_disallows_more_writes_or_reexport(workspace_root: Pat
         )
 
     with pytest.raises(ValueError, match="status is draft"):
-        store.export_workbook(
-            ExportWorkbookRequest(workbook_id=workbook.workbook_id)
-        )
+        store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
 
     summary = store.build_prompt_summary(workbook.workbook_id)
     assert summary["status"] == "exported"
@@ -411,7 +414,9 @@ def test_export_workbook_rejects_same_workbook_writes_without_waiting_for_export
         finally:
             write_finished.set()
 
-    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+    monkeypatch.setattr(
+        workbook_session_store_module, "export_workbook_to_xlsx", fake_export
+    )
 
     export_thread = Thread(target=run_export)
     write_thread = Thread(target=run_write)
@@ -474,7 +479,9 @@ def test_export_workbook_allows_other_workbook_operations_while_writing_file(
         finally:
             other_finished.set()
 
-    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+    monkeypatch.setattr(
+        workbook_session_store_module, "export_workbook_to_xlsx", fake_export
+    )
 
     export_thread = Thread(target=run_export)
     other_thread = Thread(target=run_other_workbook_ops)
@@ -513,7 +520,6 @@ def test_create_workbook_keeps_new_draft_when_store_is_capped_by_exporting_workb
     export_started = Event()
     release_export = Event()
     create_finished = Event()
-    export_error: list[Exception] = []
     create_error: list[Exception] = []
     created_workbook_ids: list[str] = []
 
@@ -542,7 +548,9 @@ def test_create_workbook_keeps_new_draft_when_store_is_capped_by_exporting_workb
         finally:
             create_finished.set()
 
-    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+    monkeypatch.setattr(
+        workbook_session_store_module, "export_workbook_to_xlsx", fake_export
+    )
 
     export_thread = Thread(target=run_export)
     create_thread = Thread(target=run_create_and_write)
@@ -586,7 +594,9 @@ def test_export_workbook_resets_status_after_export_failure(
     def fake_export(_workbook_model, _output_path):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+    monkeypatch.setattr(
+        workbook_session_store_module, "export_workbook_to_xlsx", fake_export
+    )
 
     with pytest.raises(RuntimeError, match="disk full"):
         store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
@@ -626,7 +636,9 @@ def test_failed_export_prunes_store_back_to_cap(
 
     def run_export():
         try:
-            store.export_workbook(ExportWorkbookRequest(workbook_id=workbook.workbook_id))
+            store.export_workbook(
+                ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+            )
         except Exception as exc:  # pragma: no cover - asserted via captured error
             export_error.append(exc)
 
@@ -646,7 +658,9 @@ def test_failed_export_prunes_store_back_to_cap(
         finally:
             create_finished.set()
 
-    monkeypatch.setattr(workbook_session_store_module, "export_workbook_to_xlsx", fake_export)
+    monkeypatch.setattr(
+        workbook_session_store_module, "export_workbook_to_xlsx", fake_export
+    )
 
     export_thread = Thread(target=run_export)
     create_thread = Thread(target=run_create_and_write)
@@ -733,7 +747,9 @@ def test_prompt_summary_reuses_shared_workbook_summary_fields(workspace_root: Pa
     }
 
 
-def test_case_insensitive_sheet_lookup_preserves_exported_sheet_name(workspace_root: Path):
+def test_case_insensitive_sheet_lookup_preserves_exported_sheet_name(
+    workspace_root: Path,
+):
     store = WorkbookSessionStore(workspace_dir=workspace_root)
     workbook = store.create_workbook(CreateWorkbookRequest(filename="book.xlsx"))
     store.write_rows(

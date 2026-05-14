@@ -253,10 +253,11 @@ def test_node_render_backend_renders_sections_and_table_styles(workspace_root: P
     overview_divider = _paragraph_after(loaded_doc, overview_heading)
     assert _paragraph_run_rgb(overview_heading) == "0F4C81"
     assert _paragraph_bottom_border_color(overview_divider) == "CBD5E1"
-    assert header_paragraph.text == "Q3 经营复盘报告 | 战略与增长委员会\t机密 · 2024 年 10 月"
-    assert any(
-        text.startswith("集团战略部 · 内部机密文件") for text in footer_texts
+    assert (
+        header_paragraph.text
+        == "Q3 经营复盘报告 | 战略与增长委员会\t机密 · 2024 年 10 月"
     )
+    assert any(text.startswith("集团战略部 · 内部机密文件") for text in footer_texts)
     assert "PAGE" in loaded_doc.sections[0].footer._element.xml
     assert _cell_vertical_merge(table.rows[1].cells[0]) == "restart"
     assert _raw_row_cell_vertical_merge(table.rows[2], 0) == "continue"
@@ -333,7 +334,12 @@ def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: P
                 },
             ),
             "blocks": [
-                {"type": "toc", "title": "目录", "levels": 2, "start_on_new_page": True},
+                {
+                    "type": "toc",
+                    "title": "目录",
+                    "levels": 2,
+                    "start_on_new_page": True,
+                },
                 {"type": "heading", "text": "经营总览", "level": 2},
                 {"type": "paragraph", "text": "正文"},
             ],
@@ -345,7 +351,8 @@ def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: P
     assert loaded_doc.sections[0].different_first_page_header_footer is True
     assert "季度经营复盘" in _story_texts(loaded_doc.sections[0].header)
     assert any(
-        text.startswith("内部使用") for text in _story_texts(loaded_doc.sections[0].footer)
+        text.startswith("内部使用")
+        for text in _story_texts(loaded_doc.sections[0].footer)
     )
     assert "封面页眉" in _story_texts(loaded_doc.sections[0].first_page_header)
     assert any(
@@ -370,7 +377,7 @@ def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: P
         document_xml = archive.read("word/document.xml").decode("utf-8")
     assert "w:fldSimple" in document_xml
     assert "TOC" in document_xml
-    assert '\\o &quot;1-2&quot;' in document_xml
+    assert "\\o &quot;1-2&quot;" in document_xml
 
 
 def test_node_renderer_schema_rejects_invalid_hero_banner_colors(workspace_root: Path):
@@ -523,15 +530,22 @@ def test_node_renderer_supports_business_review_cover_page_template(
         paragraph.text != "Q3 经营复盘报告" for paragraph in loaded_doc.paragraphs
     )
     assert banner_table.rows[0].cells[0].paragraphs[0].text == "Q3 经营复盘报告"
-    assert banner_table.rows[0].cells[0].paragraphs[1].text == "战略与增长委员会 · 2024 年 10 月"
+    assert (
+        banner_table.rows[0].cells[0].paragraphs[1].text
+        == "战略与增长委员会 · 2024 年 10 月"
+    )
     assert _cell_fill(banner_table.rows[0].cells[0]) == "1F4E79"
     assert _table_width(banner_table) == ("9360", "dxa")
     assert _table_row_height(banner_table.rows[0]) == ("1600", "exact")
     assert _cell_margin(banner_table.rows[0].cells[0], "left") == "400"
     assert _cell_margin(banner_table.rows[0].cells[0], "right") == "400"
     assert _cell_margin(banner_table.rows[0].cells[0], "bottom") == "0"
-    assert banner_table.rows[0].cells[0].paragraphs[0].paragraph_format.space_after.pt == 0
-    assert _paragraph_run_size(banner_table.rows[0].cells[0].paragraphs[0]) == pytest.approx(
+    assert (
+        banner_table.rows[0].cells[0].paragraphs[0].paragraph_format.space_after.pt == 0
+    )
+    assert _paragraph_run_size(
+        banner_table.rows[0].cells[0].paragraphs[0]
+    ) == pytest.approx(
         26.0,
         abs=0.5,
     )
@@ -550,7 +564,9 @@ def test_node_renderer_supports_business_review_cover_page_template(
     assert _cell_width(metrics_table.rows[0].cells[1]) == ("3120", "dxa")
     assert _cell_width(metrics_table.rows[0].cells[2]) == ("3120", "dxa")
     assert _cell_fill(metrics_table.rows[0].cells[0]) == "F2F7FC"
-    assert _paragraph_run_size(metrics_table.rows[0].cells[0].paragraphs[1]) == pytest.approx(
+    assert _paragraph_run_size(
+        metrics_table.rows[0].cells[0].paragraphs[1]
+    ) == pytest.approx(
         17.0,
         abs=0.2,
     )
@@ -561,7 +577,10 @@ def test_node_renderer_supports_business_review_cover_page_template(
     assert _cell_width(footer_table.rows[0].cells[1]) == ("9200", "dxa")
     assert _cell_fill(footer_table.rows[0].cells[0]) == "1F4E79"
     assert _cell_fill(footer_table.rows[0].cells[1]) == "EEF3FB"
-    assert footer_table.rows[0].cells[1].paragraphs[0].text == "编制：战略发展部 · 审核：CFO 办公室"
+    assert (
+        footer_table.rows[0].cells[1].paragraphs[0].text
+        == "编制：战略发展部 · 审核：CFO 办公室"
+    )
     assert not any(
         _paragraph_has_page_break(paragraph) for paragraph in loaded_doc.paragraphs
     )
@@ -705,7 +724,13 @@ def test_node_renderer_uses_relaxed_report_grid_defaults_for_business_tables(
             "blocks": [
                 {
                     "type": "table",
-                    "headers": ["区域", "营收 (万元)", "同比 (YoY)", "预算完成率", "备注"],
+                    "headers": [
+                        "区域",
+                        "营收 (万元)",
+                        "同比 (YoY)",
+                        "预算完成率",
+                        "备注",
+                    ],
                     "rows": [
                         ["华东大区", "18,450", "+15.2%", "108.5%", "核心项目提前交付"],
                         ["华南大区", "14,200", "+10.8%", "105.2%", "新签客户放量明显"],
@@ -869,7 +894,9 @@ async def test_node_document_toolset_exports_business_review_cover_page_template
     assert _table_width(loaded_doc.tables[0]) == ("9360", "dxa")
     assert _table_row_height(loaded_doc.tables[0].rows[0]) == ("1600", "exact")
     assert loaded_doc.tables[1].rows[0].cells[0].paragraphs[0].text == "核心摘要"
-    summary_width, summary_width_type = _cell_width(loaded_doc.tables[1].rows[0].cells[0])
+    summary_width, summary_width_type = _cell_width(
+        loaded_doc.tables[1].rows[0].cells[0]
+    )
     assert summary_width_type == "dxa"
     assert int(summary_width) > 9300
     assert loaded_doc.tables[2].rows[0].cells[0].paragraphs[0].text == "营业收入"
@@ -880,7 +907,10 @@ async def test_node_document_toolset_exports_business_review_cover_page_template
     assert _cell_fill(loaded_doc.tables[2].rows[0].cells[0]) == "F2F7FC"
     assert _cell_width(loaded_doc.tables[3].rows[0].cells[0]) == ("160", "dxa")
     assert _cell_width(loaded_doc.tables[3].rows[0].cells[1]) == ("9200", "dxa")
-    assert loaded_doc.tables[3].rows[0].cells[1].paragraphs[0].text == "编制：战略发展部 · 审核：CFO 办公室"
+    assert (
+        loaded_doc.tables[3].rows[0].cells[1].paragraphs[0].text
+        == "编制：战略发展部 · 审核：CFO 办公室"
+    )
     assert all(
         paragraph.text != "Q3 经营复盘报告" for paragraph in loaded_doc.paragraphs
     )
@@ -892,8 +922,12 @@ async def test_node_document_toolset_exports_business_review_cover_page_template
     overview_divider = _paragraph_after(loaded_doc, overview_heading)
     assert _paragraph_bottom_border_color(overview_divider) == "1F4E79"
     assert _paragraph_bottom_border_size(overview_divider) == "12"
-    assert overview_divider.paragraph_format.space_before.pt == pytest.approx(2.5, abs=0.3)
-    assert overview_heading.paragraph_format.space_before.pt == pytest.approx(8, abs=0.2)
+    assert overview_divider.paragraph_format.space_before.pt == pytest.approx(
+        2.5, abs=0.3
+    )
+    assert overview_heading.paragraph_format.space_before.pt == pytest.approx(
+        8, abs=0.2
+    )
     assert overview_heading.paragraph_format.space_after.pt == pytest.approx(0, abs=0.2)
     assert (
         _find_paragraph(loaded_doc, "华东和华南区域继续承担主要增长贡献。").text
@@ -924,12 +958,8 @@ def test_node_renderer_supports_technical_resume_page_template(
     )
     contact_divider = _paragraph_after(loaded_doc, contact_paragraph)
     education_heading = _find_paragraph(loaded_doc, "教育背景")
-    education_entry = _find_paragraph(
-        loaded_doc, "北京大学\t2019.09 – 2023.06"
-    )
-    education_subtitle = _find_paragraph(
-        loaded_doc, "计算机科学与技术  |  工学学士"
-    )
+    education_entry = _find_paragraph(loaded_doc, "北京大学\t2019.09 – 2023.06")
+    education_subtitle = _find_paragraph(loaded_doc, "计算机科学与技术  |  工学学士")
     detail = _find_paragraph(
         loaded_doc,
         "GPA 3.86/4.0，连续三年一等奖学金，排名前 5%",
@@ -1064,7 +1094,10 @@ async def test_node_document_toolset_exports_technical_resume_page_template(
     assert _find_paragraph(loaded_doc, "张明远").text == "张明远"
     assert _section_margin_twips(loaded_doc.sections[0], "left") == 1260
     assert _section_margin_twips(loaded_doc.sections[0], "right") == 1260
-    assert _paragraph_bottom_border_color(_paragraph_after(loaded_doc, contact_paragraph)) == "000000"
+    assert (
+        _paragraph_bottom_border_color(_paragraph_after(loaded_doc, contact_paragraph))
+        == "000000"
+    )
     assert _paragraph_bottom_border_color(skills_heading) == "000000"
     assert _paragraph_tab_positions(experience_entry) == ["9026"]
     assert _paragraph_run_rgb(experience_subtitle) == "444444"
@@ -1257,20 +1290,21 @@ def test_node_renderer_supports_hero_banner_fonts_and_report_box_styles(
 
     hero_table = loaded_doc.tables[0]
     accent_table = loaded_doc.tables[1]
-    metric_table = loaded_doc.tables[2]
-    data_table = loaded_doc.tables[3]
+    _metric_table = loaded_doc.tables[2]  # noqa: F841
+    _data_table = loaded_doc.tables[3]  # noqa: F841
     heading = _find_paragraph(loaded_doc, "一、经营总览")
     body_paragraph = _find_paragraph(loaded_doc, "正文段落 const revenue = true;")
 
     assert hero_table.rows[0].cells[0].text.startswith("Q3 经营复盘报告")
     assert _cell_fill(hero_table.rows[0].cells[0]) == "1F4E79"
     assert _table_width(hero_table) == ("9360", "dxa")
-    assert _run_font_attr(hero_table.rows[0].cells[0].paragraphs[0].runs[0], "ascii") == (
-        "Source Han Sans SC"
-    )
     assert _run_font_attr(
-        hero_table.rows[0].cells[0].paragraphs[0].runs[0], "eastAsia"
-    ) == "Source Han Sans SC"
+        hero_table.rows[0].cells[0].paragraphs[0].runs[0], "ascii"
+    ) == ("Source Han Sans SC")
+    assert (
+        _run_font_attr(hero_table.rows[0].cells[0].paragraphs[0].runs[0], "eastAsia")
+        == "Source Han Sans SC"
+    )
     assert _run_font_attr(heading.runs[0], "ascii") == "Source Han Sans SC"
     assert _run_font_attr(heading.runs[0], "eastAsia") == "Source Han Sans SC"
     assert _run_font_attr(body_paragraph.runs[0], "ascii") == "Microsoft YaHei"
@@ -1390,7 +1424,11 @@ def test_node_renderer_emits_normalized_hyperlink_targets(workspace_root: Path):
     with zipfile.ZipFile(output_path) as archive:
         rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
     rels_root = ET.fromstring(rels_xml)
-    targets = [rel.attrib.get("Target", "") for rel in rels_root if rel.tag.endswith("Relationship")]
+    targets = [
+        rel.attrib.get("Target", "")
+        for rel in rels_root
+        if rel.tag.endswith("Relationship")
+    ]
     parsed_targets = [urlparse(target) for target in targets if target]
     assert any(
         parsed.scheme == "https"
@@ -1426,7 +1464,11 @@ def test_node_renderer_normalizes_scheme_only_https_targets(workspace_root: Path
     with zipfile.ZipFile(output_path) as archive:
         rels_xml = archive.read("word/_rels/document.xml.rels").decode("utf-8")
     rels_root = ET.fromstring(rels_xml)
-    targets = [rel.attrib.get("Target", "") for rel in rels_root if rel.tag.endswith("Relationship")]
+    targets = [
+        rel.attrib.get("Target", "")
+        for rel in rels_root
+        if rel.tag.endswith("Relationship")
+    ]
     parsed_targets = [urlparse(target) for target in targets if target]
     assert any(
         parsed.scheme == "https"
@@ -1493,9 +1535,14 @@ def test_node_renderer_suppresses_document_title_when_hero_banner_is_first(
     )
 
     assert loaded_doc.tables[0].rows[0].cells[0].paragraphs[0].text == "Q3 经营复盘报告"
-    assert sum(
-        1 for paragraph in loaded_doc.paragraphs if paragraph.text == "Q3 经营复盘报告"
-    ) == 0
+    assert (
+        sum(
+            1
+            for paragraph in loaded_doc.paragraphs
+            if paragraph.text == "Q3 经营复盘报告"
+        )
+        == 0
+    )
     assert _find_paragraph(loaded_doc, "正文内容").text == "正文内容"
 
 
@@ -1617,7 +1664,9 @@ def test_node_renderer_supports_heading_styles_and_split_header_footer(
     heading_one_divider = _paragraph_after(loaded_doc, heading_one)
     assert _paragraph_bottom_border_color(heading_one_divider) == "CBD5E1"
     assert _paragraph_bottom_border_size(heading_one_divider) == "12"
-    assert heading_one_divider.paragraph_format.space_before.pt == pytest.approx(2.5, abs=0.3)
+    assert heading_one_divider.paragraph_format.space_before.pt == pytest.approx(
+        2.5, abs=0.3
+    )
     assert "Q3 经营复盘报告 | 战略与增长委员会" in header_paragraph.text
     assert "机密 · 2024 年 10 月" in header_paragraph.text
     assert "集团战略部 · 内部机密文件" in footer_paragraph.text
@@ -1781,7 +1830,8 @@ def test_node_renderer_supports_section_override_inheritance_and_nested_even_hea
     assert "默认页眉" in _story_texts(loaded_doc.sections[0].header)
     assert "第二节页眉" in _story_texts(loaded_doc.sections[1].header)
     assert any(
-        text.startswith("第二节页脚") for text in _story_texts(loaded_doc.sections[1].footer)
+        text.startswith("第二节页脚")
+        for text in _story_texts(loaded_doc.sections[1].footer)
     )
     assert "第二节偶数页页眉" in _story_texts(loaded_doc.sections[1].even_page_header)
     assert "PAGE" in loaded_doc.sections[1].footer._element.xml
@@ -2032,7 +2082,11 @@ async def test_node_document_toolset_exports_executive_brief_golden_sample(
                     },
                     {
                         "blocks": [
-                            {"type": "heading", "text": "Decision Requested", "level": 2},
+                            {
+                                "type": "heading",
+                                "text": "Decision Requested",
+                                "level": 2,
+                            },
                             {
                                 "type": "paragraph",
                                 "text": "Approve Q4 hiring for sales enablement and analytics.",
@@ -2371,7 +2425,9 @@ async def test_node_document_toolset_exports_low_frequency_parity_sample(
     assert (_paragraph_run_size(title_paragraph) or 0) > (
         _paragraph_run_size(summary_item_paragraph) or 0
     )
-    assert title_paragraph.paragraph_format.space_before.pt == pytest.approx(10, abs=0.5)
+    assert title_paragraph.paragraph_format.space_before.pt == pytest.approx(
+        10, abs=0.5
+    )
     assert title_paragraph.paragraph_format.space_after.pt == pytest.approx(3, abs=0.5)
     assert summary_item_paragraph.paragraph_format.space_after.pt == pytest.approx(
         7, abs=0.5
@@ -2384,7 +2440,10 @@ async def test_node_document_toolset_exports_low_frequency_parity_sample(
         for text in _story_texts(loaded_doc.sections[1].footer)
     )
     assert "PAGE" in loaded_doc.sections[1].footer._element.xml
-    assert _paragraph_bottom_border_color(_paragraph_after(loaded_doc, detail_heading)) is not None
+    assert (
+        _paragraph_bottom_border_color(_paragraph_after(loaded_doc, detail_heading))
+        is not None
+    )
     assert detail_table.rows[0].cells[0].text == "经营数据"
     assert detail_table.rows[1].cells[0].text == "区域"
     assert (
@@ -2689,7 +2748,9 @@ def test_node_renderer_rejects_non_positive_col_span(workspace_root: Path):
         assert completed.returncode != 0
         error_payload = json.loads(completed.stderr)
         assert error_payload["code"] == "SCHEMA_VALIDATION_FAILED"
-        assert "data/blocks/0/rows/0/0/col_span must be >= 1" in error_payload["message"]
+        assert (
+            "data/blocks/0/rows/0/0/col_span must be >= 1" in error_payload["message"]
+        )
 
 
 def test_node_renderer_rejects_combined_row_and_column_spans(workspace_root: Path):
@@ -2989,7 +3050,13 @@ def test_summary_card_defaults_apply_in_node_renderer(workspace_root: Path):
             ),
         ),
         blocks=[
-            SummaryCardBlock(**_summary_card_block(title="结论与行动计划", items=["统一节奏", "聚焦续约"], variant="summary"))
+            SummaryCardBlock(
+                **_summary_card_block(
+                    title="结论与行动计划",
+                    items=["统一节奏", "聚焦续约"],
+                    variant="summary",
+                )
+            )
         ],
     )
 

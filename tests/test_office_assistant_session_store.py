@@ -1,71 +1,24 @@
-import builtins
-import importlib
-import json
-import shutil
-import subprocess
-import struct
-import sys
-import zipfile
-import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from unittest.mock import MagicMock
 
 import pytest
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from astrbot_plugin_office_assistant.agent_tools import (
-    build_document_toolset,
-)
-from astrbot_plugin_office_assistant.agent_tools.document_tools import (
-    CreateDocumentTool,
-)
 from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
-    DOCX_TABLE_STYLES,
     TableRenderer,
-)
-from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
-    build_summary_card_group,
 )
 from astrbot_plugin_office_assistant.domain.document.session_store import (
     DocumentSessionStore,
     merge_document_style_defaults,
 )
-from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
-    export_document_via_pipeline,
-)
-from astrbot_plugin_office_assistant.domain.document.render_backends import (
-    DocumentRenderBackendConfig,
-    DocumentRenderBackendError,
-    NodeDocumentRenderBackend,
-    build_document_render_backends,
-    RenderResult,
-    build_document_render_payload,
-)
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
-    BlockStyle,
     BusinessReviewCoverData,
-    ColumnBlock,
-    ColumnsBlock,
     GroupBlock,
-    HeaderFooterConfig,
-    HeadingBlock,
     HeroBannerBlock,
     PageTemplateBlock,
     ParagraphBlock,
-    ParagraphRun,
-    SectionBreakBlock,
-    SectionMarginsConfig,
-    SummaryCardBlock,
-    TableBlock,
-    TocBlock,
 )
 from astrbot_plugin_office_assistant.document_core.models.document import (
-    DocumentMetadata,
-    DocumentModel,
     DocumentStyleConfig,
-    DocumentSummaryCardDefaults,
 )
 from astrbot_plugin_office_assistant.domain.document.contracts import (
     AddBlocksRequest,
@@ -80,30 +33,11 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     SectionListInput,
     SectionParagraphInput,
     SectionTableInput,
-    normalize_create_document_kwargs,
-    normalize_raw_block_payloads,
 )
-from astrbot_plugin_office_assistant.mcp_server.server import (
-    create_server,
-)
-from astrbot_plugin_office_assistant.tools.mcp_adapter import (
-    register_document_tools_from_registry,
-)
-from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
-    build_document_toolset_from_registry,
-)
-from astrbot_plugin_office_assistant.tools.registry import (
-    DocumentToolSpec,
-    get_document_tool_specs,
-)
-from pydantic import ValidationError
-
-from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 from tests._docx_test_helpers import *  # noqa: F401,F403
 from tests._docx_test_helpers import _technical_resume_block
-
 
 
 def test_document_session_store_keeps_exports_inside_workspace(workspace_root: Path):
@@ -167,6 +101,7 @@ def test_document_session_store_keeps_exports_inside_workspace(workspace_root: P
             output_dir=r"..\outside",
         )
 
+
 def test_document_session_store_evicts_oldest_documents_when_capped():
     store = DocumentSessionStore(max_documents=2)
     first = store.create_document(CreateDocumentRequest(title="first"))
@@ -176,6 +111,7 @@ def test_document_session_store_evicts_oldest_documents_when_capped():
     assert store.get_document(first.document_id) is None
     assert store.get_document(second.document_id) is not None
     assert store.get_document(third.document_id) is not None
+
 
 def test_document_session_store_evicts_expired_documents_by_ttl():
     store = DocumentSessionStore(ttl=timedelta(seconds=1))
@@ -188,6 +124,7 @@ def test_document_session_store_evicts_expired_documents_by_ttl():
     assert store.get_document(expired.document_id) is None
     assert store.get_document(fresh.document_id) is not None
 
+
 def test_word_document_builder_resolves_logical_table_styles():
     assert TableRenderer.resolve_docx_table_style("report_grid") == "Table Grid"
     assert (
@@ -197,6 +134,7 @@ def test_word_document_builder_resolves_logical_table_styles():
     assert TableRenderer.resolve_docx_table_style("minimal") == "Table Grid"
     assert TableRenderer.resolve_docx_table_style("") == "Table Grid"
     assert TableRenderer.resolve_docx_table_style("custom_style") == "custom_style"
+
 
 def test_document_session_store_expands_summary_card_blocks():
     store = DocumentSessionStore()
@@ -211,6 +149,7 @@ def test_document_session_store_expands_summary_card_blocks():
 
     assert len(updated.blocks) == 1
     _assert_summary_card_group(updated.blocks[0])
+
 
 def test_document_session_store_moves_landscape_intro_before_section_break():
     store = DocumentSessionStore()
@@ -258,14 +197,13 @@ def test_document_session_store_moves_landscape_intro_before_section_break():
     assert updated.blocks[1].page_orientation == "landscape"
     assert updated.blocks[2].text == "二、各业务线详细数据盘点（宽表展示）"
 
+
 def test_document_session_store_applies_summary_card_defaults():
     store = DocumentSessionStore()
     document = store.create_document(
         CreateDocumentRequest(
             title="Summary Defaults",
-            document_style={
-                "summary_card_defaults": _summary_card_defaults()
-            },
+            document_style={"summary_card_defaults": _summary_card_defaults()},
         )
     )
 
@@ -287,6 +225,7 @@ def test_document_session_store_applies_summary_card_defaults():
     assert title_block.layout.spacing_after == pytest.approx(4)
     assert list_block.layout.spacing_after == pytest.approx(8)
 
+
 def test_document_session_store_tolerates_summary_card_default_resolution_errors():
     def _raise_defaults_error(_config):
         raise RuntimeError("bad defaults")
@@ -303,6 +242,7 @@ def test_document_session_store_tolerates_summary_card_default_resolution_errors
 
     assert len(updated.blocks) == 1
     _assert_summary_card_group(updated.blocks[0])
+
 
 def test_domain_document_session_store_accepts_summary_card_defaults_resolver():
     from astrbot_plugin_office_assistant.domain.document.session_store import (
@@ -326,6 +266,7 @@ def test_domain_document_session_store_accepts_summary_card_defaults_resolver():
 
     assert len(updated.blocks) == 1
     _assert_summary_card_group(updated.blocks[0])
+
 
 def test_domain_document_session_store_uses_legacy_summary_card_patch_point(
     monkeypatch: pytest.MonkeyPatch,
@@ -355,6 +296,7 @@ def test_domain_document_session_store_uses_legacy_summary_card_patch_point(
     assert len(updated.blocks) == 1
     _assert_summary_card_group(updated.blocks[0])
 
+
 def test_document_session_store_runs_internal_normalize_hooks():
     def _inject_heading(_context):
         return [
@@ -375,6 +317,7 @@ def test_document_session_store_runs_internal_normalize_hooks():
     assert len(updated.blocks) == 2
     assert updated.blocks[0].text == "Hook Title"
     assert updated.blocks[1].text == "正文"
+
 
 def test_document_session_store_preserves_grouped_headers_for_table_blocks():
     store = DocumentSessionStore()
@@ -417,6 +360,7 @@ def test_document_session_store_preserves_grouped_headers_for_table_blocks():
     assert table.table_align == "center"
     assert table.border_style == "strong"
     assert table.caption_emphasis == "strong"
+
 
 def test_document_session_store_preserves_hero_banner_and_report_style_fields():
     store = DocumentSessionStore()
@@ -516,7 +460,9 @@ def test_merge_document_style_defaults_keeps_unset_font_fields_following_font_na
     assert merged.font_name == "Arial"
     assert "heading_font_name" not in merged.model_fields_set
     assert "table_font_name" not in merged.model_fields_set
-    assert merged.model_dump(mode="python", exclude_unset=True) == {"font_name": "Arial"}
+    assert merged.model_dump(mode="python", exclude_unset=True) == {
+        "font_name": "Arial"
+    }
 
 
 def test_document_session_store_preserves_page_template_block():
@@ -572,6 +518,7 @@ def test_document_session_store_preserves_technical_resume_page_template_block()
     assert block.data.name == "张明远"
     assert block.data.sections[0].title == "教育背景"
 
+
 def test_document_session_store_add_table_preserves_grouped_headers():
     store = DocumentSessionStore()
     document = store.create_document(CreateDocumentRequest(title="Legacy Table"))
@@ -601,6 +548,7 @@ def test_document_session_store_add_table_preserves_grouped_headers():
     assert table.header_groups[1].span == 1
     assert table.header_fill == "1F4E79"
     assert table.border_style == "strong"
+
 
 def test_document_session_store_add_helpers_build_typed_blocks(
     monkeypatch: pytest.MonkeyPatch,
@@ -688,6 +636,7 @@ def test_document_session_store_builds_runtime_paragraph_border_block():
     assert paragraph.border.bottom.color == "1F4E79"
     assert paragraph.border.bottom.width_pt == pytest.approx(1.0)
 
+
 def test_document_session_store_builds_prompt_summary_for_draft_documents():
     store = DocumentSessionStore()
     document = store.create_document(CreateDocumentRequest(title="季度复盘"))
@@ -717,6 +666,7 @@ def test_document_session_store_builds_prompt_summary_for_draft_documents():
         "latest_block_types": ["heading", "paragraph", "table"],
         "next_allowed_actions": ["add_blocks", "finalize_document"],
     }
+
 
 def test_document_session_store_builds_prompt_summary_for_later_states():
     store = DocumentSessionStore()
@@ -768,6 +718,7 @@ def test_document_session_store_rejects_add_blocks_after_finalize():
                 blocks=[BlockHeadingInput(text="一、经营总览", level=1)],
             )
         )
+
 
 def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
     store = DocumentSessionStore()

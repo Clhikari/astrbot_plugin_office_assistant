@@ -382,8 +382,7 @@ def _table_grid_widths(table) -> list[int]:
     if tbl_grid is None:
         return []
     return [
-        int(grid_col.get(qn("w:w"), "0"))
-        for grid_col in tbl_grid.iter(qn("w:gridCol"))
+        int(grid_col.get(qn("w:w"), "0")) for grid_col in tbl_grid.iter(qn("w:gridCol"))
     ]
 
 
@@ -572,7 +571,10 @@ def _technical_resume_block(
                             "details": [
                                 {
                                     "runs": [
-                                        {"text": "主导优化推荐引擎召回模块，", "bold": True},
+                                        {
+                                            "text": "主导优化推荐引擎召回模块，",
+                                            "bold": True,
+                                        },
                                         {
                                             "text": "将离线 Embedding 索引构建耗时从 4.2h 降至 1.1h，上线后 CTR 提升 3.2%。"
                                         },
@@ -593,8 +595,6 @@ def _technical_resume_block(
             ],
         },
     }
-
-
 
 
 def _summary_card_block(
@@ -699,7 +699,9 @@ async def _export_docx_via_node_toolset(
     )
     tool_by_name = {tool.name: tool for tool in toolset.tools}
 
-    created = json.loads(await tool_by_name["create_document"].call(None, **create_kwargs))
+    created = json.loads(
+        await tool_by_name["create_document"].call(None, **create_kwargs)
+    )
     document_id = created["document"]["document_id"]
 
     added = json.loads(
@@ -733,7 +735,5 @@ def _section_margin_twips(section, edge_name: str) -> int | None:
 
 
 __all__ = [
-    name
-    for name in globals()
-    if name.startswith("_") and not name.startswith("__")
+    name for name in globals() if name.startswith("_") and not name.startswith("__")
 ]

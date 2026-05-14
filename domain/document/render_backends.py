@@ -36,7 +36,9 @@ class DocumentRenderBackendConfig:
     excel_preferred_backend: RenderBackendKind = "python"
     excel_fallback_enabled: bool = False
 
-    def preferred_backend_for(self, document_format: DocumentFormat) -> RenderBackendKind:
+    def preferred_backend_for(
+        self, document_format: DocumentFormat
+    ) -> RenderBackendKind:
         if document_format == "ppt":
             return self.ppt_preferred_backend
         if document_format == "excel":
@@ -143,7 +145,9 @@ def _fixup_block_payload(block_payload: dict[str, Any], block: object) -> None:
                 child_payloads = col_payload.get("blocks", [])
                 if isinstance(child_payloads, list):
                     for child_idx, child_payload in enumerate(child_payloads):
-                        if isinstance(child_payload, dict) and child_idx < len(col_blocks):
+                        if isinstance(child_payload, dict) and child_idx < len(
+                            col_blocks
+                        ):
                             _fixup_block_payload(child_payload, col_blocks[child_idx])
 
 
@@ -232,6 +236,7 @@ class NodeDocumentRenderBackend:
                 f"JS renderer completed without output: {output_path}",
             )
         return RenderResult(backend_name=self.name, output_path=output_path)
+
 
 class PythonExcelRenderBackend:
     name = "python-excel"
@@ -327,7 +332,9 @@ def build_document_render_backends(
     resolved = config or DocumentRenderBackendConfig()
 
     if document_format == "word":
-        return [NodeDocumentRenderBackend(entry_path=resolved.js_renderer_entry or None)]
+        return [
+            NodeDocumentRenderBackend(entry_path=resolved.js_renderer_entry or None)
+        ]
 
     if document_format == "ppt":
         if resolved.preferred_backend_for("ppt") == "python":

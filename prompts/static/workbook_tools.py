@@ -36,7 +36,9 @@ def build_workbook_follow_up_notice(
     normalized_latest_sheets = (
         ", ".join(latest_written_sheets) if latest_written_sheets else "无"
     )
-    normalized_actions = ", ".join(next_allowed_actions) if next_allowed_actions else "无"
+    normalized_actions = (
+        ", ".join(next_allowed_actions) if next_allowed_actions else "无"
+    )
 
     if status == "draft":
         return (

@@ -49,7 +49,8 @@ def register_export_document_tool(
                 document_for_routing.format,
                 render_backend_config,
             )
-            if render_backend_config is not None or document_for_routing.format != "word"
+            if render_backend_config is not None
+            or document_for_routing.format != "word"
             else resolved_render_backends
         )
         document, output_path = await export_document_via_pipeline(

@@ -47,9 +47,7 @@ def create_server(
         "Use create_document/add_blocks/finalize_document/export_document for Word."
     )
     if workbook_supported:
-        instructions += (
-            " Use create_workbook/write_rows/export_workbook for Excel."
-        )
+        instructions += " Use create_workbook/write_rows/export_workbook for Excel."
     server = FastMCP(
         name="astrbot-office-assistant",
         instructions=instructions,

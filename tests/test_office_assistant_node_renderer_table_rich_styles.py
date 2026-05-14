@@ -173,7 +173,9 @@ def test_node_renderer_supports_table_cell_rich_style_controls(
     assert _cell_border_color(rich_cell, "top") == "1F4E79"
     assert _cell_border_color(rich_cell, "right") == "0F766E"
     assert _cell_border_color(rich_cell, "left") == _table_border_color(table, "left")
-    assert _cell_border_color(rich_cell, "bottom") == _table_border_color(table, "bottom")
+    assert _cell_border_color(rich_cell, "bottom") == _table_border_color(
+        table, "bottom"
+    )
     assert _cell_border_size(rich_cell, "top") == "8"
     assert _cell_border_size(rich_cell, "right") == "6"
     assert _cell_border_size(rich_cell, "left") == _table_border_size(table, "left")
@@ -208,7 +210,10 @@ def test_node_renderer_clamps_table_cell_run_font_scale_to_cell_default(
                                         "font_scale": 1.35,
                                         "color": "B91C1C",
                                     },
-                                    {"text": "查看明细", "url": "https://example.com/detail"},
+                                    {
+                                        "text": "查看明细",
+                                        "url": "https://example.com/detail",
+                                    },
                                 ],
                             },
                         ]
@@ -227,12 +232,13 @@ def test_node_renderer_clamps_table_cell_run_font_scale_to_cell_default(
         document_xml = archive.read("word/document.xml").decode("utf-8")
 
     document_root = ET.fromstring(document_xml)
-    remark_cell = document_root.findall(".//w:tbl", NS)[0].findall("./w:tr", NS)[1].findall(
-        "./w:tc", NS
-    )[1]
-    hyperlink_run_size = (
-        remark_cell.find(".//w:hyperlink//w:rPr/w:sz", NS)
-        .attrib.get(f"{{{NS['w']}}}val")
+    remark_cell = (
+        document_root.findall(".//w:tbl", NS)[0]
+        .findall("./w:tr", NS)[1]
+        .findall("./w:tc", NS)[1]
+    )
+    hyperlink_run_size = remark_cell.find(".//w:hyperlink//w:rPr/w:sz", NS).attrib.get(
+        f"{{{NS['w']}}}val"
     )
     first_run_size = remark_cell.findall(".//w:rPr/w:sz", NS)[0].attrib.get(
         f"{{{NS['w']}}}val"
@@ -465,7 +471,10 @@ def test_node_renderer_balances_business_review_remark_column_widths(
                             {
                                 "runs": [
                                     {"text": "基础盘稳定，\n重点增长来自华东渠道，\n"},
-                                    {"text": "查看明细", "url": "https://example.com/detail"},
+                                    {
+                                        "text": "查看明细",
+                                        "url": "https://example.com/detail",
+                                    },
                                 ]
                             },
                         ],

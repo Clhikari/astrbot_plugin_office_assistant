@@ -126,9 +126,7 @@ class ExtractedExcelSheet:
 _MAX_EXCEL_PREVIEW_ROWS = DEFAULT_MAX_EXCEL_PREVIEW_ROWS
 _MAX_EXCEL_PREVIEW_CHARS = DEFAULT_MAX_EXCEL_PREVIEW_CHARS
 _MAX_EXCEL_PREVIEW_SHEETS = DEFAULT_MAX_EXCEL_PREVIEW_SHEETS
-_EXCEL_PREVIEW_TRUNCATION_NOTICE = (
-    "[内容已截断，最多展示前 {rows} 行或 {chars} 个字符]"
-)
+_EXCEL_PREVIEW_TRUNCATION_NOTICE = "[内容已截断，最多展示前 {rows} 行或 {chars} 个字符]"
 _EXCEL_PREVIEW_SHEET_TRUNCATION_NOTICE = (
     "[其余 {count} 个 Sheet 未展示，最多展示前 {sheets} 个 Sheet]"
 )

@@ -43,9 +43,7 @@ def get_session_config(get_config, session_id: str):
     ):
         return get_config(session_id)
 
-    if any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
-    ):
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters):
         return get_config(umo=session_id)
 
     for parameter_name in _SESSION_CONFIG_KEYWORD_NAMES:

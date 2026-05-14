@@ -1,58 +1,15 @@
-import builtins
-import importlib
-import json
-import shutil
-import subprocess
-import struct
-import sys
-import zipfile
-import zlib
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
-
 import pytest
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from astrbot_plugin_office_assistant.agent_tools import (
     build_document_toolset,
     build_workbook_toolset,
 )
-from astrbot_plugin_office_assistant.agent_tools.document_tools import (
-    CreateDocumentTool,
-)
 from astrbot_plugin_office_assistant.agent_tools.workbook_tools import (
     WriteRowsTool,
 )
-from astrbot_plugin_office_assistant.document_core.builders.table_renderer import (
-    DOCX_TABLE_STYLES,
-    TableRenderer,
-)
-from astrbot_plugin_office_assistant.document_core.macros.summary_card import (
-    build_summary_card_group,
-)
-from astrbot_plugin_office_assistant.domain.document.session_store import (
-    DocumentSessionStore,
-)
-from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
-    export_document_via_pipeline,
-)
 from astrbot_plugin_office_assistant.domain.document.render_backends import (
-    DocumentRenderBackendConfig,
-    DocumentRenderBackendError,
-    NodeDocumentRenderBackend,
-    build_document_render_backends,
-    RenderResult,
     build_document_render_payload,
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
-    BlockStyle,
-    BusinessReviewCoverData,
-    ColumnBlock,
-    ColumnsBlock,
-    GroupBlock,
-    HeaderFooterConfig,
     HeadingBlock,
     HeroBannerBlock,
     ListItem,
@@ -63,52 +20,30 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     ResumeSection,
     SectionBreakBlock,
     SectionMarginsConfig,
-    SummaryCardBlock,
     TableBlock,
     TableCell,
     TechnicalResumeData,
-    TocBlock,
 )
 from astrbot_plugin_office_assistant.document_core.models.document import (
     DocumentMetadata,
     DocumentModel,
-    DocumentStyleConfig,
-    DocumentSummaryCardDefaults,
 )
 from astrbot_plugin_office_assistant.domain.document.contracts import (
     AddBlocksRequest,
-    AddHeadingRequest,
-    AddListRequest,
-    AddParagraphRequest,
     AddTableRequest,
-    BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
-    FinalizeDocumentRequest,
-    SectionListInput,
     SectionParagraphInput,
     TableCellInput,
     SectionTableInput,
     normalize_create_document_kwargs,
     normalize_raw_block_payloads,
 )
-from astrbot_plugin_office_assistant.mcp_server.server import (
-    create_server,
-)
-from astrbot_plugin_office_assistant.tools.mcp_adapter import (
-    register_document_tools_from_registry,
-)
-from astrbot_plugin_office_assistant.tools.astrbot_adapter import (
-    build_document_toolset_from_registry,
-)
 from astrbot_plugin_office_assistant.tools.registry import (
-    DocumentToolSpec,
     get_document_tool_specs,
     get_workbook_tool_specs,
 )
 from pydantic import ValidationError
-
-from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 
 from tests._docx_test_helpers import *  # noqa: F401,F403

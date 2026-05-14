@@ -1,16 +1,10 @@
 import builtins
 import importlib
 import json
-import shutil
-import subprocess
-import struct
 import sys
 import zipfile
-import zlib
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
 
 import pytest
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -34,52 +28,15 @@ from astrbot_plugin_office_assistant.domain.document.export_pipeline import (
     export_document_via_pipeline,
 )
 from astrbot_plugin_office_assistant.domain.document.render_backends import (
-    DocumentRenderBackendConfig,
-    DocumentRenderBackendError,
-    NodeDocumentRenderBackend,
-    build_document_render_backends,
     RenderResult,
-    build_document_render_payload,
 )
 from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BlockStyle,
-    BusinessReviewCoverData,
-    ColumnBlock,
-    ColumnsBlock,
-    GroupBlock,
-    HeaderFooterConfig,
-    HeadingBlock,
-    HeroBannerBlock,
-    PageTemplateBlock,
     ParagraphBlock,
-    ParagraphRun,
-    SectionBreakBlock,
-    SectionMarginsConfig,
-    SummaryCardBlock,
-    TableBlock,
-    TocBlock,
-)
-from astrbot_plugin_office_assistant.document_core.models.document import (
-    DocumentMetadata,
-    DocumentModel,
-    DocumentStyleConfig,
-    DocumentSummaryCardDefaults,
 )
 from astrbot_plugin_office_assistant.domain.document.contracts import (
-    AddBlocksRequest,
-    AddHeadingRequest,
-    AddListRequest,
-    AddParagraphRequest,
-    AddTableRequest,
-    BlockHeadingInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
-    FinalizeDocumentRequest,
-    SectionListInput,
-    SectionParagraphInput,
-    SectionTableInput,
-    normalize_create_document_kwargs,
-    normalize_raw_block_payloads,
 )
 import astrbot_plugin_office_assistant.mcp_server.server as mcp_server_module
 from astrbot_plugin_office_assistant.mcp_server.server import (
@@ -95,7 +52,6 @@ from astrbot_plugin_office_assistant.tools.registry import (
     DocumentToolSpec,
     get_document_tool_specs,
 )
-from pydantic import ValidationError
 
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -557,7 +513,6 @@ async def test_create_document_tool_does_not_stringify_missing_session():
 @pytest.mark.asyncio
 async def test_document_toolset_smoke_export(workspace_root: Path):
     docx = pytest.importorskip("docx")
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import RGBColor
 
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools")
@@ -679,7 +634,6 @@ async def test_create_document_tool_applies_document_style_defaults(
     workspace_root: Path,
 ):
     docx = pytest.importorskip("docx")
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     workspace_dir = _make_workspace(workspace_root, "pytest-document-style")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
@@ -841,7 +795,6 @@ async def test_create_document_tool_prefers_table_block_over_document_style_defa
 ):
     docx = pytest.importorskip("docx")
     from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     workspace_dir = _make_workspace(workspace_root, "pytest-document-style-precedence")
     toolset = build_document_toolset(workspace_dir=workspace_dir)
@@ -1116,7 +1069,6 @@ async def test_create_document_tool_prefers_summary_block_over_document_style_de
     workspace_root: Path,
 ):
     docx = pytest.importorskip("docx")
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     workspace_dir = _make_workspace(
         workspace_root, "pytest-document-style-summary-precedence"
@@ -1546,7 +1498,6 @@ async def test_add_blocks_tool_supports_nested_primitives(workspace_root: Path):
 @pytest.mark.asyncio
 async def test_add_blocks_tool_supports_enhanced_tables(workspace_root: Path):
     docx = pytest.importorskip("docx")
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm
 
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-enhanced-table")
@@ -1611,7 +1562,6 @@ async def test_add_blocks_tool_supports_grouped_table_headers(
     table_style: str,
 ):
     docx = pytest.importorskip("docx")
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm
 
     workspace_dir = _make_workspace(

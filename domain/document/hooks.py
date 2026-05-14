@@ -31,9 +31,7 @@ class AfterExportContext:
     source: str
 
 
-BlockNormalizeHook = Callable[
-    [BlockNormalizationContext], Sequence[BlockInput] | None
-]
+BlockNormalizeHook = Callable[[BlockNormalizationContext], Sequence[BlockInput] | None]
 BeforeExportHook = Callable[
     [ExportPreparationContext],
     ExportPreparationContext | None | Awaitable[ExportPreparationContext | None],
@@ -93,7 +91,9 @@ async def run_after_export_hooks(
 
 
 async def _run_async_hooks(
-    hooks: Sequence[Callable[[HookContextT], HookContextT | None | Awaitable[HookContextT | None]]],
+    hooks: Sequence[
+        Callable[[HookContextT], HookContextT | None | Awaitable[HookContextT | None]]
+    ],
     context: HookContextT,
 ) -> HookContextT:
     current = context

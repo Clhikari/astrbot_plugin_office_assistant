@@ -409,7 +409,9 @@ class OfficeGenerator(ExecutorOwnerMixin):
         validated_blocks: list[BlockInput] = []
         for idx, block_payload in enumerate(normalized_payloads):
             try:
-                validated_blocks.append(_BLOCK_INPUT_ADAPTER.validate_python(block_payload))
+                validated_blocks.append(
+                    _BLOCK_INPUT_ADAPTER.validate_python(block_payload)
+                )
             except ValidationError as exc:
                 logger.warning(
                     "[文件生成器] 跳过无效文档块 index=%s file=%s: %s",

@@ -203,6 +203,7 @@ async def test_generate_uses_explicit_filename_fallback(
     generator._generate_word.assert_awaited_once()
     assert output_path == workspace_root / "report.docx"
 
+
 @pytest.mark.asyncio
 async def test_generate_word_ignores_python_docx_support_gate(
     workspace_root: Path,
