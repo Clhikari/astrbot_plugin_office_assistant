@@ -261,7 +261,8 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     assert resume_section_item_schema["required"] == ["title"]
     assert resume_section_schema["title"]["type"] == "string"
     assert resume_detail_schema["type"] == "object"
-    assert "Plain strings" not in resume_detail_schema["description"]
+    assert "Always use this object form" in resume_detail_schema["description"]
+    assert "legacy plain string values" not in resume_detail_schema["description"]
     assert resume_detail_schema["properties"]["text"]["type"] == "string"
     assert resume_detail_schema["properties"]["runs"]["type"] == "array"
     assert (
@@ -271,7 +272,8 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         == "boolean"
     )
     assert resume_line_schema["type"] == "object"
-    assert "Plain strings" not in resume_line_schema["description"]
+    assert "Always use this object form" in resume_line_schema["description"]
+    assert "legacy plain string values" not in resume_line_schema["description"]
     assert resume_line_schema["properties"]["text"]["type"] == "string"
     assert resume_line_schema["properties"]["runs"]["type"] == "array"
     assert (
