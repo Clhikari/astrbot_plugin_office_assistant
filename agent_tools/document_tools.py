@@ -201,7 +201,7 @@ _TABLE_CELL_SCHEMA = {
 _STRING_PUBLIC_SCHEMA = {"type": "string"}
 _RICH_LIST_ITEM_PUBLIC_SCHEMA = {
     "type": "object",
-    "description": "Rich list item object with text/runs. Plain strings are also accepted by runtime validation.",
+    "description": "Rich list item object with text and optional inline rich-text runs.",
     "properties": {
         "text": {"type": "string"},
         "runs": {
