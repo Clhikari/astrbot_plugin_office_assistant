@@ -260,7 +260,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
     resume_line_schema = resume_section_schema["lines"]["items"]
     assert resume_section_item_schema["required"] == ["title"]
     assert resume_section_schema["title"]["type"] == "string"
-    assert "type" not in resume_detail_schema
+    assert resume_detail_schema["type"] == "object"
     assert resume_detail_schema["properties"]["text"]["type"] == "string"
     assert resume_detail_schema["properties"]["runs"]["type"] == "array"
     assert (
@@ -269,7 +269,7 @@ def test_add_blocks_tool_schema_keeps_nested_array_items_for_gemini():
         ]
         == "boolean"
     )
-    assert "type" not in resume_line_schema
+    assert resume_line_schema["type"] == "object"
     assert resume_line_schema["properties"]["text"]["type"] == "string"
     assert resume_line_schema["properties"]["runs"]["type"] == "array"
     assert (
