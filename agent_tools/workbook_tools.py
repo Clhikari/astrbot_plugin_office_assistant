@@ -19,9 +19,9 @@ from ..domain.workbook.contracts import (
     ExportWorkbookRequest,
     ExportWorkbookResult,
     ToolResult,
-    WriteRowsOptions,
     WriteRowsRequest,
     build_workbook_summary,
+    parse_write_rows_options,
 )
 from ..domain.workbook.session_store import WorkbookSessionStore
 
@@ -182,6 +182,7 @@ class WriteRowsTool(WorkbookToolBase):
                             "description": "Enable autofilter on the sheet header row.",
                         },
                     },
+                    "additionalProperties": False,
                 },
             },
             "required": ["workbook_id", "sheet", "rows"],
@@ -202,7 +203,7 @@ class WriteRowsTool(WorkbookToolBase):
                 sheet=str(kwargs.get("sheet") or ""),
                 rows=list(kwargs.get("rows") or []),
                 start_row=1 if raw_start_row is None else raw_start_row,
-                options=WriteRowsOptions(**raw_options) if isinstance(raw_options, dict) else None,
+                options=parse_write_rows_options(raw_options),
             )
             workbook = self.store.write_rows(request)
         except ValidationError as exc:

@@ -478,6 +478,7 @@ def test_write_rows_schema_options_column_widths_uses_number_type(
     col_widths = options_schema["properties"]["column_widths"]
 
     assert col_widths["additionalProperties"] == {"type": "number"}
+    assert options_schema["additionalProperties"] is False
 
     def _assert_no_anyof_oneof(obj, path="options"):
         if isinstance(obj, dict):
@@ -491,3 +492,23 @@ def test_write_rows_schema_options_column_widths_uses_number_type(
                 _assert_no_anyof_oneof(item, f"{path}[{i}]")
 
     _assert_no_anyof_oneof(options_schema)
+
+
+@pytest.mark.asyncio
+async def test_write_rows_tool_rejects_non_dict_options(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    tool = WriteRowsTool(store=store)
+
+    result = json.loads(
+        await tool.call(
+            None,
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["value"]],
+            options="not a dict",
+        )
+    )
+
+    assert result["success"] is False
+    assert "options must be an object or null" in result["message"]

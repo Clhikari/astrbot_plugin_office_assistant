@@ -274,6 +274,14 @@ def build_workbook_summary(workbook_model: WorkbookModel) -> WorkbookSummary:
     return WorkbookSummary(**_build_workbook_summary_payload(workbook_model))
 
 
+def parse_write_rows_options(raw: object) -> WriteRowsOptions | None:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return WriteRowsOptions(**raw)
+    raise ValueError("options must be an object or null")
+
+
 __all__ = [
     "CreateWorkbookRequest",
     "DEFAULT_XLSX_FILENAME",
@@ -286,4 +294,5 @@ __all__ = [
     "WriteRowsOptions",
     "WriteRowsRequest",
     "build_workbook_summary",
+    "parse_write_rows_options",
 ]
