@@ -4,6 +4,12 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [v1.7.1.1-preview] - 2026-05-14
+
+### Fixed
+
+- 修复 `add_blocks` 的 `_RICH_LIST_ITEM_PUBLIC_SCHEMA` 缺少 `type: object` 声明，导致通过 OpenAI 兼容端点转发 Gemini 时严格 schema 校验拒绝所有请求的问题。
+
 ## [v1.7.1-preview] - 2026-05-13
 
 ### Added
