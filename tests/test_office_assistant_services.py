@@ -3624,7 +3624,8 @@ async def test_request_hook_service_injects_excel_script_notice_for_complex_exce
     assert "Dashboard 必须写入源数据" not in context.notices[1]
     assert "等价 `PivotSummary`" not in context.notices[1]
     assert "需要引用、保留或修改源 Sheet" in context.notices[0]
-    assert "清洗后的明细与 Raw 内容完全相同" in context.notices[1]
+    assert "清洗后导出或修改已有 Excel" in context.notices[1]
+    assert "save_output_workbook" in context.notices[1]
 
 
 @pytest.mark.asyncio
