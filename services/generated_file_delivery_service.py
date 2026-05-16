@@ -23,6 +23,7 @@ class GeneratedFileDeliveryService:
         r"/\s*((?:(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?\$?[A-Z]{1,3}\$?\d+)"
     )
     _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
+    _SHEET_NAME_REF_RE = re.compile(r"'(?:[^']|'')+'!")
     _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
     _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
@@ -179,7 +180,10 @@ class GeneratedFileDeliveryService:
     @classmethod
     def _find_single_quoted_formula_literal(cls, formula: str) -> str | None:
         formula_without_text = cls._DOUBLE_QUOTED_TEXT_RE.sub('""', formula)
-        match = cls._SINGLE_QUOTED_LITERAL_RE.search(formula_without_text)
+        formula_without_sheet_refs = cls._SHEET_NAME_REF_RE.sub(
+            "_REF!", formula_without_text
+        )
+        match = cls._SINGLE_QUOTED_LITERAL_RE.search(formula_without_sheet_refs)
         if match is None:
             return None
         return match.group(0)
