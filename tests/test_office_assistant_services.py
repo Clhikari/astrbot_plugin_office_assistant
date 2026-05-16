@@ -3614,6 +3614,7 @@ async def test_request_hook_service_injects_excel_script_notice_for_complex_exce
     assert context.section_names == [
         SECTION_STATIC_EXCEL_ROUTING,
         SECTION_STATIC_EXCEL_SCRIPT,
+        SECTION_STATIC_EXCEL_DOMAIN,
     ]
     assert "execute_excel_script" in context.notices[0]
     assert "execute_excel_script" in context.notices[1]
