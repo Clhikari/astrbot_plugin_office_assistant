@@ -178,6 +178,8 @@ class WorkbookSessionStore:
             worksheet.options.freeze_panes = options.freeze_panes
         if options.column_widths:
             worksheet.options.column_widths.update(options.column_widths)
+        if options.number_formats:
+            worksheet.options.number_formats.update(options.number_formats)
         if options.autofilter is not None:
             worksheet.options.autofilter = options.autofilter
 

@@ -37,6 +37,7 @@ class WorksheetOptions(BaseModel):
 
     freeze_panes: str = ""
     column_widths: dict[str, float] = Field(default_factory=dict)
+    number_formats: dict[str, str] = Field(default_factory=dict)
     autofilter: bool = False
 
 

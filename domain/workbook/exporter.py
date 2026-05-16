@@ -4,6 +4,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import column_index_from_string
 
 from .models import WorkbookModel
 
@@ -50,6 +51,12 @@ def _apply_worksheet_options(worksheet, worksheet_model) -> None:
 
     for column_letter, width in options.column_widths.items():
         worksheet.column_dimensions[column_letter].width = width
+
+    for column_letter, fmt in options.number_formats.items():
+        col_idx = column_index_from_string(column_letter)
+        for row_index in range(2, len(worksheet_model.rows) + 1):
+            cell = worksheet.cell(row=row_index, column=col_idx)
+            cell.number_format = fmt
 
     if options.autofilter and worksheet_model.rows:
         worksheet.auto_filter.ref = worksheet.dimensions
