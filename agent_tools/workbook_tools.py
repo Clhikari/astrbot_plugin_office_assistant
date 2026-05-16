@@ -177,6 +177,11 @@ class WriteRowsTool(WorkbookToolBase):
                             "description": "Column letter to width mapping, e.g. {'A': 20, 'B': 35}.",
                             "additionalProperties": {"type": "number"},
                         },
+                        "number_formats": {
+                            "type": "object",
+                            "description": "Column letter to Excel number format, e.g. {'B': '#,##0.00', 'C': '0.00%', 'D': 'yyyy-mm-dd'}.",
+                            "additionalProperties": {"type": "string"},
+                        },
                         "autofilter": {
                             "type": "boolean",
                             "description": "Enable autofilter on the sheet header row.",

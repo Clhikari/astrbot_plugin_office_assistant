@@ -978,3 +978,34 @@ def test_full_chain_with_options_produces_correct_xlsx(workspace_root: Path):
     assert sheet.auto_filter.ref == "A1:B3"
     assert sheet["A1"].value == "Name"
     assert sheet["B3"].value == 87
+
+
+def test_write_rows_merges_options_number_formats(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[
+                ["Product", "Price", "Rate", "Date"],
+                ["Widget", 19.99, 0.15, "2026-01-15"],
+                ["Gadget", 1250, 0.08, "2026-02-20"],
+            ],
+            options=WriteRowsOptions(
+                number_formats={"B": "¥#,##0.00", "C": "0.00%", "D": "yyyy-mm-dd"},
+            ),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    sheet = loaded["Data"]
+    assert sheet["B2"].number_format == "¥#,##0.00"
+    assert sheet["B3"].number_format == "¥#,##0.00"
+    assert sheet["C2"].number_format == "0.00%"
+    assert sheet["D2"].number_format == "yyyy-mm-dd"
+    assert sheet["A2"].number_format == "General"
+    assert sheet["B1"].number_format == "General"

@@ -18,10 +18,11 @@ def build_workbook_tools_core_notice() -> str:
         "\n"
         "[格式选项]\n"
         "- `write_rows` 支持可选 `options` 参数控制 Sheet 显示格式：\n"
-        "  - `freeze_panes`: 冻结窗格位置，如 \"A2\" 冻结首行，\"B3\" 冻结前两行和 A 列\n"
-        "  - `column_widths`: 列宽字典，如 {\"A\": 15, \"B\": 30}；不设置的列使用 Excel 默认宽度\n"
+        '  - `freeze_panes`: 冻结窗格位置，如 "A2" 冻结首行，"B3" 冻结前两行和 A 列\n'
+        '  - `column_widths`: 列宽字典，如 {"A": 15, "B": 30}；不设置的列使用 Excel 默认宽度\n'
+        '  - `number_formats`: 数字格式字典，如 {"B": "#,##0.00", "C": "0.00%", "D": "yyyy-mm-dd", "E": "¥#,##0.00"}；格式应用于数据行（跳过表头）\n'
         "  - `autofilter`: true 启用首行筛选\n"
-        "- 建议：数据表默认带 freeze_panes=\"A2\" + autofilter=true\n"
+        '- 建议：数据表默认带 freeze_panes="A2" + autofilter=true\n'
         "- options 可在任意一次 write_rows 中设置，多次设置同一 Sheet 会合并\n"
         "\n"
         "[边界说明]\n"

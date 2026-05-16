@@ -82,6 +82,7 @@ class WriteRowsOptions(BaseModel):
 
     freeze_panes: str | None = None
     column_widths: dict[str, float] | None = None
+    number_formats: dict[str, str] | None = None
     autofilter: bool | None = None
 
     @field_validator("freeze_panes")
@@ -103,9 +104,7 @@ class WriteRowsOptions(BaseModel):
                 f"freeze_panes column must not exceed XFD ({MAX_EXCEL_COLUMN} columns)"
             )
         if int(row_str) > MAX_EXCEL_ROW:
-            raise ValueError(
-                f"freeze_panes row must not exceed {MAX_EXCEL_ROW}"
-            )
+            raise ValueError(f"freeze_panes row must not exceed {MAX_EXCEL_ROW}")
         return candidate
 
     @field_validator("column_widths")
@@ -131,6 +130,31 @@ class WriteRowsOptions(BaseModel):
                     f"column_widths value must be between 1.0 and 255.0, got {width} for column '{col}'"
                 )
             normalized[col] = width
+        return normalized
+
+    @field_validator("number_formats")
+    @classmethod
+    def validate_number_formats(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        normalized: dict[str, str] = {}
+        for key, fmt in value.items():
+            col = str(key).strip().upper()
+            if not _COLUMN_LETTER_PATTERN.match(col):
+                raise ValueError(
+                    f"number_formats key must be a column letter (A-XFD), got '{key}'"
+                )
+            if _column_letter_to_index(col) > MAX_EXCEL_COLUMN:
+                raise ValueError(
+                    f"number_formats key '{key}' exceeds maximum column XFD"
+                )
+            if not isinstance(fmt, str) or not fmt.strip():
+                raise ValueError(
+                    f"number_formats value must be a non-empty format string, got '{fmt}' for column '{col}'"
+                )
+            normalized[col] = fmt.strip()
         return normalized
 
 
