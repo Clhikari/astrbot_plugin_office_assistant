@@ -56,6 +56,7 @@ def build_excel_script_notice() -> str:
         "[常见错误]\n"
         "- 禁止 `wb.save('xxx.xlsx')` -> 必须 `save_output_workbook(wb)`\n"
         "- 禁止硬写输入文件名 -> 必须用 `input_files[0]`\n"
+        "- 禁止用静态 PatternFill 逐单元格着色来实现条件高亮 -> 必须用 `CellIsRule` 或 `FormulaRule` 条件格式\n"
         "- Excel 公式文本常量必须用双引号：`\"Keyboard\"` 不是 `'Keyboard'`\n"
         "- 写公式时必须处理空值和 0 值：用 `IF`/`IFERROR` 包裹\n"
         "\n"
@@ -96,6 +97,16 @@ def build_excel_domain_hints(scenario: str) -> str:
     elif scenario == "pivot":
         lines.append(
             "- 未生成真实数据透视表而创建等价 `PivotSummary` 时，优先用 `SUMIFS` 等公式引用源 Sheet，避免用 Python 计算后写死静态值导致后续数据变化无法联动\n"
+        )
+    elif scenario == "conditional_format":
+        lines.extend(
+            [
+                "- 必须使用 openpyxl 的条件格式 API，禁止用静态 PatternFill 逐单元格着色\n",
+                "- 静态填充在数据修改后不会自动更新，条件格式会随数据变化动态生效\n",
+                "- 使用 `from openpyxl.formatting.rule import CellIsRule` 或 `FormulaRule`\n",
+                "- 示例：`ws.conditional_formatting.add('B2:B11', CellIsRule(operator='lessThan', formula=['60'], fill=PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')))`\n",
+                "- 条件格式的范围必须精确到数据区域（如 B2:B11），不要用整列引用如 B:B\n",
+            ]
         )
     else:
         return ""

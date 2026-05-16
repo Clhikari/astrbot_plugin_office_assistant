@@ -384,6 +384,10 @@ class RequestHookService:
             ("dashboard", r"(Dashboard|仪表盘|看板)"),
             ("chart", r"(饼图|pie chart|圆环图|doughnut|图表)"),
             ("pivot", r"(PivotSummary|数据透视|透视表|SUMIFS|汇总透视)"),
+            (
+                "conditional_format",
+                r"(条件格式|标红|标绿|高亮|conditional\s*format|不及格.*标|低于.*标|超过.*标)",
+            ),
         )
         for scenario, pattern in checks:
             if re.search(pattern, normalized, flags=re.IGNORECASE):
