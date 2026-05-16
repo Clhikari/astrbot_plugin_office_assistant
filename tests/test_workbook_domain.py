@@ -913,6 +913,38 @@ def test_write_rows_options_freeze_panes_normalizes_to_uppercase():
     assert opts.freeze_panes == "B3"
 
 
+def test_write_rows_options_freeze_panes_whitespace_clears_freeze():
+    opts = WriteRowsOptions(freeze_panes="   ")
+    assert opts.freeze_panes == ""
+
+
+def test_write_rows_options_freeze_panes_empty_string_clears_existing(
+    workspace_root: Path,
+):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="opts.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["h1"], ["v1"]],
+            options=WriteRowsOptions(freeze_panes="A2"),
+        )
+    )
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["v2"]],
+            start_row=3,
+            options=WriteRowsOptions(freeze_panes=""),
+        )
+    )
+
+    worksheet = workbook.get_sheet("Data")
+    assert worksheet.options.freeze_panes == ""
+
+
 def test_write_rows_options_column_widths_normalizes_keys_to_uppercase():
     opts = WriteRowsOptions(column_widths={"a": 15.0, "bc": 20.0})
     assert opts.column_widths == {"A": 15.0, "BC": 20.0}
