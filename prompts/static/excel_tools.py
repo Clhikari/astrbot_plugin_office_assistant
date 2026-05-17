@@ -12,9 +12,9 @@ def build_excel_routing_notice() -> str:
         "- 工具不可用时不要假装完成；改用当前可用路径，或说明当前限制\n"
         "\n"
         "[硬约束] 禁止滥用 execute_excel_script\n"
-        "- 如果最终输出不包含公式、图表、条件格式或数据验证，禁止使用 `execute_excel_script`\n"
+        "- 如果最终输出不包含公式、图表、条件格式或数据验证，且不涉及编辑已有工作簿，禁止使用 `execute_excel_script`\n"
         "- 即使需要随机数据、大量行或复杂计算逻辑，只要输出是纯值表格，必须用 `write_rows`\n"
-        "- `execute_excel_script` 仅用于输出文件本身需要 Excel 高级特性的场景\n"
+        "- `execute_excel_script` 仅用于输出文件本身需要 Excel 高级特性的场景，或需要编辑已有工作簿（保留原有布局/样式）的场景\n"
     )
 
 
@@ -103,8 +103,8 @@ def build_excel_domain_hints(scenario: str) -> str:
             [
                 "- 必须使用 openpyxl 的条件格式 API，禁止用静态 PatternFill 逐单元格着色\n",
                 "- 静态填充在数据修改后不会自动更新，条件格式会随数据变化动态生效\n",
-                "- 使用 `from openpyxl.formatting.rule import CellIsRule` 或 `FormulaRule`\n",
-                "- 示例：`ws.conditional_formatting.add('B2:B11', CellIsRule(operator='lessThan', formula=['60'], fill=PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')))`\n",
+                "- 使用 `from openpyxl.formatting.rule import CellIsRule, FormulaRule` 和 `from openpyxl.styles import PatternFill`\n",
+                "- 示例：`sheet.conditional_formatting.add('B2:B11', CellIsRule(operator='lessThan', formula=['60'], fill=PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')))`\n",
                 "- 条件格式的范围必须精确到数据区域（如 B2:B11），不要用整列引用如 B:B\n",
             ]
         )

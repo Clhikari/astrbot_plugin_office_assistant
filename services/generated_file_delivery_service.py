@@ -23,7 +23,7 @@ class GeneratedFileDeliveryService:
         r"/\s*((?:(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?\$?[A-Z]{1,3}\$?\d+)"
     )
     _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
-    _SHEET_NAME_REF_RE = re.compile(r"'(?:[^']|'')+'!")
+    _SHEET_NAME_REF_RE = re.compile(r"'(?:[^']|'')+'\s*!")
     _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
     _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
