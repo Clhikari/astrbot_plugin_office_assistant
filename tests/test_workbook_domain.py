@@ -1057,3 +1057,79 @@ def test_write_rows_number_formats_merge_across_calls(workspace_root: Path):
     assert sheet["C3"].number_format == "0.00%"
     assert sheet["C4"].number_format == "0.00%"
     assert sheet["A2"].number_format == "General"
+
+
+def test_write_rows_invalid_number_formats_non_letter_key(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+    with pytest.raises(ValidationError):
+        store.write_rows(
+            WriteRowsRequest(
+                workbook_id=workbook.workbook_id,
+                sheet="Data",
+                rows=[["Col1", "Col2"], ["A", 1]],
+                options=WriteRowsOptions(number_formats={"1": "#,##0.00"}),
+            )
+        )
+
+
+def test_write_rows_invalid_number_formats_column_out_of_range(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+    with pytest.raises(ValidationError):
+        store.write_rows(
+            WriteRowsRequest(
+                workbook_id=workbook.workbook_id,
+                sheet="Data",
+                rows=[["Col1", "Col2"], ["A", 1]],
+                options=WriteRowsOptions(number_formats={"XFE": "#,##0.00"}),
+            )
+        )
+
+
+def test_write_rows_invalid_number_formats_empty_or_whitespace(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+    for fmt in ("", "   "):
+        with pytest.raises(ValidationError):
+            store.write_rows(
+                WriteRowsRequest(
+                    workbook_id=workbook.workbook_id,
+                    sheet="Data",
+                    rows=[["Col1", "Col2"], ["A", 1]],
+                    options=WriteRowsOptions(number_formats={"B": fmt}),
+                )
+            )
+
+
+def test_write_rows_invalid_number_formats_non_string_value(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+    with pytest.raises(ValidationError):
+        store.write_rows(
+            WriteRowsRequest(
+                workbook_id=workbook.workbook_id,
+                sheet="Data",
+                rows=[["Col1", "Col2"], ["A", 1]],
+                options=WriteRowsOptions(number_formats={"B": 123}),
+            )
+        )
+
+
+def test_write_rows_number_formats_lowercase_key_normalized(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[["Col1", "Col2"], ["A", 1.23]],
+            options=WriteRowsOptions(number_formats={"b": "#,##0.00"}),
+        )
+    )
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    sheet = loaded["Data"]
+    assert sheet["B2"].number_format == "#,##0.00"
