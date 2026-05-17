@@ -1009,3 +1009,51 @@ def test_write_rows_merges_options_number_formats(workspace_root: Path):
     assert sheet["D2"].number_format == "yyyy-mm-dd"
     assert sheet["A2"].number_format == "General"
     assert sheet["B1"].number_format == "General"
+
+
+def test_write_rows_number_formats_merge_across_calls(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="merge_fmt.xlsx"))
+
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            rows=[
+                ["Product", "Price", "Rate", "Date"],
+                ["Widget", 19.99, 0.15, "2026-01-15"],
+                ["Gadget", 1250, 0.08, "2026-02-20"],
+            ],
+            options=WriteRowsOptions(
+                number_formats={"B": "#,##0.00"},
+            ),
+        )
+    )
+
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            start_row=4,
+            rows=[
+                ["Doohickey", 42.5, 0.25, "2026-03-10"],
+            ],
+            options=WriteRowsOptions(
+                number_formats={"C": "0.00%"},
+            ),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    sheet = loaded["Data"]
+
+    assert sheet["B2"].number_format == "#,##0.00"
+    assert sheet["B3"].number_format == "#,##0.00"
+    assert sheet["B4"].number_format == "#,##0.00"
+    assert sheet["C2"].number_format == "0.00%"
+    assert sheet["C3"].number_format == "0.00%"
+    assert sheet["C4"].number_format == "0.00%"
+    assert sheet["A2"].number_format == "General"
