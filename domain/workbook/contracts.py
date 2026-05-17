@@ -150,11 +150,12 @@ class WriteRowsOptions(BaseModel):
                 raise ValueError(
                     f"number_formats key '{key}' exceeds maximum column XFD"
                 )
-            if not isinstance(fmt, str) or not fmt.strip():
+            clean_fmt = fmt.strip() if isinstance(fmt, str) else ""
+            if not clean_fmt:
                 raise ValueError(
                     f"number_formats value must be a non-empty format string, got '{fmt}' for column '{col}'"
                 )
-            normalized[col] = fmt
+            normalized[col] = clean_fmt
         return normalized
 
 
