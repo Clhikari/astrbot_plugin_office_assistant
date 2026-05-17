@@ -47,6 +47,7 @@ class WorksheetModel(BaseModel):
     name: str
     rows: list[list[WorkbookCellValue]] = Field(default_factory=list)
     options: WorksheetOptions = Field(default_factory=WorksheetOptions)
+    header_row: int = 1
 
 
 class WorkbookMetadata(BaseModel):

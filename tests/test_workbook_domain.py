@@ -1168,3 +1168,37 @@ def test_write_rows_number_formats_multi_letter_column_keys(workspace_root: Path
     assert sheet["AA3"].number_format == "#,##0.00"
     assert sheet["AB2"].number_format == "0.00%"
     assert sheet["AB3"].number_format == "0.00%"
+
+
+def test_write_rows_number_formats_skips_header_with_start_row(workspace_root: Path):
+    store = WorkbookSessionStore(workspace_dir=workspace_root)
+    workbook = store.create_workbook(CreateWorkbookRequest(filename="fmt.xlsx"))
+
+    store.write_rows(
+        WriteRowsRequest(
+            workbook_id=workbook.workbook_id,
+            sheet="Data",
+            start_row=3,
+            rows=[
+                ["Name", "Amount", "Rate"],
+                ["Alice", 100.5, 0.12],
+                ["Bob", 200.75, 0.08],
+            ],
+            options=WriteRowsOptions(
+                number_formats={"B": "#,##0.00", "C": "0.00%"},
+            ),
+        )
+    )
+
+    _, output_path = store.export_workbook(
+        ExportWorkbookRequest(workbook_id=workbook.workbook_id)
+    )
+    loaded = load_workbook(output_path)
+    sheet = loaded["Data"]
+
+    assert sheet["B3"].number_format == "General"
+    assert sheet["C3"].number_format == "General"
+    assert sheet["B4"].number_format == "#,##0.00"
+    assert sheet["B5"].number_format == "#,##0.00"
+    assert sheet["C4"].number_format == "0.00%"
+    assert sheet["C5"].number_format == "0.00%"
