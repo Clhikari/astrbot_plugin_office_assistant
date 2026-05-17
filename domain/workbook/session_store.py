@@ -156,6 +156,9 @@ class WorkbookSessionStore:
                 worksheet = WorksheetModel(name=request.sheet)
                 workbook.worksheets.append(worksheet)
 
+            if not worksheet.rows:
+                worksheet.header_row = request.start_row
+
             start_index = request.start_row - 1
             required_size = start_index + len(request.rows)
             while len(worksheet.rows) < required_size:

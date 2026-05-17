@@ -21,7 +21,9 @@ def export_workbook_to_xlsx(workbook: WorkbookModel, output_path: Path) -> Path:
         workbook_writer.remove(default_sheet)
         for worksheet_model in workbook.worksheets:
             worksheet = workbook_writer.create_sheet(title=worksheet_model.name)
-            _write_worksheet_rows(worksheet, worksheet_model.rows)
+            _write_worksheet_rows(
+                worksheet, worksheet_model.rows, worksheet_model.header_row
+            )
             _apply_worksheet_options(worksheet, worksheet_model)
     else:
         default_sheet.title = "Sheet1"
@@ -31,12 +33,14 @@ def export_workbook_to_xlsx(workbook: WorkbookModel, output_path: Path) -> Path:
     return output_path
 
 
-def _write_worksheet_rows(worksheet, rows: list[list[object]]) -> None:
+def _write_worksheet_rows(
+    worksheet, rows: list[list[object]], header_row: int = 1
+) -> None:
     for row_index, row in enumerate(rows, start=1):
         for column_index, value in enumerate(row, start=1):
             cell = worksheet.cell(row=row_index, column=column_index, value=value)
             cell.alignment = DEFAULT_ALIGNMENT
-            if row_index == 1:
+            if row_index == header_row:
                 cell.font = HEADER_FONT
                 cell.fill = HEADER_FILL
 
@@ -56,8 +60,9 @@ def _apply_worksheet_options(worksheet, worksheet_model) -> None:
         formats = {
             column_index_from_string(k): v for k, v in options.number_formats.items()
         }
+        header = worksheet_model.header_row
         for row_index, row_data in enumerate(worksheet_model.rows, start=1):
-            if row_index > 1:
+            if row_index != header:
                 for col_idx, fmt in formats.items():
                     if col_idx <= len(row_data):
                         worksheet.cell(
