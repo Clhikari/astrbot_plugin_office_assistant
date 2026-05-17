@@ -154,7 +154,7 @@ class WriteRowsOptions(BaseModel):
                 raise ValueError(
                     f"number_formats value must be a non-empty format string, got '{fmt}' for column '{col}'"
                 )
-            normalized[col] = fmt.strip()
+            normalized[col] = fmt
         return normalized
 
 
