@@ -156,9 +156,6 @@ class WorkbookSessionStore:
                 worksheet = WorksheetModel(name=request.sheet)
                 workbook.worksheets.append(worksheet)
 
-            if not worksheet.rows:
-                worksheet.header_row = request.start_row
-
             start_index = request.start_row - 1
             required_size = start_index + len(request.rows)
             while len(worksheet.rows) < required_size:
@@ -168,6 +165,8 @@ class WorkbookSessionStore:
                 worksheet.rows[start_index + offset] = list(row)
 
             if request.options is not None:
+                if worksheet.header_row == 0:
+                    worksheet.header_row = request.start_row
                 self._merge_options_locked(worksheet, request.options)
 
             workbook.remember_written_sheet(worksheet.name)
