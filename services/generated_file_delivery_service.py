@@ -23,7 +23,9 @@ class GeneratedFileDeliveryService:
         r"/\s*((?:(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?\$?[A-Z]{1,3}\$?\d+)"
     )
     _DOUBLE_QUOTED_TEXT_RE = re.compile(r'"(?:[^"]|"")*"')
+    # Sheet 名引用：'Sheet名'! 或 'Sheet名' !（含转义单引号和可选空格）
     _SHEET_NAME_REF_RE = re.compile(r"'(?:[^']|'')+'\s*!")
+    # 非 Sheet 引用的单引号文本字面量（排除后跟 ! 的 Sheet 名模式）
     _SINGLE_QUOTED_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])'([^']+)'(?!\s*!)")
     _MAX_VALIDATION_ERRORS = 8
     _CLEAN_TEXT_SHEET_MARKERS = ("clean", "import", "清洗", "导入")
