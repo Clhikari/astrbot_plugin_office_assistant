@@ -3628,6 +3628,13 @@ async def test_request_hook_service_injects_excel_script_notice_for_complex_exce
     assert "清洗后导出或修改已有 Excel" in context.notices[1]
     assert "save_output_workbook" in context.notices[1]
 
+    # Domain hints section: conditional_format scenario triggered
+    assert "条件格式 API" in context.notices[2]
+    assert "CellIsRule" in context.notices[2]
+    # Pivot/dashboard hints should NOT be present
+    assert "Dashboard 必须写入源数据" not in context.notices[2]
+    assert "等价 `PivotSummary`" not in context.notices[2]
+
 
 @pytest.mark.asyncio
 async def test_request_hook_service_injects_excel_domain_notice_for_schedule_script():
