@@ -4,6 +4,27 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [v1.8.0] - 2026-05-18
+
+### Added
+
+- `write_rows` 新增 `number_formats` 选项，支持按列设置 Excel 数字格式（货币、百分比、日期等）。
+- 条件格式场景检测与 domain hint 注入，引导模型使用 `CellIsRule`/`FormulaRule` 而非静态 PatternFill。
+
+### Fixed
+
+- 修复 exporter 对超出数据范围的列创建空单元格导致文件膨胀的问题。
+- 修复 `number_formats` 验证器对非字符串值给出模糊错误提示的问题。
+- 修复 `number_formats` 在 `start_row > 1` 时错误格式化表头行的问题。
+- 修复 Excel 公式质量检查将 Sheet 名引用中的单引号误判为文本字面量的问题。
+- 放宽 `execute_excel_script` 路由硬约束，允许编辑已有工作簿的纯值场景。
+- 修复 Sheet 名引用正则未匹配引号与感叹号之间可选空格的问题。
+
+### Changed
+
+- 重构 Excel 脚本提示词：精简 helper 列表，突出 `save_output_workbook` 为唯一保存方式。
+- 将 `message_buffer`、`pdf_converter`、`preview_generator`、`office_generator` 移入 `services/`，删除顶层 `export_pipeline.py` 兼容转发。
+
 ## [v1.7.1.1-preview] - 2026-05-14
 
 ### Fixed
