@@ -101,7 +101,7 @@ def build_excel_domain_hints(scenario: str) -> str:
     elif scenario == "conditional_format":
         lines.extend(
             [
-                "- 必须使用 openpyxl 的条件格式 API，禁止用静态 PatternFill 逐单元格着色\n",
+                "- 必须使用 openpyxl 的条件格式 API，禁止用静态 PatternFill 逐单元格着色（PatternFill 只允许作为条件格式规则的 fill 参数，不能直接赋给 cell.fill）\n",
                 "- 静态填充在数据修改后不会自动更新，条件格式会随数据变化动态生效\n",
                 "- 使用 `from openpyxl.formatting.rule import CellIsRule, FormulaRule` 和 `from openpyxl.styles import PatternFill`\n",
                 "- 示例：`sheet.conditional_formatting.add('B2:B11', CellIsRule(operator='lessThan', formula=['60'], fill=PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')))`\n",
