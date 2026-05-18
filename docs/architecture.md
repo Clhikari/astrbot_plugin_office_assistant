@@ -22,7 +22,7 @@ flowchart TB
   RB --> FPS
 
   subgraph L3["Request Ingress And Prompt Pipeline"]
-    MB["message_buffer.py"]
+    MB["services/message_buffer.py"]
     IMS["incoming_message_service.py"]
     USS["upload_session_service.py"]
     APS["access_policy_service.py"]
@@ -134,9 +134,9 @@ flowchart TB
 
   subgraph RV["Rendering Conversion And Preview"]
     WRJ["word_renderer_js<br/>Primary backend for complex Word rendering"]
-    OG["office_generator.py"]
-    PDFC["pdf_converter.py"]
-    PV["preview_generator.py"]
+    OG["services/office_generator.py"]
+    PDFC["services/pdf_converter.py"]
+    PV["services/preview_generator.py"]
   end
 
   EP --> WRJ
