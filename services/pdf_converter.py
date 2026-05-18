@@ -21,9 +21,9 @@ from pathlib import Path
 
 from astrbot.api import logger
 
-from ._executor_mixin import ExecutorOwnerMixin
-from .compat import _IS_WINDOWS, _WIN32COM_AVAILABLE
-from .utils import com_application
+from .._executor_mixin import ExecutorOwnerMixin
+from ..compat import _IS_WINDOWS, _WIN32COM_AVAILABLE
+from ..utils import com_application
 
 # 可选依赖的导入状态
 _PDF2DOCX_AVAILABLE = False

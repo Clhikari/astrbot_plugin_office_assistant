@@ -29,9 +29,9 @@ from astrbot_plugin_office_assistant.domain.document.render_backends import (
 from astrbot_plugin_office_assistant.domain.document.session_store import (
     get_document_style_defaults,
 )
-from astrbot_plugin_office_assistant.office_generator import OfficeGenerator
+from astrbot_plugin_office_assistant.services.office_generator import OfficeGenerator
 from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
-from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
+from astrbot_plugin_office_assistant.services.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
     AccessPolicyService,
     CommandService,

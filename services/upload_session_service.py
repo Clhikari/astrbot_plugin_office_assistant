@@ -10,7 +10,7 @@ from astrbot.core.utils.active_event_registry import active_event_registry
 from astrbot.core.platform.message_type import MessageType
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
-from ..message_buffer import BufferedMessage
+from .message_buffer import BufferedMessage
 from .upload_prompt_service import UploadInfo, UploadPromptService
 
 EVENT_UPLOAD_CACHE_ATTR = "_office_assistant_uploaded_files"

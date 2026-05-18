@@ -17,7 +17,7 @@ from astrbot_plugin_office_assistant.internal_hooks import (
     ToolExposureContext,
 )
 from astrbot_plugin_office_assistant.main import FileOperationPlugin
-from astrbot_plugin_office_assistant.message_buffer import BufferedMessage
+from astrbot_plugin_office_assistant.services.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services.llm_request_policy import (
     LLMRequestPolicy,
 )

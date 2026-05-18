@@ -15,7 +15,7 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     TableCell,
 )
 from astrbot_plugin_office_assistant.constants import OfficeType
-from astrbot_plugin_office_assistant.office_generator import (
+from astrbot_plugin_office_assistant.services.office_generator import (
     OfficeGenerator,
 )
 
@@ -189,7 +189,7 @@ async def test_generate_uses_explicit_filename_fallback(
     generator._generate_word = AsyncMock()
     event = MagicMock()
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.NodeDocumentRenderBackend.is_available",
+        "astrbot_plugin_office_assistant.services.office_generator.NodeDocumentRenderBackend.is_available",
         lambda _self: True,
     )
 
@@ -218,7 +218,7 @@ async def test_generate_word_ignores_python_docx_support_gate(
     generator._generate_word = AsyncMock()
     event = MagicMock()
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.NodeDocumentRenderBackend.is_available",
+        "astrbot_plugin_office_assistant.services.office_generator.NodeDocumentRenderBackend.is_available",
         lambda _self: True,
     )
 
@@ -244,7 +244,7 @@ async def test_generate_word_reports_missing_node_renderer(
     event = MagicMock()
     event.send = AsyncMock()
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.NodeDocumentRenderBackend.is_available",
+        "astrbot_plugin_office_assistant.services.office_generator.NodeDocumentRenderBackend.is_available",
         lambda _self: False,
     )
 
@@ -285,11 +285,11 @@ def test_generate_word_sync_uses_document_render_backends(
         return RenderResult(backend_name="node", output_path=output_path)
 
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.build_document_render_backends",
+        "astrbot_plugin_office_assistant.services.office_generator.build_document_render_backends",
         _fake_build_backends,
     )
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.render_document_with_backends",
+        "astrbot_plugin_office_assistant.services.office_generator.render_document_with_backends",
         _fake_render,
     )
 
@@ -316,11 +316,11 @@ def test_generate_word_sync_propagates_backend_failure(
     file_path = workspace_root / "report.docx"
 
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.build_document_render_backends",
+        "astrbot_plugin_office_assistant.services.office_generator.build_document_render_backends",
         lambda *_args, **_kwargs: [MagicMock(name="node-backend")],
     )
     monkeypatch.setattr(
-        "astrbot_plugin_office_assistant.office_generator.render_document_with_backends",
+        "astrbot_plugin_office_assistant.services.office_generator.render_document_with_backends",
         MagicMock(side_effect=RuntimeError("node renderer unavailable")),
     )
 

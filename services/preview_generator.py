@@ -8,7 +8,7 @@ from pathlib import Path
 
 from astrbot.api import logger
 
-from .constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX
+from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX
 
 
 class PreviewGenerator:

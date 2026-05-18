@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 from .settings import PluginSettings
 
 if TYPE_CHECKING:
-    from ..message_buffer import MessageBuffer
-    from ..office_generator import OfficeGenerator
-    from ..pdf_converter import PDFConverter
-    from ..preview_generator import PreviewGenerator
+    from ..services.message_buffer import MessageBuffer
+    from ..services.office_generator import OfficeGenerator
+    from ..services.pdf_converter import PDFConverter
+    from ..services.preview_generator import PreviewGenerator
     from ..services.access_policy_service import AccessPolicyService
     from ..services.command_service import CommandService
     from ..services.delivery_service import DeliveryService

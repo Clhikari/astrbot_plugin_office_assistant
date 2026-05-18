@@ -16,7 +16,7 @@ from astrbot.core.star.star import star_map
 
 from .app.runtime import PluginRuntimeBundle
 from .constants import EXCEL_SUFFIXES
-from .message_buffer import BufferedMessage
+from .services.message_buffer import BufferedMessage
 from .services import build_plugin_runtime
 
 

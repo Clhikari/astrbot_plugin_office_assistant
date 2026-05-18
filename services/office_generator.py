@@ -12,33 +12,33 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.message.message_event_result import MessageChain
 
-from .constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
-from ._executor_mixin import ExecutorOwnerMixin
-from .document_core.models.blocks import (
+from ..constants import OFFICE_EXTENSIONS, OFFICE_LIBS, OfficeType
+from .._executor_mixin import ExecutorOwnerMixin
+from ..document_core.models.blocks import (
     DocumentBlock,
     ParagraphBlock,
     TableBlock,
 )
-from .document_core.models.document import (
+from ..document_core.models.document import (
     DocumentMetadata,
     DocumentModel,
     DocumentStatus,
 )
-from .domain.document.contracts import (
+from ..domain.document.contracts import (
     AddBlocksRequest,
     BlockInput,
     CreateDocumentRequest,
     normalize_raw_block_payloads,
 )
-from .domain.document.render_backends import (
+from ..domain.document.render_backends import (
     DocumentRenderBackendConfig,
     NodeDocumentRenderBackend,
     build_document_render_backends,
     render_document_with_backends,
 )
-from .domain.document.session_store import DocumentSessionStore
-from .domain.document.session_store import attach_document_style_defaults
-from .domain.document.session_store import merge_document_style_defaults
+from ..domain.document.session_store import DocumentSessionStore
+from ..domain.document.session_store import attach_document_style_defaults
+from ..domain.document.session_store import merge_document_style_defaults
 
 _BLOCK_INPUT_ADAPTER = TypeAdapter(BlockInput)
 

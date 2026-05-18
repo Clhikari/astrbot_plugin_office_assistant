@@ -26,10 +26,10 @@ from ..constants import (
     OFFICE_LIBS,
 )
 from ..domain.document.render_backends import DocumentRenderBackendConfig
-from ..message_buffer import MessageBuffer
-from ..office_generator import OfficeGenerator
-from ..pdf_converter import PDFConverter
-from ..preview_generator import PreviewGenerator
+from .message_buffer import MessageBuffer
+from .office_generator import OfficeGenerator
+from .pdf_converter import PDFConverter
+from .preview_generator import PreviewGenerator
 from .access_policy_service import AccessPolicyService
 from .command_service import CommandService
 from .delivery_service import DeliveryService
