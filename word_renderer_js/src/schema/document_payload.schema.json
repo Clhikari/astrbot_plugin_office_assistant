@@ -778,6 +778,9 @@
         ],
         "additionalProperties": true
       }
+    },
+    "workspace_dir": {
+      "type": "string"
     }
   }
 }

@@ -15,7 +15,9 @@ export async function renderPptStructuredDocument(
   pres.layout = "LAYOUT_16x9";
 
   const theme = resolveTheme(payload.metadata.theme_name as string | undefined);
-  const workspaceDir = path.dirname(path.resolve(outputPath));
+  const workspaceDir =
+    (payload as Record<string, unknown>).workspace_dir as string ||
+    path.dirname(path.resolve(outputPath));
 
   for (const block of payload.blocks) {
     renderSlideBlock(pres, block, payload.metadata, theme, workspaceDir);
