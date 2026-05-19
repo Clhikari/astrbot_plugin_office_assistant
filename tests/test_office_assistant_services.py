@@ -1157,7 +1157,7 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
             if getattr(tool, "name", "") == "export_document"
         )
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
-        assert export_tool.render_backend_config.ppt_preferred_backend == "python"
+        assert export_tool.render_backend_config.ppt_preferred_backend == "node"
         assert export_tool.render_backend_config.excel_preferred_backend == "python"
         fileinfo_output = runtime.command_service.fileinfo(_build_event())
         assert "允许所有用户使用: 关闭" in fileinfo_output
@@ -1202,7 +1202,7 @@ def test_build_plugin_runtime_ignores_legacy_word_render_settings():
             if getattr(tool, "name", "") == "export_document"
         )
         assert runtime.settings.js_renderer_entry == "D:/custom/js-renderer.js"
-        assert export_tool.render_backend_config.ppt_preferred_backend == "python"
+        assert export_tool.render_backend_config.ppt_preferred_backend == "node"
         assert export_tool.render_backend_config.excel_preferred_backend == "python"
         assert [backend.name for backend in export_tool.render_backends] == ["node"]
     finally:

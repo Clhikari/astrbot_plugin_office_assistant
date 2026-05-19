@@ -662,10 +662,125 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "title_slide"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "title"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "subtitle": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "content_slide"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "title",
+                "bullets"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "bullets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "table_slide"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "headers",
+                "rows"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "headers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "image_slide"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "image_path"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "image_path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "caption": {
+                  "type": "string"
+                }
+              }
+            }
           }
         ],
         "additionalProperties": true
       }
+    },
+    "workspace_dir": {
+      "type": "string"
     }
   }
 }

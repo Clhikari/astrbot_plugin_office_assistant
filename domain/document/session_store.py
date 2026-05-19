@@ -15,10 +15,12 @@ from ...document_core.models.blocks import (
     BusinessReviewCoverData,
     ColumnBlock,
     ColumnsBlock,
+    ContentSlideBlock,
     DocumentBlock,
     GroupBlock,
     HeadingBlock,
     HeroBannerBlock,
+    ImageSlideBlock,
     ListBlock,
     MetricCard,
     MetricCardsBlock,
@@ -31,7 +33,9 @@ from ...document_core.models.blocks import (
     SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
+    TableSlideBlock,
     TechnicalResumeData,
+    TitleSlideBlock,
     TocBlock,
 )
 from ...document_core.models.document import (
@@ -68,8 +72,12 @@ from .contracts import (
     SectionParagraphInput,
     SectionTableInput,
     TocInput,
+    TitleSlideInput,
+    ContentSlideInput,
+    TableSlideInput,
+    ImageSlideInput,
     _coerce_table_input_rows_to_runtime,
-    _normalize_docx_filename,
+    _normalize_output_filename,
 )
 from .hooks import (
     BlockNormalizationContext,
@@ -217,6 +225,7 @@ class DocumentSessionStore:
             document = DocumentModel(
                 document_id=document_id,
                 session_id=request.session_id,
+                format=request.format,
                 metadata=DocumentMetadata(
                     title=request.title,
                     preferred_filename=request.output_name,
@@ -250,8 +259,68 @@ class DocumentSessionStore:
                 raise ValueError(
                     "add_blocks is only allowed while the document status is draft"
                 )
+            self._validate_block_format_compatibility(document, request.blocks)
             self._append_blocks_locked(document, request.blocks)
             return document
+
+    _FORMAT_ALLOWED_BLOCK_TYPES: dict[str, frozenset[str]] = {
+        "word": frozenset(
+            {
+                "heading",
+                "paragraph",
+                "list",
+                "table",
+                "page_break",
+                "section_break",
+                "toc",
+                "group",
+                "columns",
+                "accent_box",
+                "metric_cards",
+                "summary_card",
+                "page_template",
+                "hero_banner",
+                "image",
+            }
+        ),
+        "ppt": frozenset(
+            {
+                "title_slide",
+                "content_slide",
+                "table_slide",
+                "image_slide",
+            }
+        ),
+    }
+
+    @classmethod
+    def _validate_block_format_compatibility(
+        cls, document: DocumentModel, blocks: list[BlockInput]
+    ) -> None:
+        allowed = cls._FORMAT_ALLOWED_BLOCK_TYPES.get(document.format)
+        if allowed is None:
+            raise ValueError(
+                f"no block type allowlist configured for document format '{document.format}'"
+            )
+        cls._check_blocks_recursive(blocks, allowed, document.format)
+
+    @classmethod
+    def _check_blocks_recursive(
+        cls,
+        blocks: list[BlockInput],
+        allowed: frozenset[str],
+        document_format: str,
+    ) -> None:
+        for block in blocks:
+            if block.type not in allowed:
+                raise ValueError(
+                    f"block type '{block.type}' is not allowed in a '{document_format}' document"
+                )
+            if isinstance(block, BlockGroupInput):
+                cls._check_blocks_recursive(block.blocks, allowed, document_format)
+            elif isinstance(block, BlockColumnsInput):
+                for column in block.columns:
+                    cls._check_blocks_recursive(column.blocks, allowed, document_format)
 
     def _append_blocks_locked(
         self, document: DocumentModel, blocks: list[BlockInput]
@@ -636,6 +705,22 @@ class DocumentSessionStore:
                 style=block.style,
                 layout=block.layout,
             )
+        if isinstance(block, TitleSlideInput):
+            return TitleSlideBlock(title=block.title, subtitle=block.subtitle)
+        if isinstance(block, ContentSlideInput):
+            return ContentSlideBlock(title=block.title, bullets=list(block.bullets))
+        if isinstance(block, TableSlideInput):
+            return TableSlideBlock(
+                title=block.title,
+                headers=list(block.headers),
+                rows=[list(row) for row in block.rows],
+            )
+        if isinstance(block, ImageSlideInput):
+            return ImageSlideBlock(
+                title=block.title,
+                image_path=block.image_path,
+                caption=block.caption,
+            )
         raise TypeError(f"Unsupported block input: {type(block)!r}")
 
     def _expand_summary_card_block(
@@ -889,7 +974,7 @@ class DocumentSessionStore:
         with self._lock:
             document = self.require_document(request.document_id)
             preferred_name = request.output_name or document.metadata.preferred_filename
-            file_name = _normalize_docx_filename(preferred_name)
+            file_name = _normalize_output_filename(preferred_name, document.format)
 
             workspace_dir = self.workspace_dir.resolve()
             output_dir = (

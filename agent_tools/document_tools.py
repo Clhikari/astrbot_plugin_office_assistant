@@ -222,7 +222,8 @@ class DocumentToolBase(FunctionTool[AstrAgentContext]):
 class CreateDocumentTool(DocumentToolBase):
     name: str = "create_document"
     description: str = (
-        "Create a draft Word document session and return its document_id. "
+        "Create a draft document session and return its document_id. "
+        "Use format='word' for Word documents, format='ppt' for PowerPoint presentations. "
         "Use this before adding hero banners, headings, paragraphs, accent boxes, metric cards, lists, tables, or summary cards. "
         "For whole-document styling, put document-wide defaults in document_style and keep "
         "table block fields for local overrides. document_style.table_defaults does not "
@@ -232,6 +233,11 @@ class CreateDocumentTool(DocumentToolBase):
         default_factory=lambda: {
             "type": "object",
             "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": ["word", "ppt"],
+                    "description": "Document format: 'word' for .docx, 'ppt' for .pptx. Defaults to 'word'.",
+                },
                 "session_id": {
                     "type": "string",
                     "description": "Optional session identifier. Defaults to the current chat session.",
@@ -242,7 +248,7 @@ class CreateDocumentTool(DocumentToolBase):
                 },
                 "output_name": {
                     "type": "string",
-                    "description": "Preferred output filename. .docx will be appended if omitted.",
+                    "description": "Preferred output filename. Extension is auto-appended based on format.",
                 },
                 "theme_name": {
                     "type": "string",
@@ -435,11 +441,12 @@ class CreateDocumentTool(DocumentToolBase):
             session_id = getattr(event, "unified_msg_origin", "")
         request = CreateDocumentRequest(
             session_id=str(session_id or ""),
+            format=str(normalized_kwargs.get("format") or "word"),
             title=str(normalized_kwargs.get("title") or ""),
             output_name=str(
                 normalized_kwargs.get("output_name")
                 or normalized_kwargs.get("title")
-                or "document.docx"
+                or ""
             ),
             theme_name=str(normalized_kwargs.get("theme_name") or "business_report"),
             table_template=str(

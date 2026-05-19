@@ -271,10 +271,10 @@ def test_node_render_backend_renders_sections_and_table_styles(workspace_root: P
     assert "PAGE" not in loaded_doc.sections[1].footer._element.xml
 
 
-def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: Path):
+def test_node_renderer_produces_valid_pptx(workspace_root: Path):
     workspace_dir = _make_workspace(
         workspace_root,
-        "pytest-node-render-backend-ppt-placeholder",
+        "pytest-node-render-backend-ppt",
     )
     renderer_entry = _node_renderer_entry()
 
@@ -287,8 +287,95 @@ def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: P
                 "render_mode": "structured",
                 "document_id": "node-structured-ppt",
                 "format": "ppt",
-                "metadata": _business_report_metadata(title="PPT 占位"),
-                "blocks": [],
+                "metadata": _business_report_metadata(title="PPT 测试"),
+                "blocks": [
+                    {"type": "title_slide", "title": "季度汇报", "subtitle": "2026 Q2"},
+                    {
+                        "type": "content_slide",
+                        "title": "要点",
+                        "bullets": ["第一点", "第二点", "第三点"],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert output_path.exists()
+    import zipfile
+
+    with zipfile.ZipFile(output_path) as zf:
+        names = zf.namelist()
+        assert "[Content_Types].xml" in names
+        assert any("ppt/presentation.xml" in n for n in names)
+
+
+@pytest.mark.parametrize(
+    "blocks,expected_code",
+    [
+        (
+            [{"type": "content_slide", "title": "空", "bullets": ["", "   "]}],
+            "EMPTY_BULLETS",
+        ),
+        (
+            [{"type": "table_slide", "title": "T", "headers": [], "rows": [["a"]]}],
+            "SCHEMA_VALIDATION_FAILED",
+        ),
+        (
+            [{"type": "image_slide", "title": "I", "image_path": ""}],
+            "SCHEMA_VALIDATION_FAILED",
+        ),
+        (
+            [{"type": "image_slide", "title": "I", "image_path": "/etc/passwd"}],
+            "INVALID_IMAGE_PATH",
+        ),
+        (
+            [{"type": "image_slide", "title": "I", "image_path": "no_such_file.png"}],
+            "MISSING_IMAGE_FILE",
+        ),
+        (
+            [{"type": "unknown_block_type"}],
+            "UNSUPPORTED_BLOCK",
+        ),
+    ],
+    ids=[
+        "empty_bullets",
+        "missing_table_headers",
+        "missing_image_path",
+        "absolute_image_path",
+        "missing_image_file",
+        "unsupported_block",
+    ],
+)
+def test_node_ppt_renderer_rejects_invalid_payload(
+    workspace_root: Path, blocks: list, expected_code: str
+):
+    workspace_dir = _make_workspace(workspace_root, "pytest-ppt-error")
+    renderer_entry = _node_renderer_entry()
+
+    output_path = workspace_dir / "error-test.pptx"
+    payload_path = workspace_dir / "error-test.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "ppt-error-test",
+                "format": "ppt",
+                "workspace_dir": str(workspace_dir),
+                "metadata": _business_report_metadata(title="Error Test"),
+                "blocks": blocks,
             },
             ensure_ascii=False,
         ),
@@ -306,11 +393,7 @@ def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: P
 
     assert completed.returncode != 0
     error_payload = json.loads(completed.stderr)
-    assert error_payload["code"] == "FORMAT_NOT_IMPLEMENTED"
-    assert "PPT structured renderer" in error_payload["message"]
-
-
-def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: Path):
+    assert error_payload["code"] == expected_code
     loaded_doc, output_path = _render_structured_payload_with_node(
         workspace_root,
         "pytest-node-renderer-toc-header-footer",

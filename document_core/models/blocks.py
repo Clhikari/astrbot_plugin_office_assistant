@@ -747,6 +747,52 @@ class TocBlock(BlockBase):
     start_on_new_page: bool = False
 
 
+def validate_workspace_relative_path(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("image_path must not be empty")
+    if candidate.startswith(("/", "\\", "~")) or (
+        len(candidate) >= 2 and candidate[1] == ":"
+    ):
+        raise ValueError(
+            "image_path must be a relative filename within the workspace, not an absolute path"
+        )
+    if ".." in candidate.replace("\\", "/").split("/"):
+        raise ValueError("image_path must not contain directory traversal (..)")
+    return candidate
+
+
+class TitleSlideBlock(BlockBase):
+    type: Literal["title_slide"] = "title_slide"
+    title: str
+    subtitle: str = ""
+
+
+class ContentSlideBlock(BlockBase):
+    type: Literal["content_slide"] = "content_slide"
+    title: str
+    bullets: list[str] = Field(min_length=1)
+
+
+class TableSlideBlock(BlockBase):
+    type: Literal["table_slide"] = "table_slide"
+    title: str = ""
+    headers: list[str] = Field(min_length=1)
+    rows: list[list[str]] = Field(min_length=1)
+
+
+class ImageSlideBlock(BlockBase):
+    type: Literal["image_slide"] = "image_slide"
+    title: str = ""
+    image_path: str
+    caption: str = ""
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, value: str) -> str:
+        return validate_workspace_relative_path(value)
+
+
 DocumentBlock = Annotated[
     PageTemplateBlock
     | HeroBannerBlock
@@ -762,7 +808,11 @@ DocumentBlock = Annotated[
     | ColumnsBlock
     | PageBreakBlock
     | SectionBreakBlock
-    | TocBlock,
+    | TocBlock
+    | TitleSlideBlock
+    | ContentSlideBlock
+    | TableSlideBlock
+    | ImageSlideBlock,
     Field(discriminator="type"),
 ]
 
