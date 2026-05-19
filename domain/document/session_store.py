@@ -15,10 +15,12 @@ from ...document_core.models.blocks import (
     BusinessReviewCoverData,
     ColumnBlock,
     ColumnsBlock,
+    ContentSlideBlock,
     DocumentBlock,
     GroupBlock,
     HeadingBlock,
     HeroBannerBlock,
+    ImageSlideBlock,
     ListBlock,
     MetricCard,
     MetricCardsBlock,
@@ -31,7 +33,9 @@ from ...document_core.models.blocks import (
     SectionBreakBlock,
     SummaryCardBlock,
     TableBlock,
+    TableSlideBlock,
     TechnicalResumeData,
+    TitleSlideBlock,
     TocBlock,
 )
 from ...document_core.models.document import (
@@ -68,6 +72,10 @@ from .contracts import (
     SectionParagraphInput,
     SectionTableInput,
     TocInput,
+    TitleSlideInput,
+    ContentSlideInput,
+    TableSlideInput,
+    ImageSlideInput,
     _coerce_table_input_rows_to_runtime,
     _normalize_output_filename,
 )
@@ -291,7 +299,9 @@ class DocumentSessionStore:
     ) -> None:
         allowed = cls._FORMAT_ALLOWED_BLOCK_TYPES.get(document.format)
         if allowed is None:
-            return
+            raise ValueError(
+                f"no block type allowlist configured for document format '{document.format}'"
+            )
         for block in blocks:
             if block.type not in allowed:
                 raise ValueError(
@@ -680,6 +690,22 @@ class DocumentSessionStore:
                 ],
                 style=block.style,
                 layout=block.layout,
+            )
+        if isinstance(block, TitleSlideInput):
+            return TitleSlideBlock(title=block.title, subtitle=block.subtitle)
+        if isinstance(block, ContentSlideInput):
+            return ContentSlideBlock(title=block.title, bullets=list(block.bullets))
+        if isinstance(block, TableSlideInput):
+            return TableSlideBlock(
+                title=block.title,
+                headers=list(block.headers),
+                rows=[list(row) for row in block.rows],
+            )
+        if isinstance(block, ImageSlideInput):
+            return ImageSlideBlock(
+                title=block.title,
+                image_path=block.image_path,
+                caption=block.caption,
             )
         raise TypeError(f"Unsupported block input: {type(block)!r}")
 

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import pptxgen from "pptxgenjs";
 
 import { JsonObject } from "../../core/payload";
@@ -9,6 +11,7 @@ export function renderSlideBlock(
   block: JsonObject,
   _metadata: JsonObject,
   theme: PptTheme,
+  workspaceDir: string,
 ): void {
   const blockType = block.type as string;
   switch (blockType) {
@@ -22,7 +25,7 @@ export function renderSlideBlock(
       renderTableSlide(pres, block, theme);
       break;
     case "image_slide":
-      renderImageSlide(pres, block, theme);
+      renderImageSlide(pres, block, theme, workspaceDir);
       break;
     default:
       throw new RenderCliError(
@@ -178,13 +181,25 @@ function renderImageSlide(
   pres: pptxgen,
   block: JsonObject,
   theme: PptTheme,
+  workspaceDir: string,
 ): void {
   const slide = pres.addSlide();
   slide.background = { color: theme.backgroundColor };
 
   const title = (block.title as string) || "";
-  const imagePath = (block.image_path as string) || "";
+  const rawImagePath = (block.image_path as string) || "";
   const caption = (block.caption as string) || "";
+
+  if (!rawImagePath) {
+    throw new RenderCliError(
+      "MISSING_IMAGE_PATH",
+      "image_slide block requires a non-empty image_path",
+    );
+  }
+
+  const imagePath = path.isAbsolute(rawImagePath)
+    ? rawImagePath
+    : path.resolve(workspaceDir, rawImagePath);
 
   let imageY = 0.5;
   if (title) {

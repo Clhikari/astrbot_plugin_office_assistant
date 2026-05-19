@@ -12,15 +12,16 @@ def register_create_document_tool(server: FastMCP, store: DocumentSessionStore) 
     @server.tool(
         name="create_document",
         description=(
-            "Create a draft Word document session and return its document_id. "
-            "Use this before adding headings, paragraphs, lists, tables, or summary cards."
+            "Create a draft document session and return its document_id. "
+            "Use format='word' for Word documents, format='ppt' for PowerPoint presentations."
         ),
         structured_output=True,
     )
     def create_document(
         session_id: str = "",
+        format: str = "word",
         title: str = "",
-        output_name: str = "document.docx",
+        output_name: str = "",
         theme_name: str = "business_report",
         table_template: str = "report_grid",
         density: str = "comfortable",
@@ -29,6 +30,7 @@ def register_create_document_tool(server: FastMCP, store: DocumentSessionStore) 
     ) -> ToolResult:
         request = CreateDocumentRequest(
             session_id=session_id,
+            format=format,
             title=title,
             output_name=output_name,
             theme_name=theme_name,

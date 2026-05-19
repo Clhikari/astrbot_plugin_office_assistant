@@ -740,7 +740,6 @@ def _normalize_pptx_filename(
 ) -> str:
     parts = _split_path_parts(value)
     candidate = parts[-1] if parts else default
-    candidate = candidate or default
     if not candidate.lower().endswith(".pptx"):
         candidate = f"{candidate}.pptx"
     return candidate
@@ -1638,16 +1637,9 @@ class ImageSlideInput(BaseModel):
     @field_validator("image_path")
     @classmethod
     def validate_image_path(cls, value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            raise ValueError("image_path must not be empty")
-        if candidate.startswith(("/", "\\", "~")) or (
-            len(candidate) >= 2 and candidate[1] == ":"
-        ):
-            raise ValueError(
-                "image_path must be a relative filename within the workspace"
-            )
-        return candidate
+        from ...document_core.models.blocks import validate_workspace_relative_path
+
+        return validate_workspace_relative_path(value)
 
 
 BlockInput = Annotated[
