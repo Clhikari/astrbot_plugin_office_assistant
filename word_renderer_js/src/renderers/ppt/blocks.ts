@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 import pptxgen from "pptxgenjs";
@@ -83,7 +84,15 @@ function renderContentSlide(
   slide.background = { color: theme.backgroundColor };
 
   const title = (block.title as string) || "";
-  const bullets = (block.bullets as string[]) || [];
+  const rawBullets = (block.bullets as string[]) || [];
+  const bullets = rawBullets.map((b) => b.trim()).filter((b) => b.length > 0);
+
+  if (!bullets.length) {
+    throw new RenderCliError(
+      "EMPTY_BULLETS",
+      "content_slide block requires at least one non-empty bullet",
+    );
+  }
 
   slide.addText(title, {
     x: 0.5,
@@ -220,6 +229,13 @@ function renderImageSlide(
   }
 
   const imagePath = path.resolve(workspaceDir, rawImagePath);
+
+  if (!fs.existsSync(imagePath)) {
+    throw new RenderCliError(
+      "MISSING_IMAGE_FILE",
+      `Image file does not exist: ${imagePath}`,
+    );
+  }
 
   let imageY = 0.5;
   if (title) {
