@@ -271,10 +271,10 @@ def test_node_render_backend_renders_sections_and_table_styles(workspace_root: P
     assert "PAGE" not in loaded_doc.sections[1].footer._element.xml
 
 
-def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: Path):
+def test_node_renderer_produces_valid_pptx(workspace_root: Path):
     workspace_dir = _make_workspace(
         workspace_root,
-        "pytest-node-render-backend-ppt-placeholder",
+        "pytest-node-render-backend-ppt",
     )
     renderer_entry = _node_renderer_entry()
 
@@ -287,8 +287,15 @@ def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: P
                 "render_mode": "structured",
                 "document_id": "node-structured-ppt",
                 "format": "ppt",
-                "metadata": _business_report_metadata(title="PPT 占位"),
-                "blocks": [],
+                "metadata": _business_report_metadata(title="PPT 测试"),
+                "blocks": [
+                    {"type": "title_slide", "title": "季度汇报", "subtitle": "2026 Q2"},
+                    {
+                        "type": "content_slide",
+                        "title": "要点",
+                        "bullets": ["第一点", "第二点", "第三点"],
+                    },
+                ],
             },
             ensure_ascii=False,
         ),
@@ -304,10 +311,14 @@ def test_node_renderer_reports_ppt_placeholder_not_implemented(workspace_root: P
         encoding="utf-8",
     )
 
-    assert completed.returncode != 0
-    error_payload = json.loads(completed.stderr)
-    assert error_payload["code"] == "FORMAT_NOT_IMPLEMENTED"
-    assert "PPT structured renderer" in error_payload["message"]
+    assert completed.returncode == 0, completed.stderr
+    assert output_path.exists()
+    import zipfile
+
+    with zipfile.ZipFile(output_path) as zf:
+        names = zf.namelist()
+        assert "[Content_Types].xml" in names
+        assert any("ppt/presentation.xml" in n for n in names)
 
 
 def test_node_renderer_supports_toc_and_header_footer_variants(workspace_root: Path):

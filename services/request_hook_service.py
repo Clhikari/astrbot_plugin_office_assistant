@@ -69,7 +69,8 @@ class RequestHookService:
         r"(create_document|add_blocks|finalize_document|export_document|"
         r"正式汇报|正式报告|导出成\s*word|导出为\s*word|"
         r"\bword\b|\bdocx\b|汇报|报告|"
-        r"生成\s*(?:word|docx|报告|汇报)|整理成\s*(?:word|docx|报告|汇报))",
+        r"\bppt\b|\bpptx\b|演示文稿|幻灯片|slides|presentation|"
+        r"生成\s*(?:word|docx|ppt|pptx|报告|汇报|演示文稿)|整理成\s*(?:word|docx|ppt|pptx|报告|汇报))",
         flags=re.IGNORECASE,
     )
     _DOCUMENT_DETAIL_HINT_RE = re.compile(

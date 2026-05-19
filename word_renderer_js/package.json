@@ -10,7 +10,8 @@
     "ajv": "^8.17.1",
     "docx": "^9.5.1",
     "docxtemplater": "^3.67.1",
-    "pizzip": "^3.2.0"
+    "pizzip": "^3.2.0",
+    "pptxgenjs": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

@@ -84,7 +84,8 @@ def build_document_tools_detail_notice() -> str:
         "\n"
         "[工具选择]\n"
         "- 复杂 Word 文档 → 使用上述工具链\n"
-        "- 简单的一次性 Excel/PPT → 使用 `create_office_file`\n"
+        '- PPT/演示文稿 → 使用 `create_document(format="ppt")` → `add_blocks`（slide blocks）→ `export_document`\n'
+        "- 简单的一次性 Excel → 使用 `create_office_file`\n"
         "- 主题：优先 `business_report`、`project_review`、`executive_brief`\n"
         "- 表格样式：优先 `report_grid`、`metrics_compact`、`minimal`\n"
         "- 紧凑版式用 `density=compact`，品牌色用 `accent_color=RRGGBB`\n"
@@ -116,4 +117,14 @@ def build_document_tools_detail_notice() -> str:
         "`start_type=new_page` 和 `page_orientation=portrait`\n"
         "- `toc` 只使用 `title`、`levels`、`start_on_new_page`；不要给 `toc` 传 `text`\n"
         "- 表格列标题使用 `headers`；不要给 `table` 传 `columns`\n"
+        "\n"
+        "[PPT 演示文稿]\n"
+        '- 创建 PPT 时使用 `create_document(format="ppt")`\n'
+        "- PPT 专用 block 类型：\n"
+        "  - `title_slide`：标题页，字段 `title`（必填）、`subtitle`（可选）\n"
+        "  - `content_slide`：内容页，字段 `title`（必填）、`bullets`（字符串数组，必填）\n"
+        "  - `table_slide`：表格页，字段 `title`（可选）、`headers`（必填）、`rows`（必填）\n"
+        "  - `image_slide`：图片页，字段 `title`（可选）、`image_path`（工作区相对路径，必填）、`caption`（可选）\n"
+        "- PPT 文档不能使用 Word block（heading、paragraph、list 等），Word 文档也不能使用 slide block\n"
+        '- 典型流程：create_document(format="ppt", title="季度汇报") → add_blocks([title_slide, content_slide, ...]) → export_document\n'
     )

@@ -137,7 +137,7 @@ class DocumentModel(BaseModel):
 
     document_id: str
     session_id: str = ""
-    format: Literal["word"] = "word"
+    format: Literal["word", "ppt"] = "word"
     status: DocumentStatus = DocumentStatus.DRAFT
     metadata: DocumentMetadata = Field(default_factory=DocumentMetadata)
     blocks: list[DocumentBlock] = Field(default_factory=list)

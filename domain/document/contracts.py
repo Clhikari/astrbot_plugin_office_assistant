@@ -42,6 +42,7 @@ SUPPORTED_CARD_VARIANTS = {"summary", "conclusion"}
 SUPPORTED_PAGE_TEMPLATES = {"business_review_cover", "technical_resume"}
 WINDOWS_DRIVE_PATTERN = re.compile(r"^[A-Za-z]:([\\/]|$)")
 DEFAULT_DOCX_FILENAME = "document.docx"
+DEFAULT_PPTX_FILENAME = "presentation.pptx"
 MAX_BLOCK_NORMALIZE_DEPTH = 32
 
 _HEADER_FOOTER_SCHEMA_PROPERTIES = {
@@ -733,6 +734,24 @@ def _normalize_docx_filename(
     return candidate
 
 
+def _normalize_pptx_filename(
+    value: str,
+    default: str = DEFAULT_PPTX_FILENAME,
+) -> str:
+    parts = _split_path_parts(value)
+    candidate = parts[-1] if parts else default
+    candidate = candidate or default
+    if not candidate.lower().endswith(".pptx"):
+        candidate = f"{candidate}.pptx"
+    return candidate
+
+
+def _normalize_output_filename(value: str, document_format: str) -> str:
+    if document_format == "ppt":
+        return _normalize_pptx_filename(value)
+    return _normalize_docx_filename(value)
+
+
 def _normalize_table_style(value: str) -> str:
     candidate = value.strip()
     if not candidate:
@@ -771,7 +790,8 @@ class CreateDocumentRequest(BaseModel):
 
     session_id: str = ""
     title: str = ""
-    output_name: str = DEFAULT_DOCX_FILENAME
+    format: Literal["word", "ppt"] = "word"
+    output_name: str = ""
     theme_name: str = "business_report"
     table_template: str = "report_grid"
     density: str = "comfortable"
@@ -779,10 +799,15 @@ class CreateDocumentRequest(BaseModel):
     document_style: DocumentStyleConfig = Field(default_factory=DocumentStyleConfig)
     header_footer: HeaderFooterConfig = Field(default_factory=HeaderFooterConfig)
 
-    @field_validator("output_name")
-    @classmethod
-    def validate_output_name(cls, value: str) -> str:
-        return _normalize_docx_filename(value)
+    @model_validator(mode="after")
+    def normalize_output_name_by_format(self) -> CreateDocumentRequest:
+        if not self.output_name.strip():
+            self.output_name = (
+                DEFAULT_PPTX_FILENAME if self.format == "ppt" else DEFAULT_DOCX_FILENAME
+            )
+        else:
+            self.output_name = _normalize_output_filename(self.output_name, self.format)
+        return self
 
     @field_validator("theme_name")
     @classmethod
@@ -1577,6 +1602,54 @@ class BlockColumnsInput(BaseModel):
     layout: BlockLayout = Field(default_factory=BlockLayout)
 
 
+class TitleSlideInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["title_slide"] = "title_slide"
+    title: str
+    subtitle: str = ""
+
+
+class ContentSlideInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["content_slide"] = "content_slide"
+    title: str
+    bullets: list[str] = Field(min_length=1)
+
+
+class TableSlideInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["table_slide"] = "table_slide"
+    title: str = ""
+    headers: list[str] = Field(min_length=1)
+    rows: list[list[str]] = Field(min_length=1)
+
+
+class ImageSlideInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["image_slide"] = "image_slide"
+    title: str = ""
+    image_path: str
+    caption: str = ""
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, value: str) -> str:
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("image_path must not be empty")
+        if candidate.startswith(("/", "\\", "~")) or (
+            len(candidate) >= 2 and candidate[1] == ":"
+        ):
+            raise ValueError(
+                "image_path must be a relative filename within the workspace"
+            )
+        return candidate
+
+
 BlockInput = Annotated[
     SectionPageTemplateInput
     | SectionHeroBannerInput
@@ -1591,7 +1664,11 @@ BlockInput = Annotated[
     | SectionBreakInput
     | TocInput
     | BlockGroupInput
-    | BlockColumnsInput,
+    | BlockColumnsInput
+    | TitleSlideInput
+    | ContentSlideInput
+    | TableSlideInput
+    | ImageSlideInput,
     Field(discriminator="type"),
 ]
 

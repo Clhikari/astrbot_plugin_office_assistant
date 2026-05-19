@@ -221,7 +221,7 @@ def _build_document_render_backend_config(
     return DocumentRenderBackendConfig(
         preferred_backend="node",
         fallback_enabled=False,
-        ppt_preferred_backend="python",
+        ppt_preferred_backend="node",
         excel_preferred_backend="python",
         node_renderer_entry=settings.js_renderer_entry,
     )
