@@ -792,7 +792,7 @@ def test_create_document_request_normalizes_separator_only_output_name():
 def test_export_document_request_normalizes_dot_only_output_name():
     request = ExportDocumentRequest(document_id="doc-1", output_name=".")
 
-    assert request.output_name == "document.docx"
+    assert request.output_name == ""
 
 
 def test_paragraph_schema_requires_text_or_runs():

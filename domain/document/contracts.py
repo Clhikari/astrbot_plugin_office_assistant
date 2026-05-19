@@ -1715,7 +1715,13 @@ class ExportDocumentRequest(BaseModel):
     @field_validator("output_name")
     @classmethod
     def validate_output_name(cls, value: str) -> str:
-        return _normalize_docx_filename(value) if value.strip() else ""
+        candidate = value.strip()
+        if not candidate:
+            return ""
+        parts = _split_path_parts(candidate)
+        if not parts:
+            return ""
+        return parts[-1]
 
 
 class DocumentSummary(BaseModel):
