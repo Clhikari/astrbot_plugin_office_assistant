@@ -747,6 +747,21 @@ class TocBlock(BlockBase):
     start_on_new_page: bool = False
 
 
+def validate_workspace_relative_path(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("image_path must not be empty")
+    if candidate.startswith(("/", "\\", "~")) or (
+        len(candidate) >= 2 and candidate[1] == ":"
+    ):
+        raise ValueError(
+            "image_path must be a relative filename within the workspace, not an absolute path"
+        )
+    if ".." in candidate.replace("\\", "/").split("/"):
+        raise ValueError("image_path must not contain directory traversal (..)")
+    return candidate
+
+
 class TitleSlideBlock(BlockBase):
     type: Literal["title_slide"] = "title_slide"
     title: str
@@ -775,16 +790,7 @@ class ImageSlideBlock(BlockBase):
     @field_validator("image_path")
     @classmethod
     def validate_image_path(cls, value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            raise ValueError("image_path must not be empty")
-        if candidate.startswith(("/", "\\", "~")) or (
-            len(candidate) >= 2 and candidate[1] == ":"
-        ):
-            raise ValueError(
-                "image_path must be a relative filename within the workspace, not an absolute path"
-            )
-        return candidate
+        return validate_workspace_relative_path(value)
 
 
 DocumentBlock = Annotated[

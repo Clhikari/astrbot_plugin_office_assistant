@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import pptxgen from "pptxgenjs";
 
 import { DocumentRenderPayload } from "../../core/payload";
@@ -13,9 +15,10 @@ export async function renderPptStructuredDocument(
   pres.layout = "LAYOUT_16x9";
 
   const theme = resolveTheme(payload.metadata.theme_name as string | undefined);
+  const workspaceDir = path.dirname(path.resolve(outputPath));
 
   for (const block of payload.blocks) {
-    renderSlideBlock(pres, block, payload.metadata, theme);
+    renderSlideBlock(pres, block, payload.metadata, theme, workspaceDir);
   }
 
   await pres.writeFile({ fileName: outputPath });
