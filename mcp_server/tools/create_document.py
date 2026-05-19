@@ -1,3 +1,5 @@
+from typing import Literal
+
 from mcp.server.fastmcp import FastMCP
 
 from ...domain.document.session_store import DocumentSessionStore
@@ -19,7 +21,7 @@ def register_create_document_tool(server: FastMCP, store: DocumentSessionStore) 
     )
     def create_document(
         session_id: str = "",
-        format: str = "word",
+        format: Literal["word", "ppt"] = "word",
         title: str = "",
         output_name: str = "",
         theme_name: str = "business_report",

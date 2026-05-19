@@ -128,6 +128,21 @@ function renderTableSlide(
   const headers = (block.headers as string[]) || [];
   const rows = (block.rows as string[][]) || [];
 
+  if (!headers.length) {
+    throw new RenderCliError(
+      "MISSING_TABLE_HEADERS",
+      "table_slide block requires non-empty headers",
+    );
+  }
+
+  const headerLength = headers.length;
+  const normalizedRows = rows.map((row) => {
+    if (row.length >= headerLength) {
+      return row.slice(0, headerLength);
+    }
+    return [...row, ...Array(headerLength - row.length).fill("")];
+  });
+
   let tableY = 0.5;
   if (title) {
     slide.addText(title, {
@@ -156,7 +171,7 @@ function renderTableSlide(
     },
   }));
 
-  const dataRows: pptxgen.TableCell[][] = rows.map((row) =>
+  const dataRows: pptxgen.TableCell[][] = normalizedRows.map((row) =>
     row.map((cell) => ({
       text: cell,
       options: {
@@ -197,9 +212,14 @@ function renderImageSlide(
     );
   }
 
-  const imagePath = path.isAbsolute(rawImagePath)
-    ? rawImagePath
-    : path.resolve(workspaceDir, rawImagePath);
+  if (path.isAbsolute(rawImagePath)) {
+    throw new RenderCliError(
+      "INVALID_IMAGE_PATH",
+      `image_slide image_path must be a workspace-relative path, got absolute: ${rawImagePath}`,
+    );
+  }
+
+  const imagePath = path.resolve(workspaceDir, rawImagePath);
 
   let imageY = 0.5;
   if (title) {

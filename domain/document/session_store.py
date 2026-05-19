@@ -302,11 +302,25 @@ class DocumentSessionStore:
             raise ValueError(
                 f"no block type allowlist configured for document format '{document.format}'"
             )
+        cls._check_blocks_recursive(blocks, allowed, document.format)
+
+    @classmethod
+    def _check_blocks_recursive(
+        cls,
+        blocks: list[BlockInput],
+        allowed: frozenset[str],
+        document_format: str,
+    ) -> None:
         for block in blocks:
             if block.type not in allowed:
                 raise ValueError(
-                    f"block type '{block.type}' is not allowed in a '{document.format}' document"
+                    f"block type '{block.type}' is not allowed in a '{document_format}' document"
                 )
+            if isinstance(block, BlockGroupInput):
+                cls._check_blocks_recursive(block.blocks, allowed, document_format)
+            elif isinstance(block, BlockColumnsInput):
+                for column in block.columns:
+                    cls._check_blocks_recursive(column.blocks, allowed, document_format)
 
     def _append_blocks_locked(
         self, document: DocumentModel, blocks: list[BlockInput]

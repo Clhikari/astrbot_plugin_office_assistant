@@ -182,6 +182,7 @@ class NodeDocumentRenderBackend:
             )
 
         payload = build_document_render_payload(document)
+        payload["workspace_dir"] = str(output_path.parent.resolve())
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w",
