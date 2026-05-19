@@ -1,12 +1,22 @@
-import { RenderCliError } from "../../core/errors";
+import pptxgen from "pptxgenjs";
+
 import { DocumentRenderPayload } from "../../core/payload";
+import { renderSlideBlock } from "./blocks";
+import { resolveTheme } from "./theme";
 
 export async function renderPptStructuredDocument(
-  _payload: DocumentRenderPayload,
-  _outputPath: string,
+  payload: DocumentRenderPayload,
+  outputPath: string,
 ): Promise<void> {
-  throw new RenderCliError(
-    "FORMAT_NOT_IMPLEMENTED",
-    "PPT structured renderer is reserved for the JS pipeline but is not implemented yet",
-  );
+  const pres = new pptxgen();
+  pres.title = (payload.metadata.title as string) || "";
+  pres.layout = "LAYOUT_16x9";
+
+  const theme = resolveTheme(payload.metadata.theme_name as string | undefined);
+
+  for (const block of payload.blocks) {
+    renderSlideBlock(pres, block, payload.metadata, theme);
+  }
+
+  await pres.writeFile({ fileName: outputPath });
 }
