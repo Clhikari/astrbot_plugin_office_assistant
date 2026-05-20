@@ -816,6 +816,39 @@ DocumentBlock = Annotated[
     Field(discriminator="type"),
 ]
 
+_WORD_BLOCK_CLASSES = (
+    PageTemplateBlock,
+    HeroBannerBlock,
+    HeadingBlock,
+    ParagraphBlock,
+    ListBlock,
+    TableBlock,
+    SummaryCardBlock,
+    AccentBoxBlock,
+    MetricCardsBlock,
+    ImageBlock,
+    GroupBlock,
+    ColumnsBlock,
+    PageBreakBlock,
+    SectionBreakBlock,
+    TocBlock,
+)
+
+_PPT_BLOCK_CLASSES = (
+    TitleSlideBlock,
+    ContentSlideBlock,
+    TableSlideBlock,
+    ImageSlideBlock,
+)
+
+WORD_BLOCK_TYPES: frozenset[str] = frozenset(
+    cls.model_fields["type"].default for cls in _WORD_BLOCK_CLASSES
+)
+
+PPT_BLOCK_TYPES: frozenset[str] = frozenset(
+    cls.model_fields["type"].default for cls in _PPT_BLOCK_CLASSES
+)
+
 GroupBlock.model_rebuild()
 ColumnBlock.model_rebuild()
 ColumnsBlock.model_rebuild()

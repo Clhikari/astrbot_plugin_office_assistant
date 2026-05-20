@@ -5,24 +5,8 @@ from ...domain.document.contracts import (
     AddBlocksRequest,
     ToolResult,
     build_document_summary,
+    normalize_slide_bullets,
 )
-
-
-def _normalize_slide_bullets(slides: list[dict]) -> list[dict]:
-    normalized = []
-    for slide in slides:
-        slide = dict(slide)
-        if slide.get("type") == "content_slide" and "bullets" in slide:
-            bullets = slide["bullets"]
-            if isinstance(bullets, list):
-                slide["bullets"] = [
-                    item["text"]
-                    if isinstance(item, dict) and "text" in item
-                    else str(item)
-                    for item in bullets
-                ]
-        normalized.append(slide)
-    return normalized
 
 
 def register_add_slides_tool(server: FastMCP, store: DocumentSessionStore) -> None:
@@ -41,7 +25,7 @@ def register_add_slides_tool(server: FastMCP, store: DocumentSessionStore) -> No
                 success=False,
                 message="add_slides 仅用于 PPT 文档。Word 文档请使用 add_blocks。",
             )
-        normalized = _normalize_slide_bullets(slides)
+        normalized = normalize_slide_bullets(slides)
         request = AddBlocksRequest(
             document_id=document_id,
             blocks=normalized,
