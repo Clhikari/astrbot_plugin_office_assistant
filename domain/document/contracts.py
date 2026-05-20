@@ -1787,6 +1787,8 @@ def normalize_slide_bullets(slides: list) -> list:
     """Normalize content_slide bullets to plain string arrays.
 
     Shared by agent tools and MCP server to ensure consistent behavior.
+    Only accepts: str, int, float, or dict with a "text" key.
+    Malformed items are discarded to prevent repr leaking into slides.
     """
     normalized: list = []
     for slide in slides:
@@ -1797,12 +1799,16 @@ def normalize_slide_bullets(slides: list) -> list:
         if slide.get("type") == "content_slide" and "bullets" in slide:
             bullets = slide["bullets"]
             if isinstance(bullets, list):
-                slide["bullets"] = [
-                    item["text"]
-                    if isinstance(item, dict) and "text" in item
-                    else str(item)
-                    for item in bullets
-                ]
+                clean: list[str] = []
+                for item in bullets:
+                    if isinstance(item, str):
+                        clean.append(item)
+                    elif isinstance(item, (int, float)):
+                        clean.append(str(item))
+                    elif isinstance(item, dict) and "text" in item:
+                        clean.append(str(item["text"]))
+                    # else: discard malformed bullet
+                slide["bullets"] = clean
         normalized.append(slide)
     return normalized
 
