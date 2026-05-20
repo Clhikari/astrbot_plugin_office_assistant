@@ -2159,3 +2159,28 @@ def test_agent_tool_schemas_declare_items_for_every_array(
 ):
     tool = _agent_tools_by_name[tool_name]
     assert _schema_has_array_without_items(tool.parameters) is False
+
+
+def test_all_document_block_classes_are_classified_by_format():
+    """Guard: every class in DocumentBlock union must appear in a format group."""
+    from typing import get_args
+
+    from astrbot_plugin_office_assistant.document_core.models.blocks import (
+        DocumentBlock,
+        _PPT_BLOCK_CLASSES,
+        _WORD_BLOCK_CLASSES,
+    )
+
+    annotated_args = get_args(DocumentBlock)
+    union_type = annotated_args[0]
+    all_block_classes = set(get_args(union_type))
+
+    classified = set(_WORD_BLOCK_CLASSES) | set(_PPT_BLOCK_CLASSES)
+    unclassified = all_block_classes - classified
+
+    assert not unclassified, (
+        f"Block classes not assigned to any format group: "
+        f"{[cls.__name__ for cls in unclassified]}. "
+        f"Add them to _WORD_BLOCK_CLASSES or _PPT_BLOCK_CLASSES in "
+        f"document_core/models/blocks.py"
+    )
