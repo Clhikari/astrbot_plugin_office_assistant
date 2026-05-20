@@ -15,6 +15,8 @@ from .blocks import (
     normalize_optional_hex_color,
 )
 
+DocumentFormat = Literal["word", "ppt"]
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -137,7 +139,7 @@ class DocumentModel(BaseModel):
 
     document_id: str
     session_id: str = ""
-    format: Literal["word", "ppt"] = "word"
+    format: DocumentFormat = "word"
     status: DocumentStatus = DocumentStatus.DRAFT
     metadata: DocumentMetadata = Field(default_factory=DocumentMetadata)
     blocks: list[DocumentBlock] = Field(default_factory=list)

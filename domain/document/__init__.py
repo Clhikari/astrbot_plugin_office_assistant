@@ -43,8 +43,12 @@ def __getattr__(name: str):
         from .export_pipeline import export_document_via_pipeline
 
         return export_document_via_pipeline
+    if name == "DocumentFormat":
+        from ...document_core.models.document import DocumentFormat
+
+        return DocumentFormat
     if name in {
-        "DocumentFormat",
+        "RenderableFormat",
         "DocumentRenderBackend",
         "DocumentRenderBackendConfig",
         "DocumentRenderBackendError",
