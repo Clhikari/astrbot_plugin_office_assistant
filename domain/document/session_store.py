@@ -24,6 +24,7 @@ from ...document_core.models.blocks import (
     ListBlock,
     MetricCard,
     MetricCardsBlock,
+    PPT_BLOCK_TYPES,
     PageTemplateBlock,
     PageTemplateMetricItem,
     PageBreakBlock,
@@ -37,6 +38,7 @@ from ...document_core.models.blocks import (
     TechnicalResumeData,
     TitleSlideBlock,
     TocBlock,
+    WORD_BLOCK_TYPES,
 )
 from ...document_core.models.document import (
     DocumentMetadata,
@@ -264,33 +266,8 @@ class DocumentSessionStore:
             return document
 
     _FORMAT_ALLOWED_BLOCK_TYPES: dict[str, frozenset[str]] = {
-        "word": frozenset(
-            {
-                "heading",
-                "paragraph",
-                "list",
-                "table",
-                "page_break",
-                "section_break",
-                "toc",
-                "group",
-                "columns",
-                "accent_box",
-                "metric_cards",
-                "summary_card",
-                "page_template",
-                "hero_banner",
-                "image",
-            }
-        ),
-        "ppt": frozenset(
-            {
-                "title_slide",
-                "content_slide",
-                "table_slide",
-                "image_slide",
-            }
-        ),
+        "word": WORD_BLOCK_TYPES,
+        "ppt": PPT_BLOCK_TYPES,
     }
 
     @classmethod

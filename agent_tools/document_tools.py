@@ -28,6 +28,7 @@ from ..domain.document.contracts import (
     build_header_footer_schema,
     normalize_create_document_kwargs,
     normalize_raw_block_payloads,
+    normalize_slide_bullets,
 )
 
 
@@ -1056,7 +1057,7 @@ class AddSlidesTool(DocumentToolBase):
                     )
                 )
         raw_slides = kwargs.get("slides") or []
-        normalized_slides = _normalize_slide_bullets(raw_slides)
+        normalized_slides = normalize_slide_bullets(raw_slides)
         try:
             request = AddBlocksRequest(
                 document_id=document_id,
@@ -1085,26 +1086,6 @@ class AddSlidesTool(DocumentToolBase):
                 document=build_document_summary(document),
             )
         )
-
-
-def _normalize_slide_bullets(slides: list) -> list:
-    normalized = []
-    for slide in slides:
-        if not isinstance(slide, dict):
-            normalized.append(slide)
-            continue
-        slide = dict(slide)
-        if slide.get("type") == "content_slide" and "bullets" in slide:
-            bullets = slide["bullets"]
-            if isinstance(bullets, list):
-                slide["bullets"] = [
-                    item["text"]
-                    if isinstance(item, dict) and "text" in item
-                    else str(item)
-                    for item in bullets
-                ]
-        normalized.append(slide)
-    return normalized
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))

@@ -1783,6 +1783,30 @@ def build_document_summary(document_model: DocumentModel) -> DocumentSummary:
     )
 
 
+def normalize_slide_bullets(slides: list) -> list:
+    """Normalize content_slide bullets to plain string arrays.
+
+    Shared by agent tools and MCP server to ensure consistent behavior.
+    """
+    normalized: list = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            normalized.append(slide)
+            continue
+        slide = dict(slide)
+        if slide.get("type") == "content_slide" and "bullets" in slide:
+            bullets = slide["bullets"]
+            if isinstance(bullets, list):
+                slide["bullets"] = [
+                    item["text"]
+                    if isinstance(item, dict) and "text" in item
+                    else str(item)
+                    for item in bullets
+                ]
+        normalized.append(slide)
+    return normalized
+
+
 BlockGroupInput.model_rebuild()
 BlockColumnInput.model_rebuild()
 BlockColumnsInput.model_rebuild()
