@@ -13,7 +13,7 @@ from astrbot.api import logger
 
 from ...document_core.models.document import DocumentModel
 
-DocumentFormat = Literal["word", "ppt", "excel"]
+RenderableFormat = Literal["word", "ppt", "excel"]
 RenderBackendKind = Literal["python", "node"]
 
 _STORE_RENDER_BACKEND_CONFIG_ATTR = "_document_render_backend_config"
@@ -37,7 +37,7 @@ class DocumentRenderBackendConfig:
     excel_fallback_enabled: bool = False
 
     def preferred_backend_for(
-        self, document_format: DocumentFormat
+        self, document_format: RenderableFormat
     ) -> RenderBackendKind:
         if document_format == "ppt":
             return self.ppt_preferred_backend
@@ -45,7 +45,7 @@ class DocumentRenderBackendConfig:
             return self.excel_preferred_backend
         return self.preferred_backend
 
-    def fallback_enabled_for(self, document_format: DocumentFormat) -> bool:
+    def fallback_enabled_for(self, document_format: RenderableFormat) -> bool:
         if document_format == "ppt":
             return self.ppt_fallback_enabled
         if document_format == "excel":
@@ -327,7 +327,7 @@ def render_document_with_backends(
 
 
 def build_document_render_backends(
-    document_format: DocumentFormat,
+    document_format: RenderableFormat,
     config: DocumentRenderBackendConfig | None = None,
 ) -> list[DocumentRenderBackend]:
     resolved = config or DocumentRenderBackendConfig()
@@ -354,7 +354,7 @@ def build_document_render_backends(
 
 
 __all__ = [
-    "DocumentFormat",
+    "RenderableFormat",
     "DocumentRenderBackend",
     "DocumentRenderBackendConfig",
     "DocumentRenderBackendError",

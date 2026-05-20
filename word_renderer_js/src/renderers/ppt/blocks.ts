@@ -221,6 +221,10 @@ function renderImageSlide(
     );
   }
 
+  // Defense-in-depth: Python layer (ImageSlideBlock.validate_image_path) also
+  // rejects absolute paths and ".." traversal. This JS-side check is intentionally
+  // duplicated so the renderer is safe even if called outside the Python pipeline.
+  // Keep both implementations in sync when rules change.
   if (path.isAbsolute(rawImagePath)) {
     throw new RenderCliError(
       "INVALID_IMAGE_PATH",

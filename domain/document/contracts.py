@@ -33,7 +33,11 @@ from ...document_core.models.blocks import (
     validate_section_page_numbering,
     validate_table_structure,
 )
-from ...document_core.models.document import DocumentModel, DocumentStyleConfig
+from ...document_core.models.document import (
+    DocumentFormat,
+    DocumentModel,
+    DocumentStyleConfig,
+)
 
 SUPPORTED_THEMES = {"business_report", "project_review", "executive_brief"}
 SUPPORTED_TABLE_TEMPLATES = {"report_grid", "metrics_compact", "minimal"}
@@ -789,7 +793,7 @@ class CreateDocumentRequest(BaseModel):
 
     session_id: str = ""
     title: str = ""
-    format: Literal["word", "ppt"] = "word"
+    format: DocumentFormat = "word"
     output_name: str = ""
     theme_name: str = "business_report"
     table_template: str = "report_grid"
