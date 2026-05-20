@@ -67,6 +67,7 @@ def test_build_document_toolset_uses_shared_store_and_default_workspace():
     assert tool_names == [
         "create_document",
         "add_blocks",
+        "add_slides",
         "finalize_document",
         "export_document",
     ]
@@ -292,6 +293,7 @@ def test_document_tool_registry_keeps_document_tool_order():
     assert [spec.name for spec in get_document_tool_specs()] == [
         "create_document",
         "add_blocks",
+        "add_slides",
         "finalize_document",
         "export_document",
     ]
@@ -367,6 +369,7 @@ def test_registry_import_does_not_require_fastmcp_at_runtime():
         assert [spec.name for spec in imported.get_document_tool_specs()] == [
             "create_document",
             "add_blocks",
+            "add_slides",
             "finalize_document",
             "export_document",
         ]
@@ -444,6 +447,10 @@ def test_mcp_document_tool_registration_matches_registry_order(
         _make_registrar("add_blocks"),
     )
     monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_slides.register_add_slides_tool",
+        _make_registrar("add_slides"),
+    )
+    monkeypatch.setattr(
         "astrbot_plugin_office_assistant.mcp_server.tools.finalize_document.register_finalize_document_tool",
         _make_registrar("finalize_document"),
     )
@@ -473,6 +480,10 @@ def test_mcp_document_tool_registration_passes_export_hooks(
     )
     monkeypatch.setattr(
         "astrbot_plugin_office_assistant.mcp_server.tools.add_blocks.register_add_blocks_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "astrbot_plugin_office_assistant.mcp_server.tools.add_slides.register_add_slides_tool",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -2577,6 +2588,7 @@ async def test_mcp_registers_document_and_workbook_tools():
     assert tool_names == [
         "create_document",
         "add_blocks",
+        "add_slides",
         "finalize_document",
         "export_document",
         "create_workbook",
@@ -2606,6 +2618,7 @@ async def test_mcp_registers_only_document_tools_when_workbook_store_is_unavaila
     assert [tool.name for tool in tools] == [
         "create_document",
         "add_blocks",
+        "add_slides",
         "finalize_document",
         "export_document",
     ]

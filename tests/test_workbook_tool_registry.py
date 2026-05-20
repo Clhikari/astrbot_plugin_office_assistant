@@ -28,6 +28,7 @@ def test_document_tool_registry_keeps_document_tool_order_after_workbook_extensi
     assert [spec.name for spec in get_document_tool_specs()] == [
         "create_document",
         "add_blocks",
+        "add_slides",
         "finalize_document",
         "export_document",
     ]
