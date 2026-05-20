@@ -5,6 +5,7 @@ import pptxgen from "pptxgenjs";
 
 import { JsonObject } from "../../core/payload";
 import { RenderCliError } from "../../core/errors";
+import { PPT_ERROR_CODES } from "./error-codes";
 import { PptTheme } from "./theme";
 
 export function renderSlideBlock(
@@ -30,7 +31,7 @@ export function renderSlideBlock(
       break;
     default:
       throw new RenderCliError(
-        "UNSUPPORTED_BLOCK",
+        PPT_ERROR_CODES.UNSUPPORTED_BLOCK,
         `Unsupported PPT block type: ${blockType}`,
       );
   }
@@ -89,7 +90,7 @@ function renderContentSlide(
 
   if (!bullets.length) {
     throw new RenderCliError(
-      "EMPTY_BULLETS",
+      PPT_ERROR_CODES.EMPTY_BULLETS,
       "content_slide block requires at least one non-empty bullet",
     );
   }
@@ -139,7 +140,7 @@ function renderTableSlide(
 
   if (!headers.length) {
     throw new RenderCliError(
-      "MISSING_TABLE_HEADERS",
+      PPT_ERROR_CODES.MISSING_TABLE_HEADERS,
       "table_slide block requires non-empty headers",
     );
   }
@@ -216,7 +217,7 @@ function renderImageSlide(
 
   if (!rawImagePath) {
     throw new RenderCliError(
-      "MISSING_IMAGE_PATH",
+      PPT_ERROR_CODES.MISSING_IMAGE_PATH,
       "image_slide block requires a non-empty image_path",
     );
   }
@@ -227,7 +228,7 @@ function renderImageSlide(
   // Keep both implementations in sync when rules change.
   if (path.isAbsolute(rawImagePath)) {
     throw new RenderCliError(
-      "INVALID_IMAGE_PATH",
+      PPT_ERROR_CODES.INVALID_IMAGE_PATH,
       `image_slide image_path must be a workspace-relative path, got absolute: ${rawImagePath}`,
     );
   }
@@ -235,7 +236,7 @@ function renderImageSlide(
   const segments = rawImagePath.replace(/\\/g, "/").split("/");
   if (segments.includes("..")) {
     throw new RenderCliError(
-      "INVALID_IMAGE_PATH",
+      PPT_ERROR_CODES.INVALID_IMAGE_PATH,
       `image_slide image_path must not contain directory traversal (..): ${rawImagePath}`,
     );
   }
@@ -244,7 +245,7 @@ function renderImageSlide(
 
   if (!fs.existsSync(imagePath)) {
     throw new RenderCliError(
-      "MISSING_IMAGE_FILE",
+      PPT_ERROR_CODES.MISSING_IMAGE_FILE,
       `Image file does not exist: ${imagePath}`,
     );
   }

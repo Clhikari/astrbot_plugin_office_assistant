@@ -1045,17 +1045,30 @@ class AddSlidesTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         document_id = str(kwargs.get("document_id") or "")
-        if document_id:
-            doc = self.store.get_document(document_id)
-            if doc and doc.format != "ppt":
-                return _dump_result(
-                    ToolResult(
-                        success=False,
-                        message=(
-                            "add_slides 仅用于 PPT 文档。Word 文档请使用 add_blocks。"
-                        ),
-                    )
+        if not document_id:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message="document_id is required.",
                 )
+            )
+        doc = self.store.get_document(document_id)
+        if doc is None:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=f"document_id={document_id} not found.",
+                )
+            )
+        if doc.format != "ppt":
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=(
+                        "add_slides 仅用于 PPT 文档。Word 文档请使用 add_blocks。"
+                    ),
+                )
+            )
         raw_slides = kwargs.get("slides") or []
         normalized_slides = normalize_slide_bullets(raw_slides)
         try:
