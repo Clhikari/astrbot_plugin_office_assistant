@@ -228,6 +228,14 @@ function renderImageSlide(
     );
   }
 
+  const segments = rawImagePath.replace(/\\/g, "/").split("/");
+  if (segments.includes("..")) {
+    throw new RenderCliError(
+      "INVALID_IMAGE_PATH",
+      `image_slide image_path must not contain directory traversal (..): ${rawImagePath}`,
+    );
+  }
+
   const imagePath = path.resolve(workspaceDir, rawImagePath);
 
   if (!fs.existsSync(imagePath)) {

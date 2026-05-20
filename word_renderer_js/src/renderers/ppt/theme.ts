@@ -7,13 +7,16 @@ export interface PptTheme {
   titleFontFace: string;
 }
 
+const DEFAULT_FONT = "Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif";
+const DEFAULT_TITLE_FONT = "Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif";
+
 const DEFAULT_THEME: PptTheme = {
   backgroundColor: "FFFFFF",
   titleColor: "1F2937",
   bodyColor: "374151",
   accentColor: "2563EB",
-  fontFace: "Microsoft YaHei",
-  titleFontFace: "Microsoft YaHei",
+  fontFace: DEFAULT_FONT,
+  titleFontFace: DEFAULT_TITLE_FONT,
 };
 
 const THEMES: Record<string, PptTheme> = {
@@ -23,16 +26,16 @@ const THEMES: Record<string, PptTheme> = {
     titleColor: "111827",
     bodyColor: "4B5563",
     accentColor: "6366F1",
-    fontFace: "Microsoft YaHei",
-    titleFontFace: "Microsoft YaHei",
+    fontFace: DEFAULT_FONT,
+    titleFontFace: DEFAULT_TITLE_FONT,
   },
   dark: {
     backgroundColor: "1F2937",
     titleColor: "F9FAFB",
     bodyColor: "D1D5DB",
     accentColor: "60A5FA",
-    fontFace: "Microsoft YaHei",
-    titleFontFace: "Microsoft YaHei",
+    fontFace: DEFAULT_FONT,
+    titleFontFace: DEFAULT_TITLE_FONT,
   },
 };
 

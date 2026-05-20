@@ -341,6 +341,10 @@ def test_node_renderer_produces_valid_pptx(workspace_root: Path):
             "INVALID_IMAGE_PATH",
         ),
         (
+            [{"type": "image_slide", "title": "I", "image_path": "../../outside.png"}],
+            "INVALID_IMAGE_PATH",
+        ),
+        (
             [{"type": "image_slide", "title": "I", "image_path": "no_such_file.png"}],
             "MISSING_IMAGE_FILE",
         ),
@@ -354,6 +358,7 @@ def test_node_renderer_produces_valid_pptx(workspace_root: Path):
         "missing_table_headers",
         "missing_image_path",
         "absolute_image_path",
+        "traversal_image_path",
         "missing_image_file",
         "unsupported_block",
     ],
