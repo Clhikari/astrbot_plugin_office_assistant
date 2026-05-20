@@ -94,6 +94,17 @@ def _build_add_blocks_tool(
     return AddBlocksTool(store=store)
 
 
+def _build_add_slides_tool(
+    store: DocumentSessionStore,
+    _before_export_hooks: list[BeforeExportHook],
+    _after_export_hooks: list[AfterExportHook],
+    _after_export: AfterExportCallback | None,
+) -> AstrBotDocumentTool:
+    from ..agent_tools.document_tools import AddSlidesTool
+
+    return AddSlidesTool(store=store)
+
+
 def _build_finalize_document_tool(
     store: DocumentSessionStore,
     _before_export_hooks: list[BeforeExportHook],
@@ -148,6 +159,17 @@ def _register_add_blocks_tool(
     from ..mcp_server.tools.add_blocks import register_add_blocks_tool
 
     register_add_blocks_tool(server, store)
+
+
+def _register_add_slides_tool(
+    server: FastMCP,
+    store: DocumentSessionStore,
+    _before_export_hooks: list[BeforeExportHook],
+    _after_export_hooks: list[AfterExportHook],
+) -> None:
+    from ..mcp_server.tools.add_slides import register_add_slides_tool
+
+    register_add_slides_tool(server, store)
 
 
 def _register_finalize_document_tool(
@@ -248,6 +270,11 @@ _DOCUMENT_TOOL_SPECS: tuple[DocumentToolSpec, ...] = (
         name="add_blocks",
         astrbot_factory=_build_add_blocks_tool,
         mcp_registrar=_register_add_blocks_tool,
+    ),
+    DocumentToolSpec(
+        name="add_slides",
+        astrbot_factory=_build_add_slides_tool,
+        mcp_registrar=_register_add_slides_tool,
     ),
     DocumentToolSpec(
         name="finalize_document",

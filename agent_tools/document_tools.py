@@ -458,11 +458,16 @@ class CreateDocumentTool(DocumentToolBase):
             document_style=dict(normalized_kwargs.get("document_style") or {}),
         )
         document = self.store.create_document(request)
+        next_step = (
+            "下一步只能调用 add_slides 添加幻灯片内容"
+            if document.format == "ppt"
+            else "下一步只能调用 add_blocks 添加内容"
+        )
         return _dump_result(
             ToolResult(
                 success=True,
                 message=(
-                    "文档会话已创建。下一步只能调用 add_blocks 添加内容，"
+                    f"文档会话已创建。{next_step}，"
                     "不要提前调用 finalize_document 或 export_document。"
                     f"{_CONTINUE_UNTIL_EXPORT}"
                 ),
@@ -915,10 +920,23 @@ class AddBlocksTool(DocumentToolBase):
                     message=_ADD_BLOCKS_EMPTY_KWARGS_HINT,
                 )
             )
+        document_id = str(kwargs.get("document_id") or "")
+        if document_id:
+            doc = self.store.get_document(document_id)
+            if doc and doc.format == "ppt":
+                return _dump_result(
+                    ToolResult(
+                        success=False,
+                        message=(
+                            "PPT 文档请使用 add_slides 而非 add_blocks。"
+                            "add_blocks 仅用于 Word 文档。"
+                        ),
+                    )
+                )
         try:
             raw_blocks = normalize_raw_block_payloads(kwargs.get("blocks") or [])
             request = AddBlocksRequest(
-                document_id=str(kwargs.get("document_id") or ""),
+                document_id=document_id,
                 blocks=raw_blocks,
             )
             document = self.store.add_blocks(request)
@@ -945,6 +963,148 @@ class AddBlocksTool(DocumentToolBase):
                 document=build_document_summary(document),
             )
         )
+
+
+@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
+class AddSlidesTool(DocumentToolBase):
+    name: str = "add_slides"
+    description: str = (
+        "Append slides to a PPT document. Only use this for documents created with format='ppt'. "
+        "Supported slide types: title_slide, content_slide, table_slide, image_slide. "
+        "For content_slide, bullets must be a plain string array, not objects."
+    )
+    parameters: dict = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "Target document_id returned by create_document(format='ppt').",
+                },
+                "slides": {
+                    "type": "array",
+                    "description": "Ordered slide list.",
+                    "items": {
+                        "type": "object",
+                        "required": ["type"],
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "title_slide",
+                                    "content_slide",
+                                    "table_slide",
+                                    "image_slide",
+                                ],
+                                "description": "Slide type.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Slide title. Required for title_slide and content_slide.",
+                            },
+                            "subtitle": {
+                                "type": "string",
+                                "description": "Subtitle for title_slide.",
+                            },
+                            "bullets": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Plain string bullet points for content_slide.",
+                            },
+                            "headers": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Table column headers for table_slide.",
+                            },
+                            "rows": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "description": "Table data rows for table_slide.",
+                            },
+                            "image_path": {
+                                "type": "string",
+                                "description": "Workspace-relative image path for image_slide.",
+                            },
+                            "caption": {
+                                "type": "string",
+                                "description": "Image caption for image_slide.",
+                            },
+                        },
+                    },
+                },
+            },
+            "required": ["document_id", "slides"],
+        }
+    )
+
+    async def call(
+        self, context: ContextWrapper[AstrAgentContext], **kwargs
+    ) -> ToolExecResult:
+        document_id = str(kwargs.get("document_id") or "")
+        if document_id:
+            doc = self.store.get_document(document_id)
+            if doc and doc.format != "ppt":
+                return _dump_result(
+                    ToolResult(
+                        success=False,
+                        message=(
+                            "add_slides 仅用于 PPT 文档。Word 文档请使用 add_blocks。"
+                        ),
+                    )
+                )
+        raw_slides = kwargs.get("slides") or []
+        normalized_slides = _normalize_slide_bullets(raw_slides)
+        try:
+            request = AddBlocksRequest(
+                document_id=document_id,
+                blocks=normalized_slides,
+            )
+            document = self.store.add_blocks(request)
+        except Exception as exc:
+            return _dump_result(
+                ToolResult(
+                    success=False,
+                    message=(
+                        "add_slides 失败。继续使用同一个 document_id 再次调用 "
+                        "add_slides，只修正报错字段。"
+                        f"原始错误：{exc}"
+                    ),
+                )
+            )
+        return _dump_result(
+            ToolResult(
+                success=True,
+                message=(
+                    "幻灯片已添加。如果还有更多幻灯片，继续调用 add_slides；"
+                    "全部完成后调用 finalize_document，再调用 export_document。"
+                    f"{_CONTINUE_UNTIL_EXPORT}"
+                ),
+                document=build_document_summary(document),
+            )
+        )
+
+
+def _normalize_slide_bullets(slides: list) -> list:
+    normalized = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            normalized.append(slide)
+            continue
+        slide = dict(slide)
+        if slide.get("type") == "content_slide" and "bullets" in slide:
+            bullets = slide["bullets"]
+            if isinstance(bullets, list):
+                slide["bullets"] = [
+                    item["text"]
+                    if isinstance(item, dict) and "text" in item
+                    else str(item)
+                    for item in bullets
+                ]
+        normalized.append(slide)
+    return normalized
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -1094,6 +1254,7 @@ class ExportDocumentTool(DocumentToolBase):
 
 __all__ = [
     "AddBlocksTool",
+    "AddSlidesTool",
     "CreateDocumentTool",
     "ExportDocumentTool",
     "FinalizeDocumentTool",
