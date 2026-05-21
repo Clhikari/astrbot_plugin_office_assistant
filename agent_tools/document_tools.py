@@ -26,9 +26,9 @@ from ..domain.document.contracts import (
     ToolResult,
     build_document_summary,
     build_header_footer_schema,
+    execute_add_slides,
     normalize_create_document_kwargs,
     normalize_raw_block_payloads,
-    normalize_slide_bullets,
 )
 
 
@@ -972,7 +972,7 @@ class AddSlidesTool(DocumentToolBase):
     description: str = (
         "Append slides to a PPT document. Only use this for documents created with format='ppt'. "
         "Supported slide types: title_slide, content_slide, table_slide, image_slide. "
-        "For content_slide, bullets must be a plain string array, not objects."
+        "For content_slide, bullets should be a string array. Objects with a 'text' key and numbers are also accepted."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -1045,60 +1045,20 @@ class AddSlidesTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         document_id = str(kwargs.get("document_id") or "")
-        if not document_id:
-            return _dump_result(
-                ToolResult(
-                    success=False,
-                    message="document_id is required.",
-                )
-            )
-        doc = self.store.get_document(document_id)
-        if doc is None:
-            return _dump_result(
-                ToolResult(
-                    success=False,
-                    message=f"document_id={document_id} not found.",
-                )
-            )
-        if doc.format != "ppt":
-            return _dump_result(
-                ToolResult(
-                    success=False,
-                    message=(
-                        "add_slides 仅用于 PPT 文档。Word 文档请使用 add_blocks。"
-                    ),
-                )
-            )
         raw_slides = kwargs.get("slides") or []
-        normalized_slides = normalize_slide_bullets(raw_slides)
-        try:
-            request = AddBlocksRequest(
-                document_id=document_id,
-                blocks=normalized_slides,
+        result = execute_add_slides(self.store, document_id, raw_slides)
+        if result.success:
+            result.message = (
+                "幻灯片已添加。如果还有更多幻灯片，继续调用 add_slides；"
+                "全部完成后调用 finalize_document，再调用 export_document。"
+                f"{_CONTINUE_UNTIL_EXPORT}"
             )
-            document = self.store.add_blocks(request)
-        except Exception as exc:
-            return _dump_result(
-                ToolResult(
-                    success=False,
-                    message=(
-                        "add_slides 失败。继续使用同一个 document_id 再次调用 "
-                        "add_slides，只修正报错字段。"
-                        f"原始错误：{exc}"
-                    ),
-                )
+        elif result.message and not result.message.startswith("document_id"):
+            result.message = (
+                "add_slides 失败。继续使用同一个 document_id 再次调用 "
+                f"add_slides，只修正报错字段。原始错误：{result.message}"
             )
-        return _dump_result(
-            ToolResult(
-                success=True,
-                message=(
-                    "幻灯片已添加。如果还有更多幻灯片，继续调用 add_slides；"
-                    "全部完成后调用 finalize_document，再调用 export_document。"
-                    f"{_CONTINUE_UNTIL_EXPORT}"
-                ),
-                document=build_document_summary(document),
-            )
-        )
+        return _dump_result(result)
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
