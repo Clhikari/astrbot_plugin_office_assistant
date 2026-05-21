@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -1815,6 +1815,41 @@ def normalize_slide_bullets(slides: list) -> list:
                 slide["bullets"] = clean
         normalized.append(slide)
     return normalized
+
+
+def execute_add_slides(
+    store: Any,
+    document_id: str,
+    slides: list,
+) -> ToolResult:
+    """Shared add_slides core logic for agent and MCP entry points.
+
+    Validates document_id, checks format, normalizes bullets, and appends slides.
+    Callers may override the success message for context-specific guidance.
+    """
+    if not document_id:
+        return ToolResult(success=False, message="document_id is required.")
+    doc = store.get_document(document_id)
+    if doc is None:
+        return ToolResult(
+            success=False, message=f"document_id={document_id} not found."
+        )
+    if doc.format != "ppt":
+        return ToolResult(
+            success=False,
+            message="add_slides 仅用于 PPT 文档。Word 文档请使用 add_blocks。",
+        )
+    normalized = normalize_slide_bullets(slides)
+    try:
+        request = AddBlocksRequest(document_id=document_id, blocks=normalized)
+        document = store.add_blocks(request)
+    except Exception as exc:
+        return ToolResult(success=False, message=str(exc))
+    return ToolResult(
+        success=True,
+        message="Slides added.",
+        document=build_document_summary(document),
+    )
 
 
 BlockGroupInput.model_rebuild()
