@@ -748,6 +748,12 @@ class TocBlock(BlockBase):
 
 
 def validate_workspace_relative_path(value: str) -> str:
+    """Reject absolute paths and directory traversal for image_path fields.
+
+    Defense-in-depth: the TS renderer (ppt/blocks.ts renderImageSlide) also
+    enforces these same rules. Both layers are intentionally kept in sync so
+    the system is safe regardless of which entry point is used.
+    """
     candidate = value.strip()
     if not candidate:
         raise ValueError("image_path must not be empty")
