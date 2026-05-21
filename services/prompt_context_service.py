@@ -36,6 +36,7 @@ SECTION_STATIC_EXCEL_SCRIPT_UNAVAILABLE = "static_excel_script_unavailable"
 SECTION_STATIC_WORKBOOK_TOOLS = "static_workbook_tools"
 SECTION_STATIC_WORKBOOK_TOOLS_DETAIL = "static_workbook_tools_detail"
 SECTION_SCENE_UPLOADED_CONTEXT = "scene_uploaded_context"
+SECTION_SCENE_IMAGE_ASSETS = "scene_image_assets"
 SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP = "dynamic_document_follow_up"
 SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP = "dynamic_workbook_follow_up"
 
@@ -293,4 +294,34 @@ class PromptContextService:
         return build_buffered_upload_prompt(
             upload_infos=upload_infos,
             user_instruction=user_instruction,
+        )
+
+    def build_image_assets_section(
+        self,
+        *,
+        images: list[dict],
+    ) -> PromptSection | None:
+        if not images:
+            return None
+        lines = [
+            "\n[System Notice] 当前会话已注册图片资源",
+            "以下图片可在 add_blocks(image) 或 add_slides(image_slide) 中使用：",
+        ]
+        for i, img in enumerate(images, 1):
+            note_str = f" — {img['note']}" if img.get("note") else ""
+            lines.append(
+                f"  {i}. `{img['ref']}` "
+                f"({img['width']}x{img['height']}, {img['format']}){note_str}"
+            )
+        lines.append("")
+        lines.append("规则：")
+        lines.append(
+            "- image block 的 path / image_slide 的 image_path 只能使用上述 `images/...` 引用"
+        )
+        lines.append("- 不确定用哪张图时，询问用户")
+        lines.append("- 不要编造不存在的图片路径")
+        return PromptSection(
+            name=SECTION_SCENE_IMAGE_ASSETS,
+            content="\n".join(lines),
+            target="prompt_suffix",
         )
