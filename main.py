@@ -465,6 +465,7 @@ class FileOperationPlugin(Star):
             source_paths=pending,
             selection=str(selection),
         )
+        self._runtime.upload_session_service.clear_pending_images(event)
         event.set_result(MessageEventResult().message(result).stop_event())
 
     @img.command("list")

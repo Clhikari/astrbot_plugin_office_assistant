@@ -443,14 +443,13 @@ class CommandService:
 
     def _resolve_img_ref(self, ref_or_idx: str, images: list[dict]) -> str | None:
         if ref_or_idx.startswith("images/"):
-            return ref_or_idx
+            return (
+                ref_or_idx if any(img["ref"] == ref_or_idx for img in images) else None
+            )
         try:
             idx = int(ref_or_idx)
             if 1 <= idx <= len(images):
                 return images[idx - 1]["ref"]
         except ValueError:
             pass
-        for img in images:
-            if img["ref"].endswith(ref_or_idx):
-                return img["ref"]
         return None

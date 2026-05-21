@@ -20,6 +20,7 @@ from ...document_core.models.blocks import (
     GroupBlock,
     HeadingBlock,
     HeroBannerBlock,
+    ImageBlock,
     ImageSlideBlock,
     ListBlock,
     MetricCard,
@@ -78,6 +79,7 @@ from .contracts import (
     ContentSlideInput,
     TableSlideInput,
     ImageSlideInput,
+    ImageInput,
     _coerce_table_input_rows_to_runtime,
     _normalize_output_filename,
 )
@@ -693,10 +695,26 @@ class DocumentSessionStore:
                 rows=[list(row) for row in block.rows],
             )
         if isinstance(block, ImageSlideInput):
+            image_file = self.workspace_dir / block.image_path
+            if not image_file.exists():
+                raise ValueError(
+                    f"图片文件不存在: {block.image_path}。请确认已通过 /img add 注册。"
+                )
             return ImageSlideBlock(
                 title=block.title,
                 image_path=block.image_path,
                 caption=block.caption,
+            )
+        if isinstance(block, ImageInput):
+            image_file = self.workspace_dir / block.path
+            if not image_file.exists():
+                raise ValueError(
+                    f"图片文件不存在: {block.path}。请确认已通过 /img add 注册。"
+                )
+            return ImageBlock(
+                path=block.path,
+                caption=block.caption,
+                width_px=block.width_px,
             )
         raise TypeError(f"Unsupported block input: {type(block)!r}")
 

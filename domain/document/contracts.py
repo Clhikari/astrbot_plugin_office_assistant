@@ -1641,9 +1641,25 @@ class ImageSlideInput(BaseModel):
     @field_validator("image_path")
     @classmethod
     def validate_image_path(cls, value: str) -> str:
-        from ...document_core.models.blocks import validate_workspace_relative_path
+        from ...document_core.models.blocks import validate_image_asset_ref
 
-        return validate_workspace_relative_path(value)
+        return validate_image_asset_ref(value)
+
+
+class ImageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["image"] = "image"
+    path: str
+    caption: str = ""
+    width_px: int | None = Field(default=None, gt=0)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        from ...document_core.models.blocks import validate_image_asset_ref
+
+        return validate_image_asset_ref(value)
 
 
 BlockInput = Annotated[
@@ -1661,6 +1677,7 @@ BlockInput = Annotated[
     | TocInput
     | BlockGroupInput
     | BlockColumnsInput
+    | ImageInput
     | TitleSlideInput
     | ContentSlideInput
     | TableSlideInput
