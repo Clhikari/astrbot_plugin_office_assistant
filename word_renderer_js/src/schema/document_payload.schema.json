@@ -667,6 +667,34 @@
             "if": {
               "properties": {
                 "type": {
+                  "const": "image"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^images/"
+                },
+                "caption": {
+                  "type": "string"
+                },
+                "width_px": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
                   "const": "title_slide"
                 }
               }
