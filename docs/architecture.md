@@ -67,7 +67,7 @@ flowchart TB
     REG["tools/registry.py"]
     MA["tools/mcp_adapter.py"]
     MCP["mcp_server<br/>document tools<br/>workbook tools"]
-    WC["Word Workflow Contract<br/>create_document<br/>add_blocks<br/>finalize_document<br/>export_document"]
+    WC["Document Workflow Contract<br/>create_document<br/>add_blocks (Word) / add_slides (PPT)<br/>finalize_document<br/>export_document"]
     WB["Workbook Workflow Contract<br/>create_workbook<br/>write_rows<br/>export_workbook"]
     XFT["Excel File Tool Contract<br/>read_workbook<br/>execute_excel_script"]
   end
@@ -81,11 +81,11 @@ flowchart TB
   REG --> WB
 
   subgraph DD["Document Domain"]
-    DC["document_core"]
+    DC["document_core<br/>DocumentFormat · DocumentModel<br/>Word blocks + PPT slide blocks<br/>WORD_BLOCK_TYPES / PPT_BLOCK_TYPES"]
     DS["domain/document/session_store.py"]
-    DB["domain/document/contracts.py<br/>tool_contracts.py<br/>hooks.py"]
+    DB["domain/document/contracts.py<br/>normalize_slide_bullets<br/>execute_add_slides<br/>hooks.py"]
     EP["domain/document/export_pipeline.py"]
-    RCFG["domain/document/render_backends.py"]
+    RCFG["domain/document/render_backends.py<br/>RenderableFormat"]
   end
 
   WC --> DS
@@ -133,7 +133,7 @@ flowchart TB
   ESS --> WSS
 
   subgraph RV["Rendering Conversion And Preview"]
-    WRJ["word_renderer_js<br/>Primary backend for complex Word rendering"]
+    WRJ["word_renderer_js<br/>Node CLI: Word (docx) + PPT (pptxgenjs)"]
     OG["services/office_generator.py"]
     PDFC["services/pdf_converter.py"]
     PV["services/preview_generator.py"]

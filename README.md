@@ -8,7 +8,7 @@
 
 **让你的聊天bot能够生成office文件**
 
-[![Version](https://img.shields.io/badge/version-v1.8.0-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
+[![Version](https://img.shields.io/badge/version-v1.9.0--beta-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-18%2B-5FA04E.svg)](https://nodejs.org/)
 
@@ -404,8 +404,14 @@ PDF → Excel 是抽表格的，扫描件、跨页表格、复杂版面都容易
 
 ### PPT
 
-- [ ] 独立的演示文稿模型
-- [ ] 标题页、内容页、结论页
+- [x] 独立的演示文稿模型
+- [x] 标题页、内容页、结论页
+- [ ] 表格页、图片页样式增强
+- [ ] 双栏布局 / 对比页
+- [ ] 图表页（柱状、折线、饼图）
+- [ ] PPT 专用字体与主题配置
+- [ ] Bullets 富文本（加粗、颜色、链接）
+- [ ] Speaker notes
 
 ---
 
