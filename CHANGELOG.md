@@ -4,6 +4,31 @@
 
 格式参考 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [v1.9.0-beta] - 2026-05-21
+
+### Added
+
+- PPT 渲染主链路：`create_document(format="ppt")` → `add_slides` → `finalize_document` → `export_document` → `.pptx`
+- 新增 `add_slides` 工具（Agent + MCP），专用于 PPT 文档，支持 title_slide / content_slide / table_slide / image_slide 四种 slide 类型
+- TS 渲染器基于 pptxgenjs 实现 PPT 生成，含默认主题系统（business_report / modern_minimal / dark）
+- `DocumentFormat` 类型集中定义，各模块统一引用
+- 守护测试：新增 block 类必须归入格式分组，否则测试失败
+- PPT 错误码集中到 `error-codes.ts`
+
+### Changed
+
+- `add_blocks` 仅用于 Word 文档；PPT 文档使用 `add_slides`
+- `normalize_slide_bullets` 集中到 contracts 层共享，只接受 str / number / `{text: ...}`
+- `_FORMAT_ALLOWED_BLOCK_TYPES` 白名单从 Pydantic 模型类自动推导
+- `render_backends.DocumentFormat` 重命名为 `RenderableFormat`
+- PPT 提示词从 `create_office_file` 引导移到新文档工具链
+
+### Fixed
+
+- `runtime_builder.py` 将 `ppt_preferred_backend` 从 `"python"` 改为 `"node"`
+- `AddSlidesTool` 和 MCP `add_slides` 显式校验 `document_id`
+- `image_path` 纵深防御：Python 层和 TS 层各自校验绝对路径和 `..` 遍历
+
 ## [v1.8.0] - 2026-05-18
 
 ### Added
