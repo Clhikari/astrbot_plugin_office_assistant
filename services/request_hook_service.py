@@ -132,6 +132,7 @@ class RequestHookService:
         | None = None,
         lookup_workbook_summary: Callable[[str], dict[str, object] | None]
         | None = None,
+        get_session_images: Callable[[AstrMessageEvent], list[dict]] | None = None,
     ) -> None:
         self._astrbot_context = astrbot_context
         self._auto_block_execution_tools = auto_block_execution_tools
@@ -142,6 +143,7 @@ class RequestHookService:
         self._consume_session_notice_once = consume_session_notice_once
         self._lookup_document_summary = lookup_document_summary
         self._lookup_workbook_summary = lookup_workbook_summary
+        self._get_session_images = get_session_images
         self.prompt_context_service = prompt_context_service or PromptContextService(
             allow_external_input_files=allow_external_input_files
         )
@@ -199,6 +201,7 @@ class RequestHookService:
             context,
             request_text=request_text,
         )
+        self._append_image_assets_context(context)
         self._append_excel_tool_guides(
             context,
             request_text=request_text,
@@ -299,6 +302,16 @@ class RequestHookService:
                 context,
                 self.prompt_context_service.build_document_tool_detail_section(),
             )
+
+    def _append_image_assets_context(self, context: NoticeBuildContext) -> None:
+        if not self._get_session_images:
+            return
+        images = self._get_session_images(context.event)
+        if not images:
+            return
+        section = self.prompt_context_service.build_image_assets_section(images=images)
+        if section:
+            self._append_notice_section(context, section)
 
     def _append_excel_tool_guides(
         self,

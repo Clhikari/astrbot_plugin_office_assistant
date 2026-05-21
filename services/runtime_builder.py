@@ -135,11 +135,13 @@ def build_plugin_runtime(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
     )
+    image_asset_service = ImageAssetService(plugin_data_path=plugin_data_path)
     request_pipeline_services = _build_request_pipeline_services(
         astrbot_context=context,
         settings=settings,
         upload_session_service=upload_session_service,
         access_policy_service=access_policy_service,
+        image_asset_service=image_asset_service,
         document_toolset=document_toolset,
         workbook_toolset=workbook_toolset,
         extract_upload_source=extract_upload_source,
@@ -155,7 +157,6 @@ def build_plugin_runtime(
         office_libs=office_libs,
         access_policy_service=access_policy_service,
     )
-    image_asset_service = ImageAssetService(plugin_data_path=plugin_data_path)
     command_service = CommandService(
         workspace_service=workspace_service,
         pdf_converter=pdf_converter,
@@ -250,6 +251,7 @@ def _build_request_pipeline_services(
     settings: PluginSettings,
     upload_session_service: UploadSessionService,
     access_policy_service: AccessPolicyService,
+    image_asset_service: ImageAssetService,
     document_toolset,
     workbook_toolset,
     extract_upload_source,
@@ -271,6 +273,9 @@ def _build_request_pipeline_services(
         prompt_context_service=prompt_context_service,
         lookup_document_summary=_build_document_summary_lookup(document_toolset),
         lookup_workbook_summary=_build_workbook_summary_lookup(workbook_toolset),
+        get_session_images=lambda event: image_asset_service.list_images(
+            upload_session_service.get_attachment_session_key(event)
+        ),
     )
     llm_request_policy = LLMRequestPolicy(
         document_toolset=document_toolset,
