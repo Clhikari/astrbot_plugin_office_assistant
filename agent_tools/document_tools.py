@@ -1037,7 +1037,7 @@ class AddSlidesTool(DocumentToolBase):
                             },
                             "image_path": {
                                 "type": "string",
-                                "description": "Workspace-relative image path for image_slide.",
+                                "description": "Registered image asset reference (images/...) for image_slide. Use /img add to register images first.",
                             },
                             "caption": {
                                 "type": "string",

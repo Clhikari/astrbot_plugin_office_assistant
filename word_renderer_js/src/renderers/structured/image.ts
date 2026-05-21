@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AlignmentType, ImageRun, Paragraph, TextRun } from "docx";
+import { imageSize } from "image-size";
 
 import { RenderCliError } from "../../core/errors";
 import { Block, FileChild, ThemeConfig } from "./types";
@@ -48,9 +49,20 @@ export function renderImageBlock(
   const imageData = fs.readFileSync(resolvedPath);
 
   const maxWidthPx = 580;
-  const displayWidth = widthPx && widthPx > 0
-    ? Math.min(widthPx, maxWidthPx)
-    : maxWidthPx;
+  let displayWidth: number;
+  let displayHeight: number;
+
+  const dimensions = imageSize(imageData);
+  const naturalWidth = dimensions.width || 580;
+  const naturalHeight = dimensions.height || 580;
+
+  if (widthPx && widthPx > 0) {
+    displayWidth = Math.min(widthPx, maxWidthPx);
+  } else {
+    displayWidth = Math.min(naturalWidth, maxWidthPx);
+  }
+  const scale = displayWidth / naturalWidth;
+  displayHeight = Math.round(naturalHeight * scale);
 
   const elements: FileChild[] = [];
 
@@ -62,7 +74,7 @@ export function renderImageBlock(
           data: imageData,
           transformation: {
             width: displayWidth,
-            height: displayWidth,
+            height: displayHeight,
           },
           altText: {
             title: caption || path.basename(imagePath),

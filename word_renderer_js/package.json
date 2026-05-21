@@ -10,6 +10,7 @@
     "ajv": "^8.17.1",
     "docx": "^9.5.1",
     "docxtemplater": "^3.67.1",
+    "image-size": "^2.0.2",
     "pizzip": "^3.2.0",
     "pptxgenjs": "^4.0.0"
   },

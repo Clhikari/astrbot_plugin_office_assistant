@@ -125,7 +125,7 @@ def build_document_tools_detail_notice() -> str:
         "  - `title_slide`：标题页，字段 `title`（必填）、`subtitle`（可选）\n"
         "  - `content_slide`：内容页，字段 `title`（必填）、`bullets`（纯字符串数组，必填）\n"
         "  - `table_slide`：表格页，字段 `title`（可选）、`headers`（必填）、`rows`（必填）\n"
-        "  - `image_slide`：图片页，字段 `title`（可选）、`image_path`（工作区相对路径，必填）、`caption`（可选）\n"
+        "  - `image_slide`：图片页，字段 `title`（可选）、`image_path`（已注册的 `images/...` 引用，必填）、`caption`（可选）\n"
         "- PPT 文档不能使用 add_blocks，Word 文档不能使用 add_slides\n"
         '- 典型流程：create_document(format="ppt", title="季度汇报") → add_slides(slides=[...]) → finalize_document → export_document\n'
     )
