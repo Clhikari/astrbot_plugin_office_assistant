@@ -1009,8 +1009,18 @@ class AddSlidesTool(DocumentToolBase):
                             },
                             "bullets": {
                                 "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Plain string bullet points for content_slide.",
+                                "items": {
+                                    "oneOf": [
+                                        {"type": "string"},
+                                        {"type": "number"},
+                                        {
+                                            "type": "object",
+                                            "properties": {"text": {"type": "string"}},
+                                            "required": ["text"],
+                                        },
+                                    ]
+                                },
+                                "description": "Bullet points for content_slide. Prefer plain strings; numbers and {text: ...} objects are also accepted.",
                             },
                             "headers": {
                                 "type": "array",
