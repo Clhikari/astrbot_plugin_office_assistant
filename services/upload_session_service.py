@@ -492,6 +492,10 @@ class UploadSessionService:
                             info["is_supported"],
                         ) = self._resolve_upload_type(original_name)
                     if src_path and src_path.exists():
+                        actual_name = original_name or name
+                        if self.is_image_file(actual_name):
+                            self.cache_pending_image(event, src_path)
+                            continue
                         info["source_path"] = str(src_path.resolve())
                         if info["is_supported"]:
                             stored_path = self._store_uploaded_file(
