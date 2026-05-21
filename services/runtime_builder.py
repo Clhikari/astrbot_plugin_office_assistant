@@ -38,6 +38,7 @@ from .file_delivery_service import FileDeliveryService
 from .file_read_service import FileReadService
 from .file_tool_service import FileToolService
 from .generated_file_delivery_service import GeneratedFileDeliveryService
+from .image_asset_service import ImageAssetService
 from .incoming_message_service import IncomingMessageService
 from .llm_request_policy import LLMRequestPolicy
 from .office_generate_service import OfficeGenerateService
@@ -154,6 +155,7 @@ def build_plugin_runtime(
         office_libs=office_libs,
         access_policy_service=access_policy_service,
     )
+    image_asset_service = ImageAssetService(plugin_data_path=plugin_data_path)
     command_service = CommandService(
         workspace_service=workspace_service,
         pdf_converter=pdf_converter,
@@ -165,6 +167,7 @@ def build_plugin_runtime(
         allow_local_excel_script=settings.allow_local_excel_script,
         reply_to_user=settings.reply_to_user,
         upload_session_service=upload_session_service,
+        image_asset_service=image_asset_service,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         is_all_users_allowed=access_policy_service.is_all_users_allowed,
         check_permission=access_policy_service.check_permission,
@@ -210,6 +213,7 @@ def build_plugin_runtime(
         file_tool_service=file_processing_services.file_tool_service,
         command_service=command_service,
         error_hook_service=error_hook_service,
+        image_asset_service=image_asset_service,
         message_buffer=message_buffer,
         incoming_message_service=incoming_message_service,
     )

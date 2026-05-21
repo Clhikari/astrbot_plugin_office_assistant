@@ -372,6 +372,7 @@ def _build_command_service(
         allow_local_excel_script=allow_local_excel_script,
         reply_to_user=reply_to_user,
         upload_session_service=upload_session_service or MagicMock(),
+        image_asset_service=MagicMock(),
         is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
         is_all_users_allowed=lambda: allow_all_users,
         check_permission=check_permission or (lambda _event: True),

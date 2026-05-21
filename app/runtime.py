@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from .settings import PluginSettings
 
 if TYPE_CHECKING:
+    from ..services.image_asset_service import ImageAssetService
     from ..services.message_buffer import MessageBuffer
     from ..services.office_generator import OfficeGenerator
     from ..services.pdf_converter import PDFConverter
@@ -63,6 +64,7 @@ class PluginRuntimeBundle:
     file_tool_service: FileToolService
     command_service: CommandService
     error_hook_service: ErrorHookService
+    image_asset_service: ImageAssetService
     message_buffer: MessageBuffer
     incoming_message_service: IncomingMessageService
 
