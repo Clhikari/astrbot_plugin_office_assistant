@@ -691,6 +691,11 @@ class ImageBlock(BlockBase):
     caption: str = ""
     width_px: int | None = Field(default=None, gt=0)
 
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return validate_image_asset_ref(value)
+
 
 class GroupBlock(BlockBase):
     type: Literal["group"] = "group"
@@ -768,6 +773,21 @@ def validate_workspace_relative_path(value: str) -> str:
     return candidate
 
 
+def validate_image_asset_ref(value: str) -> str:
+    """Validate that an image path is a managed asset pool reference.
+
+    Requires the images/ prefix, rejects absolute paths and traversal.
+    Actual file existence and index membership are checked at resolve time.
+    """
+    candidate = validate_workspace_relative_path(value)
+    if not candidate.startswith("images/"):
+        raise ValueError(
+            "image path must be a registered asset reference starting with 'images/'. "
+            "Use /img add to register uploaded images first."
+        )
+    return candidate
+
+
 class TitleSlideBlock(BlockBase):
     type: Literal["title_slide"] = "title_slide"
     title: str
@@ -796,7 +816,7 @@ class ImageSlideBlock(BlockBase):
     @field_validator("image_path")
     @classmethod
     def validate_image_path(cls, value: str) -> str:
-        return validate_workspace_relative_path(value)
+        return validate_image_asset_ref(value)
 
 
 DocumentBlock = Annotated[
