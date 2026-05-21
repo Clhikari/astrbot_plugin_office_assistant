@@ -21,6 +21,7 @@ import {
 } from "./blocks";
 import { renderAccentBox, renderMetricCards } from "./cards";
 import { renderHeroBannerBlock } from "./hero-banner";
+import { renderImageBlock } from "./image";
 import {
   EXTERNAL_WORD_STYLES_XML,
   ORDERED_NUMBERING_REFERENCE,
@@ -74,6 +75,8 @@ export async function renderStructuredDocument(
   const metadata = asObject(payload.metadata);
   const theme = resolveTheme(metadata);
   const structuredBlocks = payload.blocks.map((block) => block as Block);
+  const workspaceDir =
+    ((payload as Record<string, unknown>).workspace_dir as string) || "";
   const defaultHeaderFooter = asObject(metadata.header_footer);
   const defaultMargins = resolveDefaultSectionMargins(structuredBlocks);
   const sections: SectionState[] = [
@@ -99,6 +102,7 @@ export async function renderStructuredDocument(
     theme,
     sections,
     defaultHeaderFooter,
+    workspaceDir,
   );
 
   const doc = new Document({
@@ -160,6 +164,7 @@ function appendBlocksToSections(
   theme: ThemeConfig,
   sections: SectionState[],
   currentHeaderFooter: HeaderFooterConfig,
+  workspaceDir: string,
   hasTrailingContent = false,
   topLevelDeferredChildren?: FileChild[],
 ): HeaderFooterConfig {
@@ -191,6 +196,7 @@ function appendBlocksToSections(
         theme,
         sections,
         activeHeaderFooter,
+        workspaceDir,
         hasFollowingBlocks,
         deferredTrailingChildren,
       );
@@ -217,6 +223,7 @@ function appendBlocksToSections(
           theme,
           sections,
           activeHeaderFooter,
+          workspaceDir,
           hasFollowingBlocks || columnIndex < columns.length - 1,
           deferredTrailingChildren,
         );
@@ -231,7 +238,7 @@ function appendBlocksToSections(
         "Section state is empty",
       );
     }
-    section.children.push(...renderBlock(block, metadata, theme));
+    section.children.push(...renderBlock(block, metadata, theme, workspaceDir));
     const interBlockSpacingAfterPt = resolveInterBlockSpacingAfterPt(block, metadata);
     if (interBlockSpacingAfterPt > 0) {
       section.children.push(createSpacingParagraph({ afterPt: interBlockSpacingAfterPt }));
@@ -425,6 +432,7 @@ function renderBlock(
   block: Block,
   metadata: JsonObject,
   theme: ThemeConfig,
+  workspaceDir: string,
 ): FileChild[] {
   switch (block.type) {
     case "page_template":
@@ -449,6 +457,8 @@ function renderBlock(
       return [renderMetricCards(block, metadata, theme)];
     case "summary_card":
       return renderSummaryCard(block, metadata, theme);
+    case "image":
+      return renderImageBlock(block, theme, workspaceDir);
     default:
       throw new RenderCliError(
         "UNSUPPORTED_BLOCK",

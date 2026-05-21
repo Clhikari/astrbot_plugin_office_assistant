@@ -55,6 +55,9 @@ class UploadSessionService:
             tuple[str, str, str], tuple[set[str], float]
         ] = {}
         self._session_uploads_last_cleanup_ts = 0.0
+        self._pending_images_by_session: dict[
+            tuple[str, str, str], list[tuple[Path, float]]
+        ] = {}
 
     def get_attachment_session_key(
         self, event: AstrMessageEvent
@@ -540,3 +543,29 @@ class UploadSessionService:
             file_components=files,
             reentry_count=reentry_count,
         )
+
+    # ── Pending image cache for /img add ──
+
+    _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+    def cache_pending_image(self, event: AstrMessageEvent, source_path: Path) -> None:
+        session_key = self.get_attachment_session_key(event)
+        entries = self._pending_images_by_session.setdefault(session_key, [])
+        entries.append((source_path, time.time()))
+
+    def get_pending_images(self, event: AstrMessageEvent) -> list[Path]:
+        session_key = self.get_attachment_session_key(event)
+        now = time.time()
+        entries = self._pending_images_by_session.get(session_key, [])
+        valid = [
+            (p, ts) for p, ts in entries if now - ts < self._upload_session_ttl_seconds
+        ]
+        self._pending_images_by_session[session_key] = valid
+        return [p for p, _ in valid]
+
+    def clear_pending_images(self, event: AstrMessageEvent) -> None:
+        session_key = self.get_attachment_session_key(event)
+        self._pending_images_by_session.pop(session_key, None)
+
+    def is_image_file(self, filename: str) -> bool:
+        return Path(filename).suffix.lower() in self._IMAGE_SUFFIXES

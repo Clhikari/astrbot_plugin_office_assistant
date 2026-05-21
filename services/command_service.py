@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..constants import DOC_COMMAND_TRIGGER_EVENT_KEY
 from ..constants import ALL_OFFICE_SUFFIXES
 from ..domain.document.render_backends import NodeDocumentRenderBackend
 from ..utils import format_file_size
+
+if TYPE_CHECKING:
+    from .image_asset_service import ImageAssetService
 
 
 class CommandService:
@@ -20,6 +26,7 @@ class CommandService:
         allow_local_excel_script: bool,
         reply_to_user: bool,
         upload_session_service,
+        image_asset_service: ImageAssetService,
         is_group_feature_enabled,
         is_all_users_allowed,
         check_permission,
@@ -36,6 +43,7 @@ class CommandService:
         self._allow_local_excel_script = allow_local_excel_script
         self._reply_to_user = reply_to_user
         self._upload_session_service = upload_session_service
+        self._image_asset_service = image_asset_service
         self._is_group_feature_enabled = is_group_feature_enabled
         self._is_all_users_allowed = is_all_users_allowed
         self._check_permission = check_permission
@@ -305,3 +313,144 @@ class CommandService:
             upload_infos=upload_infos,
             user_instruction=user_instruction,
         )
+
+    # ── /img commands ──
+
+    def img_add(
+        self,
+        event,
+        *,
+        source_paths: list[Path],
+        selection: str = "",
+    ) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        if not source_paths:
+            return "当前没有待注册的图片。请先在聊天中上传图片，再使用 /img add。"
+
+        session_key = self._upload_session_service.get_attachment_session_key(event)
+
+        parts = selection.strip().split(maxsplit=1) if selection.strip() else []
+        selector = parts[0] if parts else "all"
+        note = parts[1] if len(parts) > 1 else ""
+
+        if selector == "all":
+            targets = list(enumerate(source_paths, 1))
+        else:
+            try:
+                idx = int(selector)
+            except ValueError:
+                note = selection.strip()
+                targets = list(enumerate(source_paths, 1))
+            else:
+                if idx < 1 or idx > len(source_paths):
+                    return f"序号超出范围。当前有 {len(source_paths)} 张待注册图片。"
+                targets = [(idx, source_paths[idx - 1])]
+
+        registered = []
+        errors = []
+        for idx, path in targets:
+            try:
+                info = self._image_asset_service.register_image(
+                    path,
+                    session_key=session_key,
+                    note=note,
+                    original_name=path.name,
+                )
+                registered.append(info)
+            except (ValueError, FileNotFoundError) as exc:
+                errors.append(f"图片 {idx}: {exc}")
+
+        lines = []
+        if registered:
+            lines.append(f"已注册 {len(registered)} 张图片：")
+            for info in registered:
+                size_str = format_file_size(info["size_bytes"])
+                lines.append(
+                    f"  {info['ref']} ({info['width']}x{info['height']}, {size_str})"
+                )
+        if errors:
+            lines.append("注册失败：")
+            lines.extend(f"  {e}" for e in errors)
+        return "\n".join(lines)
+
+    def img_list(self, event) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        session_key = self._upload_session_service.get_attachment_session_key(event)
+        images = self._image_asset_service.list_images(session_key)
+
+        if not images:
+            return "当前会话没有已注册的图片。使用 /img add 注册上传的图片。"
+
+        lines = [f"📷 当前会话图片（共 {len(images)} 张）："]
+        for i, info in enumerate(images, 1):
+            size_str = format_file_size(info["size_bytes"])
+            note_str = f" — {info['note']}" if info["note"] else ""
+            lines.append(
+                f"  {i}. {info['ref']}\n"
+                f"     原名: {info['original_name']} | "
+                f"{info['width']}x{info['height']} | {size_str}{note_str}"
+            )
+        return "\n".join(lines)
+
+    def img_note(self, event, args: str) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            return "用法: /img note <引用或序号> <新备注>"
+
+        ref_or_idx, new_note = parts[0], parts[1]
+        session_key = self._upload_session_service.get_attachment_session_key(event)
+        images = self._image_asset_service.list_images(session_key)
+
+        ref = self._resolve_img_ref(ref_or_idx, images)
+        if ref is None:
+            return f"未找到图片: {ref_or_idx}"
+
+        if self._image_asset_service.update_note(
+            ref, new_note, session_key=session_key
+        ):
+            return f"已更新备注: {ref} — {new_note}"
+        return f"更新失败: {ref}"
+
+    def img_clear(self, event, target: str = "") -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        session_key = self._upload_session_service.get_attachment_session_key(event)
+        target = target.strip()
+
+        if not target or target == "all":
+            count = self._image_asset_service.clear_images(session_key=session_key)
+            return f"已清理 {count} 张图片。" if count else "当前会话没有图片可清理。"
+
+        images = self._image_asset_service.list_images(session_key)
+        ref = self._resolve_img_ref(target, images)
+        if ref is None:
+            return f"未找到图片: {target}"
+
+        count = self._image_asset_service.clear_images(session_key=session_key, ref=ref)
+        return f"已清理: {ref}" if count else f"清理失败: {ref}"
+
+    def _resolve_img_ref(self, ref_or_idx: str, images: list[dict]) -> str | None:
+        if ref_or_idx.startswith("images/"):
+            return ref_or_idx
+        try:
+            idx = int(ref_or_idx)
+            if 1 <= idx <= len(images):
+                return images[idx - 1]["ref"]
+        except ValueError:
+            pass
+        for img in images:
+            if img["ref"].endswith(ref_or_idx):
+                return img["ref"]
+        return None

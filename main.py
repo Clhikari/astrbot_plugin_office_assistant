@@ -452,6 +452,39 @@ class FileOperationPlugin(Star):
             return
         event.stop_event()
 
+    @filter.command_group("img")
+    def img(self):
+        """管理当前会话的图片资源池。"""
+
+    @img.command("add")
+    async def img_add(self, event: AstrMessageEvent, selection: GreedyStr = ""):
+        """注册上传的图片到资源池。"""
+        pending = self._runtime.upload_session_service.get_pending_images(event)
+        result = self._runtime.command_service.img_add(
+            event,
+            source_paths=pending,
+            selection=str(selection),
+        )
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @img.command("list")
+    async def img_list(self, event: AstrMessageEvent):
+        """查看当前会话已注册的图片。"""
+        result = self._runtime.command_service.img_list(event)
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @img.command("note")
+    async def img_note(self, event: AstrMessageEvent, args: GreedyStr = ""):
+        """修改图片备注。"""
+        result = self._runtime.command_service.img_note(event, str(args))
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @img.command("clear")
+    async def img_clear(self, event: AstrMessageEvent, target: str = ""):
+        """清理会话图片。"""
+        result = self._runtime.command_service.img_clear(event, target)
+        event.set_result(MessageEventResult().message(result).stop_event())
+
     @on_plugin_error_filter()
     async def on_plugin_error(
         self,
