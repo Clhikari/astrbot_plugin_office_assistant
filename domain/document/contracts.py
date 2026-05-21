@@ -749,7 +749,7 @@ def _normalize_pptx_filename(
     return candidate
 
 
-def _normalize_output_filename(value: str, document_format: str) -> str:
+def _normalize_output_filename(value: str, document_format: DocumentFormat) -> str:
     if document_format == "ppt":
         return _normalize_pptx_filename(value)
     return _normalize_docx_filename(value)
