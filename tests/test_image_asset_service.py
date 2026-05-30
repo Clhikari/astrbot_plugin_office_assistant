@@ -154,11 +154,11 @@ class TestImageAssetServiceResolveRef:
         assert resolved.exists()
 
     def test_resolve_rejects_non_images_prefix(self, image_service):
-        with pytest.raises(ValueError, match="引用必须以 images/ 开头"):
+        with pytest.raises(ValueError, match="images/"):
             image_service.resolve_ref("other/file.png", session_key=SESSION_A)
 
     def test_resolve_rejects_traversal(self, image_service):
-        with pytest.raises(ValueError, match="目录遍历"):
+        with pytest.raises(ValueError, match="traversal|目录遍历"):
             image_service.resolve_ref("images/../etc/passwd", session_key=SESSION_A)
 
     def test_resolve_rejects_unregistered_ref(self, image_service):

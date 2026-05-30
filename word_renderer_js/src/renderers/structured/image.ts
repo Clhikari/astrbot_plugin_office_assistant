@@ -52,16 +52,7 @@ export function renderImageBlock(
   let displayWidth: number;
   let displayHeight: number;
 
-  let dimensions: ReturnType<typeof imageSize>;
-  try {
-    dimensions = imageSize(imageData);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new RenderCliError(
-      "UNSUPPORTED_IMAGE_TYPE",
-      `Unsupported image data for embedding: ${imagePath}. ${reason}`,
-    );
-  }
+  const dimensions = readImageDimensions(imageData, imagePath);
   const naturalWidth = dimensions.width || 580;
   const naturalHeight = dimensions.height || 580;
 
@@ -129,4 +120,16 @@ export function renderImageBlock(
   }
 
   return elements;
+}
+
+function readImageDimensions(imageData: Uint8Array, imagePath: string) {
+  try {
+    return imageSize(imageData);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new RenderCliError(
+      "UNSUPPORTED_IMAGE_TYPE",
+      `Unsupported image data for embedding: ${imagePath}. ${reason}`,
+    );
+  }
 }
