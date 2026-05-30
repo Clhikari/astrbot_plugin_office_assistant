@@ -316,11 +316,38 @@ class CommandService:
 
     # ── /img commands ──
 
+    @staticmethod
+    def resolve_img_add_selection(
+        source_count: int, selection: str = ""
+    ) -> tuple[list[int], str, str]:
+        if source_count <= 0:
+            return (
+                [],
+                "",
+                "当前没有待注册的图片。请在消息中附带图片并发送 /img add，或先上传图片再使用 /img add。",
+            )
+
+        parts = selection.strip().split(maxsplit=1) if selection.strip() else []
+        selector = parts[0] if parts else "all"
+        note = parts[1] if len(parts) > 1 else ""
+
+        if source_count == 1 and selection.strip() and not note:
+            return [0], selection.strip(), ""
+        if selector == "all":
+            return list(range(source_count)), note, ""
+        try:
+            idx = int(selector)
+        except ValueError:
+            return list(range(source_count)), selection.strip(), ""
+        if idx < 1 or idx > source_count:
+            return [], note, f"序号超出范围。当前有 {source_count} 张待注册图片。"
+        return [idx - 1], note, ""
+
     def img_add(
         self,
         event,
         *,
-        source_items: list[tuple[Path, str]],
+        source_items: list[tuple[Path, str] | tuple[Path, str, object]],
         selection: str = "",
     ) -> str:
         access_error = self._require_access(event)
@@ -331,30 +358,23 @@ class CommandService:
             return "当前没有待注册的图片。请在消息中附带图片并发送 /img add，或先上传图片再使用 /img add。"
 
         session_key = self._upload_session_service.get_attachment_session_key(event)
+        normalized_items: list[tuple[Path, str, object]] = []
+        for item in source_items:
+            path = Path(item[0])
+            original_name = str(item[1] or "")
+            resource = item[2] if len(item) >= 3 else path
+            normalized_items.append((path, original_name, resource))
 
-        parts = selection.strip().split(maxsplit=1) if selection.strip() else []
-        selector = parts[0] if parts else "all"
-        note = parts[1] if len(parts) > 1 else ""
-
-        if len(source_items) == 1 and selection.strip() and not note:
-            note = selection.strip()
-            targets = list(enumerate(source_items, 1))
-        elif selector == "all":
-            targets = list(enumerate(source_items, 1))
-        else:
-            try:
-                idx = int(selector)
-            except ValueError:
-                note = selection.strip()
-                targets = list(enumerate(source_items, 1))
-            else:
-                if idx < 1 or idx > len(source_items):
-                    return f"序号超出范围。当前有 {len(source_items)} 张待注册图片。"
-                targets = [(idx, source_items[idx - 1])]
+        target_indices, note, selection_error = self.resolve_img_add_selection(
+            len(normalized_items), selection
+        )
+        if selection_error:
+            return selection_error
+        targets = [(idx + 1, normalized_items[idx]) for idx in target_indices]
 
         registered = []
         errors = []
-        for idx, (path, original_name) in targets:
+        for idx, (path, original_name, _resource) in targets:
             try:
                 info = self._image_asset_service.register_image(
                     path,
@@ -365,6 +385,10 @@ class CommandService:
                 registered.append(info)
             except (ValueError, FileNotFoundError) as exc:
                 errors.append(f"图片 {idx}: {exc}")
+
+        self._upload_session_service.clear_pending_image_resources(
+            event, [resource for _idx, (_path, _name, resource) in targets]
+        )
 
         lines = []
         if registered:

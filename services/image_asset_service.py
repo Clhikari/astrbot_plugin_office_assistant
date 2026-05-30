@@ -11,7 +11,6 @@ from typing import TypedDict
 from astrbot.api import logger
 
 ALLOWED_FORMATS = {"PNG", "JPEG", "WEBP"}
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 SVG_EXTENSIONS = {".svg", ".svgz"}
 
 

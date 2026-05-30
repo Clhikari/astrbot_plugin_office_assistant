@@ -39,6 +39,8 @@ SECTION_SCENE_UPLOADED_CONTEXT = "scene_uploaded_context"
 SECTION_SCENE_IMAGE_ASSETS = "scene_image_assets"
 SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP = "dynamic_document_follow_up"
 SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP = "dynamic_workbook_follow_up"
+MAX_IMAGE_ASSET_PROMPT_ITEMS = 12
+MAX_IMAGE_ASSET_NOTE_CHARS = 80
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,12 +305,21 @@ class PromptContextService:
     ) -> PromptSection | None:
         if not images:
             return None
+        omitted_count = max(0, len(images) - MAX_IMAGE_ASSET_PROMPT_ITEMS)
+        visible_images = images[-MAX_IMAGE_ASSET_PROMPT_ITEMS:]
         lines = [
             "\n[System Notice] 当前会话已注册图片资源",
             "以下图片可在 add_blocks(image) 或 add_slides(image_slide) 中使用：",
         ]
-        for i, img in enumerate(images, 1):
-            note_str = f" — {img['note']}" if img.get("note") else ""
+        if omitted_count:
+            lines.append(
+                f"仅列出最近 {len(visible_images)} 张，另有 {omitted_count} 张较早图片未列出；需要时让用户用 /img list 查看。"
+            )
+        for i, img in enumerate(visible_images, 1):
+            note = str(img.get("note") or "")
+            if len(note) > MAX_IMAGE_ASSET_NOTE_CHARS:
+                note = note[: MAX_IMAGE_ASSET_NOTE_CHARS - 1] + "…"
+            note_str = f" — {note}" if note else ""
             lines.append(
                 f"  {i}. `{img['ref']}` "
                 f"({img['width']}x{img['height']}, {img['format']}){note_str}"

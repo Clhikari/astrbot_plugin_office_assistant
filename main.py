@@ -535,18 +535,23 @@ class FileOperationPlugin(Star):
 
         all_resources = inline_images + pending_resources
 
-        # 把 Comp.Image / Comp.File 解析为本地文件路径 + 原始文件名
-        source_items: list[tuple[Path, str]] = []
+        # 把 Path / Comp.Image / Comp.File 解析为本地文件路径 + 原始文件名，
+        # 同时保留原始 resource，供 CommandService 精准清理 pending cache。
+        source_items: list[tuple[Path, str, object]] = []
         for resource in all_resources:
             try:
-                if isinstance(resource, Comp.Image):
+                if isinstance(resource, Path):
+                    source_items.append((resource, resource.name, resource))
+                elif isinstance(resource, Comp.Image):
                     file_path = await resource.convert_to_file_path()
                     if file_path:
-                        source_items.append((Path(file_path), ""))
+                        source_items.append((Path(file_path), "", resource))
                 elif isinstance(resource, Comp.File):
                     file_path = await resource.get_file()
                     if file_path:
-                        source_items.append((Path(file_path), resource.name or ""))
+                        source_items.append(
+                            (Path(file_path), resource.name or "", resource)
+                        )
             except Exception as exc:
                 resource_name = getattr(resource, "name", None)
                 resource_id = getattr(resource, "id", None)
@@ -564,7 +569,6 @@ class FileOperationPlugin(Star):
             source_items=source_items,
             selection=str(selection),
         )
-        self._runtime.upload_session_service.clear_pending_images(event)
         event.set_result(MessageEventResult().message(result).stop_event())
 
     @img.command("list")

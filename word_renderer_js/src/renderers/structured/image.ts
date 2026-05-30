@@ -52,7 +52,16 @@ export function renderImageBlock(
   let displayWidth: number;
   let displayHeight: number;
 
-  const dimensions = imageSize(imageData);
+  let dimensions: ReturnType<typeof imageSize>;
+  try {
+    dimensions = imageSize(imageData);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new RenderCliError(
+      "UNSUPPORTED_IMAGE_TYPE",
+      `Unsupported image data for embedding: ${imagePath}. ${reason}`,
+    );
+  }
   const naturalWidth = dimensions.width || 580;
   const naturalHeight = dimensions.height || 580;
 
