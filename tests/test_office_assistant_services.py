@@ -65,6 +65,7 @@ from astrbot_plugin_office_assistant.services.image_asset_service import (
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
     SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
+    SECTION_SCENE_IMAGE_ASSETS,
     SECTION_SCENE_UPLOADED_CONTEXT,
     SECTION_STATIC_DOCUMENT_TOOLS,
     SECTION_STATIC_DOCUMENT_TOOLS_DETAIL,
@@ -4442,6 +4443,32 @@ def test_prompt_context_service_build_section_trace_tolerates_length_mismatch():
     assert f"[len={SECTION_STATIC_DOCUMENT_TOOLS}:11]" in trace
     assert "[groups=static:11]" in trace
     assert "[total=11]" in trace
+
+
+def test_prompt_context_service_limits_image_assets_section():
+    service = PromptContextService(allow_external_input_files=False)
+    long_note = "这是一段很长的图片备注" * 12
+    images = [
+        {
+            "ref": f"images/img_{idx:02d}.png",
+            "width": 10,
+            "height": 10,
+            "format": "PNG",
+            "note": long_note,
+        }
+        for idx in range(14)
+    ]
+
+    section = service.build_image_assets_section(images=images)
+
+    assert section is not None
+    assert section.name == SECTION_SCENE_IMAGE_ASSETS
+    assert "另有 2 张较早图片未列出" in section.content
+    assert "`images/img_00.png`" not in section.content
+    assert "`images/img_01.png`" not in section.content
+    assert "`images/img_02.png`" in section.content
+    assert long_note not in section.content
+    assert "…" in section.content
 
 
 def test_upload_prompt_service_builds_instructional_notice_for_readable_files():

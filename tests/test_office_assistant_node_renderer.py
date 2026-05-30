@@ -271,6 +271,129 @@ def test_node_render_backend_renders_sections_and_table_styles(workspace_root: P
     assert "PAGE" not in loaded_doc.sections[1].footer._element.xml
 
 
+def test_node_word_renderer_embeds_image_block_and_caption(workspace_root: Path):
+    docx = pytest.importorskip("docx")
+
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-render-backend-word-image",
+    )
+    renderer_entry = _node_renderer_entry()
+    images_dir = workspace_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_path = images_dir / "wide.png"
+    _write_png(image_path, width=640, height=320)
+
+    output_path = workspace_dir / "word-image.docx"
+    payload_path = workspace_dir / "word-image.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "format": "word",
+                "render_mode": "structured",
+                "document_id": "node-word-image",
+                "workspace_dir": str(workspace_dir),
+                "metadata": _business_report_metadata(title="Word 图片测试"),
+                "blocks": [
+                    {
+                        "type": "image",
+                        "path": "images/wide.png",
+                        "caption": "图片说明",
+                        "width_px": 320,
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    loaded_doc = docx.Document(output_path)
+    assert any(paragraph.text == "图片说明" for paragraph in loaded_doc.paragraphs)
+    ns = {
+        "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+    }
+    with zipfile.ZipFile(output_path) as zf:
+        names = zf.namelist()
+        document_xml = zf.read("word/document.xml").decode("utf-8")
+    assert any(name.startswith("word/media/") for name in names)
+    assert "图片说明" in document_xml
+    root = ET.fromstring(document_xml)
+    extent = root.find(".//wp:inline/wp:extent", ns)
+    assert extent is not None
+    rendered_ratio = int(extent.attrib["cx"]) / int(extent.attrib["cy"])
+    assert rendered_ratio == pytest.approx(2.0, rel=0.001)
+
+
+@pytest.mark.parametrize(
+    "block,expected_code",
+    [
+        ({"type": "image", "path": ""}, "SCHEMA_VALIDATION_FAILED"),
+        ({"type": "image", "path": "outside.png"}, "SCHEMA_VALIDATION_FAILED"),
+        ({"type": "image", "path": "images/../outside.png"}, "INVALID_IMAGE_PATH"),
+        ({"type": "image", "path": "images/missing.png"}, "MISSING_IMAGE_FILE"),
+        ({"type": "image", "path": "images/bad.png"}, "UNSUPPORTED_IMAGE_TYPE"),
+    ],
+    ids=[
+        "missing_path",
+        "invalid_prefix",
+        "traversal_path",
+        "missing_file",
+        "unsupported_image_data",
+    ],
+)
+def test_node_word_renderer_rejects_invalid_image_blocks(
+    workspace_root: Path, block: dict, expected_code: str
+):
+    workspace_dir = _make_workspace(workspace_root, "pytest-node-word-image-errors")
+    renderer_entry = _node_renderer_entry()
+    images_dir = workspace_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    (images_dir / "bad.png").write_bytes(b"not an image")
+
+    output_path = workspace_dir / "word-image-error.docx"
+    payload_path = workspace_dir / "word-image-error.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "format": "word",
+                "render_mode": "structured",
+                "document_id": "node-word-image-error",
+                "workspace_dir": str(workspace_dir),
+                "metadata": _business_report_metadata(title="Word 图片错误测试"),
+                "blocks": [block],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    error_payload = json.loads(completed.stderr)
+    assert error_payload["code"] == expected_code
+
+
 def test_node_renderer_produces_valid_pptx(workspace_root: Path):
     workspace_dir = _make_workspace(
         workspace_root,

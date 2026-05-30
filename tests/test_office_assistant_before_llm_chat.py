@@ -39,6 +39,7 @@ from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.entities import ProviderRequest
 from conftest import build_notice_once_callback as _build_notice_once_callback
+from tests._docx_test_helpers import _write_png
 
 _REQUEST_FUNC_TOOL_UNSET = object()
 
@@ -250,6 +251,31 @@ async def test_before_llm_chat_timeout_preserves_newer_pending_images():
         assert upload_session_service.get_pending_image_resources(event) == [
             newer_resource
         ]
+
+
+@pytest.mark.asyncio
+async def test_img_add_registers_selected_path_pending_and_preserves_rest():
+    async with _managed_plugin() as managed:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        runtime = managed.plugin._runtime
+        first_image = runtime.plugin_data_path / "pending-first.png"
+        second_image = runtime.plugin_data_path / "pending-second.png"
+        _write_png(first_image, width=10, height=10)
+        _write_png(second_image, width=10, height=10)
+        runtime.upload_session_service.cache_pending_image(event, first_image)
+        runtime.upload_session_service.cache_pending_image(event, second_image)
+
+        await managed.plugin.img_add(event, "1 封面图")
+
+        session_key = runtime.upload_session_service.get_attachment_session_key(event)
+        images = runtime.image_asset_service.list_images(session_key)
+        pending = runtime.upload_session_service.get_pending_image_resources(event)
+        assert len(images) == 1
+        assert images[0]["note"] == "封面图"
+        assert images[0]["original_name"] == "pending-first.png"
+        assert pending == [second_image]
 
 
 @pytest.mark.asyncio
