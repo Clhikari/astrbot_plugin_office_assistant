@@ -32,6 +32,7 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     ExportDocumentRequest,
     FinalizeDocumentRequest,
     ImageInput,
+    ImageSlideInput,
     SectionListInput,
     SectionParagraphInput,
     SectionTableInput,
@@ -741,6 +742,44 @@ def _register_workspace_image(workspace_dir: Path, name: str) -> str:
     images_dir.mkdir(parents=True, exist_ok=True)
     _write_png(images_dir / name, width=10, height=10)
     return f"images/{name}"
+
+
+def test_add_blocks_raises_for_missing_image_path(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-missing-image-path")
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    document = store.create_document(CreateDocumentRequest(title="Missing image path"))
+
+    with pytest.raises(ValueError, match="图片文件不存在"):
+        store.add_blocks(
+            AddBlocksRequest(
+                document_id=document.document_id,
+                blocks=[
+                    BlockHeadingInput(text="Heading"),
+                    ImageInput(path="images/nonexistent.png"),
+                ],
+            )
+        )
+
+
+def test_add_blocks_raises_for_missing_image_slide_path(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-missing-image-slide-path")
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    document = store.create_document(
+        CreateDocumentRequest(title="Missing slide image", format="ppt")
+    )
+
+    with pytest.raises(ValueError, match="图片文件不存在"):
+        store.add_blocks(
+            AddBlocksRequest(
+                document_id=document.document_id,
+                blocks=[
+                    ImageSlideInput(
+                        image_path="images/nonexistent-slide.png",
+                        title="Slide 1",
+                    )
+                ],
+            )
+        )
 
 
 def test_add_blocks_drops_adjacent_duplicate_image_across_calls(workspace_root: Path):

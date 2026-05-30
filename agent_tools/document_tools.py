@@ -19,10 +19,14 @@ from ..domain.document.render_backends import (
 from ..domain.document.session_store import DocumentSessionStore
 from ..domain.document.contracts import (
     AddBlocksRequest,
+    BlockColumnsInput,
+    BlockGroupInput,
     CreateDocumentRequest,
     ExportDocumentRequest,
     ExportDocumentResult,
     FinalizeDocumentRequest,
+    ImageInput,
+    ImageSlideInput,
     ToolResult,
     build_document_summary,
     build_header_footer_schema,
@@ -43,6 +47,23 @@ _ADD_BLOCKS_EMPTY_KWARGS_HINT = (
     "未转义字符，在上游解析失败后被降级为空参数。请拆分内容为多次 add_blocks 调用："
     "每次只放 3-5 个短 block，长段落可分段写入，使用同一个 document_id 继续调用。"
 )
+ImageRefValidator = Callable[[ContextWrapper[AstrAgentContext] | None, str], None]
+
+
+def _iter_image_asset_refs(blocks: list[Any]):
+    for block in blocks:
+        if isinstance(block, ImageInput):
+            yield block.path
+            continue
+        if isinstance(block, ImageSlideInput):
+            yield block.image_path
+            continue
+        if isinstance(block, BlockGroupInput):
+            yield from _iter_image_asset_refs(block.blocks)
+            continue
+        if isinstance(block, BlockColumnsInput):
+            for column in block.columns:
+                yield from _iter_image_asset_refs(column.blocks)
 
 
 _STYLE_SCHEMA = {
@@ -217,6 +238,17 @@ _RICH_LIST_ITEM_PUBLIC_SCHEMA = {
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class DocumentToolBase(FunctionTool[AstrAgentContext]):
     store: DocumentSessionStore = Field(default_factory=DocumentSessionStore)
+    image_ref_validator: ImageRefValidator | None = None
+
+    def _validate_image_refs(
+        self,
+        context: ContextWrapper[AstrAgentContext] | None,
+        blocks: list[Any],
+    ) -> None:
+        if self.image_ref_validator is None:
+            return
+        for ref in _iter_image_asset_refs(blocks):
+            self.image_ref_validator(context, ref)
 
 
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
@@ -940,6 +972,7 @@ class AddBlocksTool(DocumentToolBase):
                 document_id=document_id,
                 blocks=raw_blocks,
             )
+            self._validate_image_refs(context, request.blocks)
             document = self.store.add_blocks(request)
         except Exception as exc:
             return _dump_result(
@@ -1056,7 +1089,12 @@ class AddSlidesTool(DocumentToolBase):
     ) -> ToolExecResult:
         document_id = str(kwargs.get("document_id") or "")
         raw_slides = kwargs.get("slides") or []
-        result = execute_add_slides(self.store, document_id, raw_slides)
+        result = execute_add_slides(
+            self.store,
+            document_id,
+            raw_slides,
+            validate_blocks=lambda blocks: self._validate_image_refs(context, blocks),
+        )
         if result.success:
             result.message = (
                 "幻灯片已添加。如果还有更多幻灯片，继续调用 add_slides；"

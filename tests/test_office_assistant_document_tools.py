@@ -157,6 +157,99 @@ async def test_add_blocks_failure_message_keeps_model_on_same_tool(
 
 
 @pytest.mark.asyncio
+async def test_add_blocks_tool_validates_image_refs_before_store(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-image-ref-validator"
+    )
+    images_dir = workspace_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    _write_png(images_dir / "other-session.png", width=10, height=10)
+    seen_refs: list[str] = []
+
+    def reject_ref(_context, ref: str) -> None:
+        seen_refs.append(ref)
+        raise ValueError("图片引用不属于当前会话")
+
+    toolset = build_document_toolset(
+        workspace_dir=workspace_dir,
+        image_ref_validator=reject_ref,
+    )
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Image Ref Validation",
+        )
+    )
+    failed = json.loads(
+        await tool_by_name["add_blocks"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            blocks=[
+                {
+                    "type": "image",
+                    "path": "images/other-session.png",
+                }
+            ],
+        )
+    )
+
+    assert failed["success"] is False
+    assert "图片引用不属于当前会话" in failed["message"]
+    assert seen_refs == ["images/other-session.png"]
+
+
+@pytest.mark.asyncio
+async def test_add_slides_tool_validates_image_refs_before_store(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root, "pytest-agent-tools-slide-image-ref-validator"
+    )
+    images_dir = workspace_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    _write_png(images_dir / "other-session.png", width=10, height=10)
+    seen_refs: list[str] = []
+
+    def reject_ref(_context, ref: str) -> None:
+        seen_refs.append(ref)
+        raise ValueError("图片引用不属于当前会话")
+
+    toolset = build_document_toolset(
+        workspace_dir=workspace_dir,
+        image_ref_validator=reject_ref,
+    )
+    tool_by_name = {tool.name: tool for tool in toolset.tools}
+
+    created = json.loads(
+        await tool_by_name["create_document"].call(
+            None,
+            title="Slide Image Ref Validation",
+            format="ppt",
+        )
+    )
+    failed = json.loads(
+        await tool_by_name["add_slides"].call(
+            None,
+            document_id=created["document"]["document_id"],
+            slides=[
+                {
+                    "type": "image_slide",
+                    "image_path": "images/other-session.png",
+                }
+            ],
+        )
+    )
+
+    assert failed["success"] is False
+    assert "图片引用不属于当前会话" in failed["message"]
+    assert seen_refs == ["images/other-session.png"]
+
+
+@pytest.mark.asyncio
 async def test_add_blocks_returns_hint_when_dispatcher_degrades_to_empty_kwargs(
     workspace_root: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -221,6 +221,38 @@ async def test_before_llm_chat_clears_pending_images_after_delay_timeout():
 
 
 @pytest.mark.asyncio
+async def test_before_llm_chat_timeout_preserves_newer_pending_images():
+    config = _build_config()
+    config["file_settings"]["image_llm_delay_seconds"] = 0.01
+    async with _managed_plugin(config=config) as managed:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        old_resource = Path("old.png")
+        newer_resource = Path("newer.png")
+        event._has_pending_images = True
+        event._buffered = False
+        event._pending_image_resources = [old_resource]
+        req = _build_provider_request(
+            "看看这张图",
+            tool_names=["existing_tool"],
+        )
+        upload_session_service = managed.plugin._runtime.upload_session_service
+        session_key = upload_session_service.get_attachment_session_key(event)
+        upload_session_service._pending_images_by_session[session_key] = [
+            (old_resource, time.time()),
+            (newer_resource, time.time()),
+        ]
+
+        await managed.plugin.before_llm_chat(event, req)
+
+        assert event._has_pending_images is False
+        assert upload_session_service.get_pending_image_resources(event) == [
+            newer_resource
+        ]
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_keeps_document_id_follow_up_prompt_lightweight():
     async with _managed_plugin() as managed:
         event = _build_event(

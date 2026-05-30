@@ -45,10 +45,13 @@ class ImageAssetService:
         return []
 
     def _save_index(self) -> None:
-        self._index_path.write_text(
-            json.dumps(self._index, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        tmp_path = self._index_path.with_suffix(self._index_path.suffix + ".tmp")
+        data = json.dumps(self._index, ensure_ascii=False, indent=2)
+        try:
+            tmp_path.write_text(data, encoding="utf-8")
+            tmp_path.replace(self._index_path)
+        except OSError as exc:
+            logger.warning("failed to persist image asset index: %s", exc)
 
     def register_image(
         self,
