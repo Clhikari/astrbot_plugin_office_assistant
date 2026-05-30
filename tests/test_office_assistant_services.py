@@ -6270,6 +6270,87 @@ async def test_incoming_message_service_caches_image_file_as_pending():
 
 
 @pytest.mark.asyncio
+async def test_incoming_message_service_caches_image_component_as_pending():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    image_comp = Comp.Image(file="avatar.png")
+    event.message_obj.message = [image_comp]
+
+    await service.handle_file_message(event)
+
+    cache_pending.assert_called_once_with(event, image_comp)
+    assert event._has_pending_images is True
+    assert event._pending_image_resources == [image_comp]
+    remember_recent_text.assert_not_called()
+    message_buffer.is_buffering.assert_not_called()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_service_does_not_cache_image_with_command_text():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = False
+    remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    image_comp = Comp.Image(file="avatar.png")
+    event.message_obj.message = [image_comp, Comp.Plain("/img list")]
+
+    await service.handle_file_message(event)
+
+    cache_pending.assert_not_called()
+    remember_recent_text.assert_called_once_with(event)
+    message_buffer.is_buffering.assert_called_once_with(event)
+    message_buffer.add_message.assert_not_awaited()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_service_does_not_cache_unsupported_image_file():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = False
+    remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    event.message_obj.message = [Comp.File(name="avatar.gif", file="avatar.gif")]
+
+    await service.handle_file_message(event)
+
+    cache_pending.assert_not_called()
+    remember_recent_text.assert_called_once_with(event)
+    message_buffer.is_buffering.assert_called_once_with(event)
+    message_buffer.add_message.assert_not_awaited()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_incoming_message_service_buffers_follow_up_plain_text_while_file_waits():
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)

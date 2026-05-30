@@ -4,8 +4,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
-
-_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+from .image_file_utils import is_supported_image_filename
 
 
 class IncomingMessageService:
@@ -45,8 +44,7 @@ class IncomingMessageService:
                 continue
             if isinstance(component, Comp.File):
                 name = component.name or ""
-                suffix = Path(name).suffix.lower() if name else ""
-                if suffix in _IMAGE_SUFFIXES:
+                if name and is_supported_image_filename(name):
                     has_image = True
                     continue
                 return False

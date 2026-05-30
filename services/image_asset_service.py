@@ -10,6 +10,8 @@ from typing import TypedDict
 
 from astrbot.api import logger
 
+from ..document_core.models.blocks import validate_image_asset_ref
+
 ALLOWED_FORMATS = {"PNG", "JPEG", "WEBP"}
 SVG_EXTENSIONS = {".svg", ".svgz"}
 
@@ -174,10 +176,10 @@ class ImageAssetService:
         *,
         session_key: tuple[str, str, str],
     ) -> Path:
-        if not ref.startswith("images/"):
-            raise ValueError(f"无效的图片引用: {ref}。引用必须以 images/ 开头。")
-        if ".." in ref.replace("\\", "/").split("/"):
-            raise ValueError("图片引用不允许包含目录遍历 (..)")
+        try:
+            ref = validate_image_asset_ref(ref)
+        except ValueError as exc:
+            raise ValueError(f"无效的图片引用: {ref}。{exc}") from exc
 
         sk = list(session_key)
         found = any(

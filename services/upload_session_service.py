@@ -11,6 +11,7 @@ from astrbot.core.utils.active_event_registry import active_event_registry
 from astrbot.core.platform.message_type import MessageType
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
+from .image_file_utils import is_supported_image_filename
 from .message_buffer import BufferedMessage
 from .upload_prompt_service import UploadInfo, UploadPromptService
 
@@ -554,8 +555,6 @@ class UploadSessionService:
 
     # ── Pending image cache for /img add ──
 
-    _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
-
     def cache_pending_image(self, event: AstrMessageEvent, source_path: Path) -> None:
         self.cache_pending_image_resource(event, source_path)
 
@@ -607,4 +606,4 @@ class UploadSessionService:
             self._pending_images_by_session.pop(session_key, None)
 
     def is_image_file(self, filename: str) -> bool:
-        return Path(filename).suffix.lower() in self._IMAGE_SUFFIXES
+        return is_supported_image_filename(filename)
