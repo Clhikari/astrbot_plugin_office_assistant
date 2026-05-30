@@ -321,6 +321,66 @@ def test_node_renderer_produces_valid_pptx(workspace_root: Path):
         assert any("ppt/presentation.xml" in n for n in names)
 
 
+def test_node_ppt_renderer_preserves_image_slide_aspect_ratio(workspace_root: Path):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-render-backend-ppt-image-ratio",
+    )
+    renderer_entry = _node_renderer_entry()
+    images_dir = workspace_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_path = images_dir / "wide.png"
+    _write_png(image_path, width=1280, height=799)
+
+    output_path = workspace_dir / "image-ratio.pptx"
+    payload_path = workspace_dir / "image-ratio.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "render_mode": "structured",
+                "document_id": "node-structured-ppt-image-ratio",
+                "format": "ppt",
+                "workspace_dir": str(workspace_dir),
+                "metadata": _business_report_metadata(title="PPT 图片比例测试"),
+                "blocks": [
+                    {
+                        "type": "image_slide",
+                        "title": "图片页",
+                        "image_path": "images/wide.png",
+                        "caption": "保持原图比例",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(renderer_entry), str(payload_path), str(output_path)],
+        cwd=str(renderer_entry.parents[1]),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    ns = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    }
+    with zipfile.ZipFile(output_path) as zf:
+        slide = ET.fromstring(zf.read("ppt/slides/slide1.xml"))
+    pic = slide.find(".//p:pic", ns)
+    assert pic is not None
+    ext = pic.find(".//a:xfrm/a:ext", ns)
+    assert ext is not None
+    rendered_ratio = int(ext.attrib["cx"]) / int(ext.attrib["cy"])
+    assert rendered_ratio == pytest.approx(1280 / 799, rel=0.001)
+
+
 @pytest.mark.parametrize(
     "blocks,expected_code",
     [

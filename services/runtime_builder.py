@@ -185,6 +185,7 @@ def build_plugin_runtime(
         message_buffer=message_buffer,
         remember_recent_text=upload_session_service.remember_recent_text,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
+        cache_pending_image_resource=upload_session_service.cache_pending_image_resource,
     )
 
     return PluginRuntimeBundle(

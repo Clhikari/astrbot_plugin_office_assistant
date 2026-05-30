@@ -416,7 +416,11 @@ async def test_write_rows_tool_passes_options_to_store(workspace_root: Path):
             workbook_id=workbook.workbook_id,
             sheet="Data",
             rows=[["h1", "h2"], ["v1", "v2"]],
-            options={"freeze_panes": "A2", "column_widths": {"A": 20}, "autofilter": True},
+            options={
+                "freeze_panes": "A2",
+                "column_widths": {"A": 20},
+                "autofilter": True,
+            },
         )
     )
 

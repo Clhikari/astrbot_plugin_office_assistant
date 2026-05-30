@@ -56,7 +56,7 @@ class UploadSessionService:
         ] = {}
         self._session_uploads_last_cleanup_ts = 0.0
         self._pending_images_by_session: dict[
-            tuple[str, str, str], list[tuple[Path, float]]
+            tuple[str, str, str], list[tuple[object, float]]
         ] = {}
 
     def get_attachment_session_key(
@@ -523,6 +523,9 @@ class UploadSessionService:
             logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
             return
 
+        if not files:
+            return
+
         upload_infos = await self._ensure_upload_infos(event, files)
 
         logger.info(
@@ -553,19 +556,30 @@ class UploadSessionService:
     _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
     def cache_pending_image(self, event: AstrMessageEvent, source_path: Path) -> None:
+        self.cache_pending_image_resource(event, source_path)
+
+    def cache_pending_image_resource(
+        self, event: AstrMessageEvent, resource: object
+    ) -> None:
+        """Cache a Path or Comp.Image component for later registration via /img add."""
         session_key = self.get_attachment_session_key(event)
         entries = self._pending_images_by_session.setdefault(session_key, [])
-        entries.append((source_path, time.time()))
+        entries.append((resource, time.time()))
 
-    def get_pending_images(self, event: AstrMessageEvent) -> list[Path]:
+    def get_pending_image_resources(self, event: AstrMessageEvent) -> list[object]:
         session_key = self.get_attachment_session_key(event)
         now = time.time()
         entries = self._pending_images_by_session.get(session_key, [])
         valid = [
-            (p, ts) for p, ts in entries if now - ts < self._upload_session_ttl_seconds
+            (r, ts) for r, ts in entries if now - ts < self._upload_session_ttl_seconds
         ]
         self._pending_images_by_session[session_key] = valid
-        return [p for p, _ in valid]
+        return [r for r, _ in valid]
+
+    def get_pending_images(self, event: AstrMessageEvent) -> list[Path]:
+        return [
+            r for r in self.get_pending_image_resources(event) if isinstance(r, Path)
+        ]
 
     def clear_pending_images(self, event: AstrMessageEvent) -> None:
         session_key = self.get_attachment_session_key(event)

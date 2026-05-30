@@ -152,6 +152,7 @@ npm run build
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | 文件合并等待时间秒 (`message_buffer_seconds`) | float | 4 | 上传文件后等一会儿，把同一波的文件合在一起 |
+| 图片等待 /img add 时间秒 (`image_buffer_seconds`) | float | 4 | 上传图片后等这段时间，期间收到 `/img add` 就注册到资源池，否则把图片释放给 LLM 正常聊天 |
 | 旧流程文本缓存时间秒 (`recent_text_ttl_seconds`) | int | 20 | 主要影响"文件和文字一起进来"的老用法，一般不用动 |
 | 上传文件保留时间秒 (`upload_session_ttl_seconds`) | int | 600 | 上传完文件后在当前会话里保留多久，供 `/doc` 命令使用 |
 

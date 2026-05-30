@@ -59,6 +59,9 @@ from astrbot_plugin_office_assistant.services.runtime_builder import (
 from astrbot_plugin_office_assistant.services.excel_intent_router import (
     ExcelIntentRouter,
 )
+from astrbot_plugin_office_assistant.services.image_asset_service import (
+    ImageAssetService,
+)
 from astrbot_plugin_office_assistant.services.prompt_context_service import (
     SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
     SECTION_DYNAMIC_WORKBOOK_FOLLOW_UP,
@@ -349,6 +352,7 @@ def _build_command_service(
     auto_block_execution_tools: bool = True,
     allow_local_excel_script: bool = False,
     reply_to_user: bool = True,
+    image_asset_service=None,
     is_group_feature_enabled=None,
     check_permission=None,
     group_feature_disabled_error=None,
@@ -372,7 +376,7 @@ def _build_command_service(
         allow_local_excel_script=allow_local_excel_script,
         reply_to_user=reply_to_user,
         upload_session_service=upload_session_service or MagicMock(),
-        image_asset_service=MagicMock(),
+        image_asset_service=image_asset_service or MagicMock(),
         is_group_feature_enabled=is_group_feature_enabled or (lambda _event: True),
         is_all_users_allowed=lambda: allow_all_users,
         check_permission=check_permission or (lambda _event: True),
@@ -654,6 +658,13 @@ def _write_png(path: Path) -> None:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9kAAAAASUVORK5CYII="
     )
     path.write_bytes(png_bytes)
+
+
+def _write_valid_png(path: Path, *, color: str = "red") -> None:
+    from PIL import Image
+
+    img = Image.new("RGB", (10, 10), color=color)
+    img.save(path, format="PNG")
 
 
 def _import_docx():
@@ -5176,6 +5187,71 @@ async def test_command_service_doc_use_supports_multiple_file_ids():
         assert "根据这些文件整理成正式汇报" in queued_event.message_str
 
 
+def test_command_service_img_add_treats_single_numeric_argument_as_note():
+    upload_session_service = _build_upload_session_service()
+
+    with _managed_workspace_service(name="command-img-single-note") as managed:
+        image_asset_service = ImageAssetService(plugin_data_path=managed.workspace_dir)
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
+            plugin_data_path=managed.workspace_dir,
+            upload_session_service=upload_session_service,
+            image_asset_service=image_asset_service,
+        )
+        image_path = managed.workspace_dir / "sample.png"
+        _write_valid_png(image_path)
+
+        event = _build_event(sender_id="user-a")
+        result = service.img_add(
+            event,
+            source_items=[(image_path, "sample.png")],
+            selection="2",
+        )
+
+        images = image_asset_service.list_images(
+            upload_session_service.get_attachment_session_key(event)
+        )
+        assert "已注册 1 张图片" in result
+        assert len(images) == 1
+        assert images[0]["note"] == "2"
+        assert images[0]["original_name"] == "sample.png"
+
+
+def test_command_service_img_add_keeps_numeric_selector_for_multiple_images():
+    upload_session_service = _build_upload_session_service()
+
+    with _managed_workspace_service(name="command-img-multi-select") as managed:
+        image_asset_service = ImageAssetService(plugin_data_path=managed.workspace_dir)
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
+            plugin_data_path=managed.workspace_dir,
+            upload_session_service=upload_session_service,
+            image_asset_service=image_asset_service,
+        )
+        first_image = managed.workspace_dir / "first.png"
+        second_image = managed.workspace_dir / "second.png"
+        _write_valid_png(first_image, color="red")
+        _write_valid_png(second_image, color="blue")
+
+        event = _build_event(sender_id="user-a")
+        result = service.img_add(
+            event,
+            source_items=[
+                (first_image, "first.png"),
+                (second_image, "second.png"),
+            ],
+            selection="2",
+        )
+
+        images = image_asset_service.list_images(
+            upload_session_service.get_attachment_session_key(event)
+        )
+        assert "已注册 1 张图片" in result
+        assert len(images) == 1
+        assert images[0]["note"] == ""
+        assert images[0]["original_name"] == "second.png"
+
+
 @pytest.mark.asyncio
 async def test_upload_session_service_requeue_uses_configured_wake_prefix():
     context = MagicMock()
@@ -6125,6 +6201,7 @@ async def test_incoming_message_service_buffers_supported_file_and_stops_event()
         message_buffer=message_buffer,
         remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=MagicMock(),
     )
     event = _build_event()
     event.stop_event = MagicMock()
@@ -6138,25 +6215,28 @@ async def test_incoming_message_service_buffers_supported_file_and_stops_event()
 
 
 @pytest.mark.asyncio
-async def test_incoming_message_service_ignores_non_file_messages_during_buffer():
+async def test_incoming_message_service_caches_image_file_as_pending():
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
     message_buffer.is_buffering.return_value = True
     remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
     service = IncomingMessageService(
         message_buffer=message_buffer,
         remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
     )
     event = _build_event()
     event.stop_event = MagicMock()
-    event.message_obj.message = [Comp.File(name="avatar.png", file="avatar.png")]
+    file_comp = Comp.File(name="avatar.png", file="avatar.png")
+    event.message_obj.message = [file_comp]
 
     await service.handle_file_message(event)
 
+    cache_pending.assert_called_once_with(event, file_comp)
     remember_recent_text.assert_not_called()
-    message_buffer.is_buffering.assert_called_once_with(event)
-    message_buffer.add_message.assert_not_awaited()
+    message_buffer.is_buffering.assert_not_called()
     event.stop_event.assert_not_called()
 
 
@@ -6170,6 +6250,7 @@ async def test_incoming_message_service_buffers_follow_up_plain_text_while_file_
         message_buffer=message_buffer,
         remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=MagicMock(),
     )
     event = _build_event()
     event.stop_event = MagicMock()
@@ -6193,6 +6274,7 @@ async def test_incoming_message_service_ignores_command_like_text_while_file_wai
         message_buffer=message_buffer,
         remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=MagicMock(),
     )
     event = _build_event()
     event.stop_event = MagicMock()
@@ -6216,6 +6298,7 @@ async def test_incoming_message_service_remembers_plain_text_when_no_buffer_acti
         message_buffer=message_buffer,
         remember_recent_text=remember_recent_text,
         is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=MagicMock(),
     )
     event = _build_event()
     event.stop_event = MagicMock()

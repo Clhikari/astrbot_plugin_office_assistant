@@ -180,6 +180,7 @@ class DocumentSessionStore:
             self._drop_duplicate_document_title_headings,
             self._move_landscape_intro_paragraphs_before_section_break,
             self._promote_heading_before_table_to_caption,
+            self._drop_adjacent_duplicate_images,
         ]
 
     def _evict_expired_locked(self) -> None:
@@ -453,6 +454,30 @@ class DocumentSessionStore:
             normalized.append(current)
             index += 1
 
+        return normalized
+
+    @staticmethod
+    def _drop_adjacent_duplicate_images(
+        context: BlockNormalizationContext,
+    ) -> list[BlockInput]:
+        # 模型偶尔会把同一张图连着加两次（常因前序 heading 被去重导致 block_count
+        # 没按预期增长，模型误判图没加上而重试）。这里丢弃路径相同且相邻的图片，
+        # 既覆盖单次批量内的重复，也覆盖与上一批末尾图片的跨调用重复。
+        # 仅针对“相邻”，不影响同一张图用在文档不同位置的合法用法。
+        stored_blocks = context.document.blocks
+        last_stored = stored_blocks[-1] if stored_blocks else None
+        previous_image_path = (
+            last_stored.path if isinstance(last_stored, ImageBlock) else None
+        )
+
+        normalized: list[BlockInput] = []
+        for current in context.incoming_blocks:
+            current_path = current.path if isinstance(current, ImageInput) else None
+            if current_path is not None and current_path == previous_image_path:
+                logger.debug("[文件管理] 丢弃相邻重复图片 %s", current_path)
+                continue
+            normalized.append(current)
+            previous_image_path = current_path
         return normalized
 
     def _build_runtime_block(

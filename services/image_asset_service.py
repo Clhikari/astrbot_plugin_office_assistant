@@ -84,24 +84,30 @@ class ImageAssetService:
                 f"不支持的图片格式: {pil_format}。仅接受 PNG、JPEG、WebP。"
             )
 
-        ext_map = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
+        ext_map = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".png"}
         real_ext = ext_map[pil_format]
+        stored_format = "PNG" if pil_format == "WEBP" else pil_format
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d")
         short_id = uuid.uuid4().hex[:8]
         filename = f"img_{timestamp}_{short_id}{real_ext}"
         dest_path = self._images_dir / filename
 
-        shutil.copy2(source_path, dest_path)
+        if pil_format == "WEBP":
+            # docx/pptx 无法嵌入 webp，注册时转存为 png 保证文档生成兼容
+            with Image.open(source_path) as img:
+                img.save(dest_path, format="PNG")
+        else:
+            shutil.copy2(source_path, dest_path)
 
         ref = f"images/{filename}"
         info: ImageAssetInfo = {
             "ref": ref,
-            "original_name": original_name or source_path.name,
+            "original_name": original_name or "",
             "note": note,
             "width": width,
             "height": height,
-            "format": pil_format,
+            "format": stored_format,
             "size_bytes": dest_path.stat().st_size,
             "registered_at": time.time(),
             "session_key": list(session_key),

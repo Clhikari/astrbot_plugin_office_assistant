@@ -56,6 +56,21 @@ export function renderImageBlock(
   const naturalWidth = dimensions.width || 580;
   const naturalHeight = dimensions.height || 580;
 
+  type DocxImageType = "png" | "jpg" | "gif" | "bmp";
+  const typeMap: Record<string, DocxImageType> = {
+    png: "png",
+    jpg: "jpg",
+    gif: "gif",
+    bmp: "bmp",
+  };
+  const docxType = dimensions.type ? typeMap[dimensions.type] : undefined;
+  if (!docxType) {
+    throw new RenderCliError(
+      "UNSUPPORTED_IMAGE_TYPE",
+      `Unsupported image type for embedding: ${dimensions.type ?? "unknown"} (${imagePath}). Supported: png, jpg, gif, bmp.`,
+    );
+  }
+
   if (widthPx && widthPx > 0) {
     displayWidth = Math.min(widthPx, maxWidthPx);
   } else {
@@ -71,6 +86,7 @@ export function renderImageBlock(
       alignment: AlignmentType.CENTER,
       children: [
         new ImageRun({
+          type: docxType,
           data: imageData,
           transformation: {
             width: displayWidth,
@@ -81,7 +97,7 @@ export function renderImageBlock(
             description: caption || imagePath,
             name: path.basename(imagePath),
           },
-        } as ConstructorParameters<typeof ImageRun>[0]),
+        }),
       ],
     }),
   );

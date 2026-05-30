@@ -14,6 +14,7 @@ from astrbot_plugin_office_assistant.document_core.models.blocks import (
     BusinessReviewCoverData,
     GroupBlock,
     HeroBannerBlock,
+    ImageBlock,
     PageTemplateBlock,
     ParagraphBlock,
 )
@@ -30,6 +31,7 @@ from astrbot_plugin_office_assistant.domain.document.contracts import (
     CreateDocumentRequest,
     ExportDocumentRequest,
     FinalizeDocumentRequest,
+    ImageInput,
     SectionListInput,
     SectionParagraphInput,
     SectionTableInput,
@@ -732,3 +734,71 @@ def test_document_session_store_builds_prompt_summary_with_unknown_block_type():
     summary = DocumentSessionStore._build_prompt_summary_locked(document)
 
     assert summary["latest_block_types"] == ["unknown"]
+
+
+def _register_workspace_image(workspace_dir: Path, name: str) -> str:
+    images_dir = workspace_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    _write_png(images_dir / name, width=10, height=10)
+    return f"images/{name}"
+
+
+def test_add_blocks_drops_adjacent_duplicate_image_across_calls(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-dup-image-across-calls")
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    ref = _register_workspace_image(workspace_dir, "img_dup.png")
+    document = store.create_document(CreateDocumentRequest(title="测试图片展示"))
+
+    store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[BlockHeadingInput(text="标题"), ImageInput(path=ref)],
+        )
+    )
+    store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[ImageInput(path=ref)],
+        )
+    )
+
+    image_blocks = [b for b in document.blocks if isinstance(b, ImageBlock)]
+    assert len(image_blocks) == 1
+
+
+def test_add_blocks_drops_adjacent_duplicate_image_within_batch(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-dup-image-within-batch")
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    ref = _register_workspace_image(workspace_dir, "img_dup.png")
+    document = store.create_document(CreateDocumentRequest(title="批内重复"))
+
+    store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[ImageInput(path=ref), ImageInput(path=ref)],
+        )
+    )
+
+    image_blocks = [b for b in document.blocks if isinstance(b, ImageBlock)]
+    assert len(image_blocks) == 1
+
+
+def test_add_blocks_keeps_same_image_when_not_adjacent(workspace_root: Path):
+    workspace_dir = _make_workspace(workspace_root, "pytest-dup-image-not-adjacent")
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    ref = _register_workspace_image(workspace_dir, "img_reuse.png")
+    document = store.create_document(CreateDocumentRequest(title="非相邻复用"))
+
+    store.add_blocks(
+        AddBlocksRequest(
+            document_id=document.document_id,
+            blocks=[
+                ImageInput(path=ref),
+                BlockHeadingInput(text="中间章节"),
+                ImageInput(path=ref),
+            ],
+        )
+    )
+
+    image_blocks = [b for b in document.blocks if isinstance(b, ImageBlock)]
+    assert len(image_blocks) == 2
