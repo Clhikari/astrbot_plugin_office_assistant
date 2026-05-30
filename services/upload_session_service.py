@@ -1,5 +1,6 @@
 import copy
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 import astrbot.api.message_components as Comp
@@ -584,6 +585,26 @@ class UploadSessionService:
     def clear_pending_images(self, event: AstrMessageEvent) -> None:
         session_key = self.get_attachment_session_key(event)
         self._pending_images_by_session.pop(session_key, None)
+
+    def clear_pending_image_resources(
+        self, event: AstrMessageEvent, resources: Iterable[object]
+    ) -> None:
+        session_key = self.get_attachment_session_key(event)
+        resource_ids = {id(resource) for resource in resources}
+        if not resource_ids:
+            return
+        entries = self._pending_images_by_session.get(session_key)
+        if not entries:
+            return
+        kept = [
+            (resource, ts)
+            for resource, ts in entries
+            if id(resource) not in resource_ids
+        ]
+        if kept:
+            self._pending_images_by_session[session_key] = kept
+        else:
+            self._pending_images_by_session.pop(session_key, None)
 
     def is_image_file(self, filename: str) -> bool:
         return Path(filename).suffix.lower() in self._IMAGE_SUFFIXES

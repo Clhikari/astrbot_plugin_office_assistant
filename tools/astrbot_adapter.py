@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,6 +58,7 @@ def build_document_toolset_from_registry(
     after_export_hooks: list[AfterExportHook] | None = None,
     render_backend_config: DocumentRenderBackendConfig | None = None,
     default_document_style: dict[str, object] | None = None,
+    image_ref_validator: Callable[[object, str], None] | None = None,
 ) -> DocumentToolSet:
     store = build_document_store(
         workspace_dir=workspace_dir,
@@ -75,6 +76,10 @@ def build_document_toolset_from_registry(
         )
         for spec in get_document_tool_specs()
     ]
+    if image_ref_validator is not None:
+        for tool in tools:
+            if hasattr(tool, "image_ref_validator"):
+                tool.image_ref_validator = image_ref_validator
     return DocumentToolSet(tools, document_store=store)
 
 

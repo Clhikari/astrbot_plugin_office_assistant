@@ -125,17 +125,26 @@ def build_plugin_runtime(
         reply_to_user=settings.reply_to_user,
         exported_message=MSG_DOCUMENT_EXPORTED,
     )
+    image_asset_service = ImageAssetService(plugin_data_path=plugin_data_path)
+
+    def validate_document_image_ref(tool_context, ref: str) -> None:
+        event = getattr(getattr(tool_context, "context", None), "event", None)
+        if event is None:
+            return
+        session_key = upload_session_service.get_attachment_session_key(event)
+        image_asset_service.resolve_ref(ref, session_key=session_key)
+
     document_toolset = build_document_toolset(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
         render_backend_config=document_render_backend_config,
         default_document_style=default_document_style,
+        image_ref_validator=validate_document_image_ref,
     )
     workbook_toolset = _build_workbook_toolset(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
     )
-    image_asset_service = ImageAssetService(plugin_data_path=plugin_data_path)
     request_pipeline_services = _build_request_pipeline_services(
         astrbot_context=context,
         settings=settings,

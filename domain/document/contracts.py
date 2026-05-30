@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -1838,6 +1838,8 @@ def execute_add_slides(
     store: Any,
     document_id: str,
     slides: list,
+    *,
+    validate_blocks: Callable[[list[BlockInput]], None] | None = None,
 ) -> ToolResult:
     """Shared add_slides core logic for agent and MCP entry points.
 
@@ -1859,6 +1861,8 @@ def execute_add_slides(
     normalized = normalize_slide_bullets(slides)
     try:
         request = AddBlocksRequest(document_id=document_id, blocks=normalized)
+        if validate_blocks is not None:
+            validate_blocks(request.blocks)
         document = store.add_blocks(request)
     except Exception as exc:
         return ToolResult(success=False, message=str(exc))

@@ -6235,6 +6235,8 @@ async def test_incoming_message_service_caches_image_file_as_pending():
     await service.handle_file_message(event)
 
     cache_pending.assert_called_once_with(event, file_comp)
+    assert event._has_pending_images is True
+    assert event._pending_image_resources == [file_comp]
     remember_recent_text.assert_not_called()
     message_buffer.is_buffering.assert_not_called()
     event.stop_event.assert_not_called()

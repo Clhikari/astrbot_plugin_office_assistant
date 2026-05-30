@@ -81,10 +81,13 @@ class IncomingMessageService:
 
         if not has_supported_file:
             if self._is_image_message(event):
+                pending_resources = []
                 for component in event.message_obj.message:
                     if isinstance(component, (Comp.Image, Comp.File)):
                         self._cache_pending_image_resource(event, component)
+                        pending_resources.append(component)
                 setattr(event, "_has_pending_images", True)
+                setattr(event, "_pending_image_resources", pending_resources)
                 logger.debug("[文件管理] 图片已缓存为待注册资源，消息正常流向 LLM")
                 return
             if self._message_buffer.is_buffering(event):

@@ -230,23 +230,37 @@ class FileOperationPlugin(Star):
             import asyncio
 
             wait = self._runtime.settings.image_llm_delay
-            pending = self._runtime.upload_session_service.get_pending_image_resources(
-                event
+            pending_for_event = list(
+                getattr(event, "_pending_image_resources", None) or []
             )
-            if pending and wait > 0:
-                logger.debug("[文件管理] 图片消息等待 %.1f 秒，看是否有 /img add", wait)
-                await asyncio.sleep(wait)
-                pending = (
+            if not pending_for_event:
+                pending_for_event = (
                     self._runtime.upload_session_service.get_pending_image_resources(
                         event
                     )
                 )
-                if not pending:
+            if pending_for_event and wait > 0:
+                logger.debug("[文件管理] 图片消息等待 %.1f 秒，看是否有 /img add", wait)
+                await asyncio.sleep(wait)
+                current_pending = (
+                    self._runtime.upload_session_service.get_pending_image_resources(
+                        event
+                    )
+                )
+                event_resource_ids = {id(resource) for resource in pending_for_event}
+                remaining_for_event = [
+                    resource
+                    for resource in current_pending
+                    if id(resource) in event_resource_ids
+                ]
+                if not remaining_for_event:
                     logger.debug("[文件管理] 图片已被 /img add 消费，跳过 LLM 请求")
                     event.stop_event()
                     return
                 logger.debug("[文件管理] 等待超时，图片未被注册，继续 LLM 请求")
-                self._runtime.upload_session_service.clear_pending_images(event)
+                self._runtime.upload_session_service.clear_pending_image_resources(
+                    event, remaining_for_event
+                )
                 setattr(event, "_has_pending_images", False)
 
         await self._runtime.llm_request_policy.apply(event, req)
@@ -533,8 +547,17 @@ class FileOperationPlugin(Star):
                     file_path = await resource.get_file()
                     if file_path:
                         source_items.append((Path(file_path), resource.name or ""))
-            except Exception:
-                pass
+            except Exception as exc:
+                resource_name = getattr(resource, "name", None)
+                resource_id = getattr(resource, "id", None)
+                logger.warning(
+                    "[img] failed to resolve image/file resource "
+                    "(name=%r, id=%r, type=%s): %r",
+                    resource_name,
+                    resource_id,
+                    type(resource).__name__,
+                    exc,
+                )
 
         result = self._runtime.command_service.img_add(
             event,
