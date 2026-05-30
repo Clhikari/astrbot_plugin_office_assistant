@@ -104,6 +104,12 @@
                 "hint": "上传文件后，系统会等待这段时间，把期间收到的文件和文本合并成同一批处理。",
                 "default": 4
             },
+            "image_llm_delay_seconds": {
+                "description": "图片 LLM 请求延迟(秒)",
+                "type": "float",
+                "hint": "上传图片后，系统会延迟这段时间再请求 LLM。期间如果收到 /img add 命令则跳过 LLM 请求，避免浪费 token。设为 0 则不延迟。",
+                "default": 3
+            },
             "upload_session_ttl_seconds": {
                 "description": "上传文件保留时间(秒)",
                 "type": "int",

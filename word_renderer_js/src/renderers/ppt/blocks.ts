@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { imageSize } from "image-size";
 import pptxgen from "pptxgenjs";
 
 import { JsonObject } from "../../core/payload";
@@ -268,13 +269,13 @@ function renderImageSlide(
   }
 
   const imageH = caption ? 3.5 : 4.0;
+  const imageBox = fitImageInBox(imagePath, 1.0, imageY, 8.0, imageH);
   slide.addImage({
     path: imagePath,
-    x: 1.0,
-    y: imageY,
-    w: 8.0,
-    h: imageH,
-    sizing: { type: "contain", w: 8.0, h: imageH },
+    x: imageBox.x,
+    y: imageBox.y,
+    w: imageBox.w,
+    h: imageBox.h,
   });
 
   if (caption) {
@@ -290,4 +291,27 @@ function renderImageSlide(
       italic: true,
     });
   }
+}
+
+function fitImageInBox(
+  imagePath: string,
+  boxX: number,
+  boxY: number,
+  boxW: number,
+  boxH: number,
+): { x: number; y: number; w: number; h: number } {
+  const imageData = fs.readFileSync(imagePath);
+  const dimensions = imageSize(imageData);
+  const naturalW = dimensions.width || 1;
+  const naturalH = dimensions.height || 1;
+  const scale = Math.min(boxW / naturalW, boxH / naturalH);
+  const w = naturalW * scale;
+  const h = naturalH * scale;
+
+  return {
+    x: boxX + (boxW - w) / 2,
+    y: boxY + (boxH - h) / 2,
+    w,
+    h,
+  };
 }

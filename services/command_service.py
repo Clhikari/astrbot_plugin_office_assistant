@@ -320,15 +320,15 @@ class CommandService:
         self,
         event,
         *,
-        source_paths: list[Path],
+        source_items: list[tuple[Path, str]],
         selection: str = "",
     ) -> str:
         access_error = self._require_access(event)
         if access_error:
             return access_error
 
-        if not source_paths:
-            return "当前没有待注册的图片。请先在聊天中上传图片，再使用 /img add。"
+        if not source_items:
+            return "当前没有待注册的图片。请在消息中附带图片并发送 /img add，或先上传图片再使用 /img add。"
 
         session_key = self._upload_session_service.get_attachment_session_key(event)
 
@@ -336,28 +336,31 @@ class CommandService:
         selector = parts[0] if parts else "all"
         note = parts[1] if len(parts) > 1 else ""
 
-        if selector == "all":
-            targets = list(enumerate(source_paths, 1))
+        if len(source_items) == 1 and selection.strip() and not note:
+            note = selection.strip()
+            targets = list(enumerate(source_items, 1))
+        elif selector == "all":
+            targets = list(enumerate(source_items, 1))
         else:
             try:
                 idx = int(selector)
             except ValueError:
                 note = selection.strip()
-                targets = list(enumerate(source_paths, 1))
+                targets = list(enumerate(source_items, 1))
             else:
-                if idx < 1 or idx > len(source_paths):
-                    return f"序号超出范围。当前有 {len(source_paths)} 张待注册图片。"
-                targets = [(idx, source_paths[idx - 1])]
+                if idx < 1 or idx > len(source_items):
+                    return f"序号超出范围。当前有 {len(source_items)} 张待注册图片。"
+                targets = [(idx, source_items[idx - 1])]
 
         registered = []
         errors = []
-        for idx, path in targets:
+        for idx, (path, original_name) in targets:
             try:
                 info = self._image_asset_service.register_image(
                     path,
                     session_key=session_key,
                     note=note,
-                    original_name=path.name,
+                    original_name=original_name,
                 )
                 registered.append(info)
             except (ValueError, FileNotFoundError) as exc:
@@ -391,35 +394,38 @@ class CommandService:
         for i, info in enumerate(images, 1):
             size_str = format_file_size(info["size_bytes"])
             note_str = f" — {info['note']}" if info["note"] else ""
+            detail_parts = []
+            if info.get("original_name"):
+                detail_parts.append(info["original_name"])
+            detail_parts.append(f"{info['width']}x{info['height']}")
+            detail_parts.append(size_str)
             lines.append(
-                f"  {i}. {info['ref']}\n"
-                f"     原名: {info['original_name']} | "
-                f"{info['width']}x{info['height']} | {size_str}{note_str}"
+                f"  {i}. {info['ref']}\n     {' | '.join(detail_parts)}{note_str}"
             )
         return "\n".join(lines)
 
-    def img_note(self, event, args: str) -> str:
+    def img_note(self, event, ref: str, note: str) -> str:
         access_error = self._require_access(event)
         if access_error:
             return access_error
 
-        parts = args.strip().split(maxsplit=1)
-        if len(parts) < 2:
+        ref = ref.strip()
+        note = note.strip()
+        if not ref or not note:
             return "用法: /img note <引用或序号> <新备注>"
 
-        ref_or_idx, new_note = parts[0], parts[1]
         session_key = self._upload_session_service.get_attachment_session_key(event)
         images = self._image_asset_service.list_images(session_key)
 
-        ref = self._resolve_img_ref(ref_or_idx, images)
-        if ref is None:
-            return f"未找到图片: {ref_or_idx}"
+        resolved = self._resolve_img_ref(ref, images)
+        if resolved is None:
+            return f"未找到图片: {ref}"
 
         if self._image_asset_service.update_note(
-            ref, new_note, session_key=session_key
+            resolved, note, session_key=session_key
         ):
-            return f"已更新备注: {ref} — {new_note}"
-        return f"更新失败: {ref}"
+            return f"已更新备注: {resolved} — {note}"
+        return f"更新失败: {resolved}"
 
     def img_clear(self, event, target: str = "") -> str:
         access_error = self._require_access(event)

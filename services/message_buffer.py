@@ -21,6 +21,7 @@ class BufferedMessage:
 
     event: AstrMessageEvent  # 原始事件（用于发送响应等）
     files: list[Comp.File] = field(default_factory=list)  # 文件列表
+    images: list[Comp.Image] = field(default_factory=list)  # 图片列表
     texts: list[str] = field(default_factory=list)  # 文本内容列表
     timer_task: asyncio.Task | None = None  # 定时器任务
 
@@ -60,38 +61,50 @@ class MessageBuffer:
 
     def _extract_components(
         self, event: AstrMessageEvent
-    ) -> tuple[list[Comp.File], list[str]]:
-        """从消息中提取文件和文本组件"""
+    ) -> tuple[list[Comp.File], list[Comp.Image], list[str]]:
+        """从消息中提取文件、图片和文本组件"""
         files = []
+        images = []
         texts = []
 
         for component in event.message_obj.message:
             if isinstance(component, Comp.File):
                 files.append(component)
+            elif isinstance(component, Comp.Image):
+                images.append(component)
             elif isinstance(component, Comp.Plain):
                 text = component.text.strip()
                 if text:
                     texts.append(text)
             # 忽略 At、Reply 等其他组件
 
-        return files, texts
+        return files, images, texts
 
-    async def add_message(self, event: AstrMessageEvent) -> bool:
+    async def add_message(
+        self,
+        event: AstrMessageEvent,
+        *,
+        wait_seconds: float | None = None,
+    ) -> bool:
         """
         添加消息到缓冲区
 
         Args:
             event: 消息事件
+            wait_seconds: 可选的覆盖等待时间，用于不同类型消息（例如图片）使用不同的缓冲窗口
 
         Returns:
             True: 消息已被缓冲，调用方应停止事件传播
             False: 消息不需要缓冲（缓冲器已禁用）
         """
+        effective_wait = (
+            self._wait_seconds if wait_seconds is None else float(wait_seconds)
+        )
         # 如果等待时间为 0，则禁用缓冲
-        if self._wait_seconds <= 0:
+        if effective_wait <= 0:
             return False
 
-        files, texts = self._extract_components(event)
+        files, images, texts = self._extract_components(event)
         key = self._get_buffer_key(event)
 
         async with self._lock:
@@ -99,10 +112,11 @@ class MessageBuffer:
             if key in self._buffers:
                 buf = self._buffers[key]
                 buf.files.extend(files)
+                buf.images.extend(images)
                 buf.texts.extend(texts)
                 logger.debug(
                     f"[消息缓冲] 追加消息到缓冲区: {key}, "
-                    f"文件数: {len(files)}, 文本数: {len(texts)}"
+                    f"文件数: {len(files)}, 图片数: {len(images)}, 文本数: {len(texts)}"
                 )
                 return True
 
@@ -110,13 +124,14 @@ class MessageBuffer:
             buf = BufferedMessage(
                 event=event,
                 files=files,
+                images=images,
                 texts=texts,
             )
 
-            logger.info(f"[消息缓冲] 开始缓冲: {key}, 等待 {self._wait_seconds} 秒")
+            logger.info(f"[消息缓冲] 开始缓冲: {key}, 等待 {effective_wait} 秒")
 
             buf.timer_task = asyncio.create_task(
-                self._wait_and_process(key, self._wait_seconds)
+                self._wait_and_process(key, effective_wait)
             )
             self._buffers[key] = buf
             return True
@@ -135,12 +150,13 @@ class MessageBuffer:
 
             buf = self._buffers.pop(key)
 
-        # 只有文件时才调用回调
-        if buf.files and self._on_complete_callback:
+        # 有文件或图片时才调用回调
+        if (buf.files or buf.images) and self._on_complete_callback:
             try:
                 logger.info(
                     f"[消息缓冲] 缓冲完成，"
-                    f"文件数: {len(buf.files)}, 缓冲文本数: {len(buf.texts)}"
+                    f"文件数: {len(buf.files)}, 图片数: {len(buf.images)}, "
+                    f"缓冲文本数: {len(buf.texts)}"
                 )
                 await self._on_complete_callback(buf)
             except Exception as e:
@@ -150,6 +166,15 @@ class MessageBuffer:
         """检查指定用户是否正在缓冲状态"""
         key = self._get_buffer_key(event)
         return key in self._buffers
+
+    async def pop_buffer(self, event: AstrMessageEvent) -> BufferedMessage | None:
+        """取出当前用户的缓冲并取消定时器，用于命令显式消费缓冲内容"""
+        key = self._get_buffer_key(event)
+        async with self._lock:
+            buf = self._buffers.pop(key, None)
+            if buf and buf.timer_task and not buf.timer_task.done():
+                buf.timer_task.cancel()
+            return buf
 
     async def cancel_buffer(self, event: AstrMessageEvent):
         """取消指定用户的缓冲"""

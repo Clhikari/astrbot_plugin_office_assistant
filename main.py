@@ -217,13 +217,38 @@ class FileOperationPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def on_file_message(self, event: AstrMessageEvent):
         """
-        拦截包含文件的消息，使用缓冲器聚合文件和后续文本消息
-        仅处理支持的文件格式（Office、文本、PDF），其他格式直接放行
+        拦截包含文件的消息，使用缓冲器聚合文件、图片和后续文本消息
+        仅处理支持的文件格式（Office、文本、PDF）和图片，其他格式直接放行
         """
         await self._runtime.incoming_message_service.handle_file_message(event)
 
     @filter.on_llm_request()
     async def before_llm_chat(self, event: AstrMessageEvent, req: ProviderRequest):
+        if getattr(event, "_has_pending_images", False) and not getattr(
+            event, "_buffered", False
+        ):
+            import asyncio
+
+            wait = self._runtime.settings.image_llm_delay
+            pending = self._runtime.upload_session_service.get_pending_image_resources(
+                event
+            )
+            if pending and wait > 0:
+                logger.debug("[文件管理] 图片消息等待 %.1f 秒，看是否有 /img add", wait)
+                await asyncio.sleep(wait)
+                pending = (
+                    self._runtime.upload_session_service.get_pending_image_resources(
+                        event
+                    )
+                )
+                if not pending:
+                    logger.debug("[文件管理] 图片已被 /img add 消费，跳过 LLM 请求")
+                    event.stop_event()
+                    return
+                logger.debug("[文件管理] 等待超时，图片未被注册，继续 LLM 请求")
+                self._runtime.upload_session_service.clear_pending_images(event)
+                setattr(event, "_has_pending_images", False)
+
         await self._runtime.llm_request_policy.apply(event, req)
 
     @llm_tool(name="read_file")
@@ -424,6 +449,18 @@ class FileOperationPlugin(Star):
     def doc(self):
         """处理当前会话中的上传文件。"""
 
+    @doc.command("help")
+    async def doc_help(self, event: AstrMessageEvent):
+        """查看 /doc 命令帮助。"""
+        text = (
+            "/doc 命令 - 管理上传文件\n"
+            "  /doc list — 查看当前会话可用的上传文件\n"
+            "  /doc use <文件名或序号> <指令> — 使用指定文件处理请求\n"
+            "  /doc clear [序号] — 清理上传文件（不指定则清理全部）\n"
+            "  /doc help — 显示此帮助"
+        )
+        event.set_result(MessageEventResult().message(text).stop_event())
+
     @doc.command("list")
     async def doc_list(self, event: AstrMessageEvent):
         """查看当前会话可用的上传文件。"""
@@ -456,13 +493,52 @@ class FileOperationPlugin(Star):
     def img(self):
         """管理当前会话的图片资源池。"""
 
+    @img.command("help")
+    async def img_help(self, event: AstrMessageEvent):
+        """查看 /img 命令帮助。"""
+        text = (
+            "/img 命令 - 管理图片资源池\n"
+            "  /img add [备注] — 注册图片到资源池（先发图片再执行，或附带图片发送）\n"
+            "  /img list — 查看当前会话已注册的图片\n"
+            "  /img note <序号> <备注> — 修改图片备注\n"
+            "  /img clear [序号] — 清理指定图片（不指定则清理全部）\n"
+            "  /img help — 显示此帮助"
+        )
+        event.set_result(MessageEventResult().message(text).stop_event())
+
     @img.command("add")
     async def img_add(self, event: AstrMessageEvent, selection: GreedyStr = ""):
         """注册上传的图片到资源池。"""
-        pending = self._runtime.upload_session_service.get_pending_images(event)
+        inline_images: list = []
+        for component in event.message_obj.message:
+            if isinstance(component, (Comp.Image, Comp.File)):
+                inline_images.append(component)
+
+        # 从 pending cache 取出之前发送的图片引用
+        pending_resources = (
+            self._runtime.upload_session_service.get_pending_image_resources(event)
+        )
+
+        all_resources = inline_images + pending_resources
+
+        # 把 Comp.Image / Comp.File 解析为本地文件路径 + 原始文件名
+        source_items: list[tuple[Path, str]] = []
+        for resource in all_resources:
+            try:
+                if isinstance(resource, Comp.Image):
+                    file_path = await resource.convert_to_file_path()
+                    if file_path:
+                        source_items.append((Path(file_path), ""))
+                elif isinstance(resource, Comp.File):
+                    file_path = await resource.get_file()
+                    if file_path:
+                        source_items.append((Path(file_path), resource.name or ""))
+            except Exception:
+                pass
+
         result = self._runtime.command_service.img_add(
             event,
-            source_paths=pending,
+            source_items=source_items,
             selection=str(selection),
         )
         self._runtime.upload_session_service.clear_pending_images(event)
@@ -475,9 +551,11 @@ class FileOperationPlugin(Star):
         event.set_result(MessageEventResult().message(result).stop_event())
 
     @img.command("note")
-    async def img_note(self, event: AstrMessageEvent, args: GreedyStr = ""):
-        """修改图片备注。"""
-        result = self._runtime.command_service.img_note(event, str(args))
+    async def img_note(
+        self, event: AstrMessageEvent, ref: str = "", note: GreedyStr = ""
+    ):
+        """修改图片备注。用法: /img note <序号或引用> <新备注>"""
+        result = self._runtime.command_service.img_note(event, ref, str(note))
         event.set_result(MessageEventResult().message(result).stop_event())
 
     @img.command("clear")

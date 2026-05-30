@@ -41,7 +41,10 @@ SESSION_B = ("platform1", "user2", "origin2")
 class TestImageAssetServiceRegistration:
     def test_register_png(self, image_service, sample_png):
         info = image_service.register_image(
-            sample_png, session_key=SESSION_A, note="test image"
+            sample_png,
+            session_key=SESSION_A,
+            note="test image",
+            original_name="sample.png",
         )
         assert info["ref"].startswith("images/img_")
         assert info["ref"].endswith(".png")
@@ -58,6 +61,23 @@ class TestImageAssetServiceRegistration:
         assert info["format"] == "JPEG"
         assert info["width"] == 200
         assert info["height"] == 100
+
+    def test_register_webp_converts_to_png(self, image_service, tmp_path):
+        from PIL import Image
+
+        img = Image.new("RGB", (120, 60), color="green")
+        webp_file = tmp_path / "sample.webp"
+        img.save(webp_file, format="WEBP")
+
+        info = image_service.register_image(webp_file, session_key=SESSION_A)
+        assert info["ref"].endswith(".png")
+        assert info["format"] == "PNG"
+        assert info["width"] == 120
+        assert info["height"] == 60
+
+        stored = image_service.resolve_ref(info["ref"], session_key=SESSION_A)
+        with Image.open(stored) as reopened:
+            assert reopened.format == "PNG"
 
     def test_register_corrects_extension(self, image_service, tmp_path):
         from PIL import Image

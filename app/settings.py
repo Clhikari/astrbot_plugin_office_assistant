@@ -21,6 +21,7 @@ class PluginSettings:
     max_excel_preview_chars: int
     max_excel_preview_sheets: int
     buffer_wait: int
+    image_llm_delay: float
     reply_to_user: bool
     require_at_in_group: bool
     enable_features_in_group: bool
@@ -119,6 +120,12 @@ def load_plugin_settings(config) -> PluginSettings:
         "message_buffer_seconds",
         file_settings.get("message_buffer_seconds", 4),
     )
+    image_llm_delay = float(
+        upload_session_settings.get(
+            "image_llm_delay_seconds",
+            file_settings.get("image_llm_delay_seconds", 3.0),
+        )
+    )
     reply_to_user = trigger_settings.get("reply_to_user", True)
     require_at_in_group = trigger_settings.get("require_at_in_group", True)
     enable_features_in_group = trigger_settings.get("enable_features_in_group", False)
@@ -188,6 +195,7 @@ def load_plugin_settings(config) -> PluginSettings:
         max_excel_preview_chars=max_excel_preview_chars,
         max_excel_preview_sheets=max_excel_preview_sheets,
         buffer_wait=buffer_wait,
+        image_llm_delay=image_llm_delay,
         reply_to_user=reply_to_user,
         require_at_in_group=require_at_in_group,
         enable_features_in_group=enable_features_in_group,

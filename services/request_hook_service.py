@@ -673,8 +673,8 @@ class RequestHookService:
                         is_supported = True
 
                 if not is_supported:
-                    logger.info(
-                        "[文件管理] 文件 %s 格式不支持 (%s)，跳过处理",
+                    logger.debug(
+                        "[文件管理] 文件 %s 非文本格式 (%s)，跳过内容提取",
                         original_name,
                         file_suffix,
                     )

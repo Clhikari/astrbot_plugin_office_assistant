@@ -1,5 +1,6 @@
 import contextlib
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -191,6 +192,32 @@ async def test_before_llm_chat_injects_document_tools_per_request():
         assert "NEVER 调用网络搜索" in req.prompt
         assert "文件工具使用指南" not in req.system_prompt
         assert req.prompt.startswith("请生成一份 Word 报告，并导出给我。")
+
+
+@pytest.mark.asyncio
+async def test_before_llm_chat_clears_pending_images_after_delay_timeout():
+    config = _build_config()
+    config["file_settings"]["image_llm_delay_seconds"] = 0.01
+    async with _managed_plugin(config=config) as managed:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        event._has_pending_images = True
+        event._buffered = False
+        req = _build_provider_request(
+            "看看这张图",
+            tool_names=["existing_tool"],
+        )
+        upload_session_service = managed.plugin._runtime.upload_session_service
+        session_key = upload_session_service.get_attachment_session_key(event)
+        upload_session_service._pending_images_by_session[session_key] = [
+            (Path("image.png"), time.time())
+        ]
+
+        await managed.plugin.before_llm_chat(event, req)
+
+        assert event._has_pending_images is False
+        assert upload_session_service.get_pending_image_resources(event) == []
 
 
 @pytest.mark.asyncio
