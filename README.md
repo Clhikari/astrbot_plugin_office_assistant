@@ -8,7 +8,7 @@
 
 **让你的聊天bot能够生成office文件**
 
-[![Version](https://img.shields.io/badge/version-v1.9.0--beta-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
+[![Version](https://img.shields.io/badge/version-v1.9.1-blue.svg)](https://github.com/Clhikari/astrbot_plugin_office_assistant)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-18%2B-5FA04E.svg)](https://nodejs.org/)
 
@@ -152,7 +152,7 @@ npm run build
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | 文件合并等待时间秒 (`message_buffer_seconds`) | float | 4 | 上传文件后等一会儿，把同一波的文件合在一起 |
-| 图片等待 /img add 时间秒 (`image_llm_delay_seconds`) | float | 3 | 上传图片后等这段时间，期间收到 `/img add` 就注册到资源池，否则把图片释放给 LLM 正常聊天 |
+| 图片等待 /img add 时间秒 (`image_llm_delay_seconds`) | float | 3 | 上传图片后短暂等待 `/img add`；超时只继续当前 LLM 请求，图片仍在上传会话 TTL 内可注册 |
 | 旧流程文本缓存时间秒 (`recent_text_ttl_seconds`) | int | 20 | 主要影响"文件和文字一起进来"的老用法，一般不用动 |
 | 上传文件保留时间秒 (`upload_session_ttl_seconds`) | int | 600 | 上传完文件后在当前会话里保留多久，供 `/doc` 命令使用 |
 
@@ -216,29 +216,33 @@ npm run build
 | `/delete_file <文件名>` | `/file_rm`, `/删除文件` | 删工作区里的文件 |
 | `/fileinfo` | 无 | 看运行状态和配置 |
 | `/pdf_status` | `/pdf状态` | 看 PDF 转换是否可用 |
+| `/doc help` | 无 | 查看 `/doc` 命令帮助 |
 | `/doc list` | 无 | 看当前会话里的上传文件 |
 | `/doc clear [文件ID]` | 无 | 清空会话文件，或只删一个 |
 | `/doc use [文件ID...] 你的要求` | 无 | 选文件继续处理 |
+| `/img help` | 无 | 查看 `/img` 命令帮助 |
+| `/img add [备注]` | 无 | 注册已上传图片到当前会话图片资源池 |
+| `/img list` | 无 | 查看当前会话已注册图片 |
+| `/img active` | 无 | 查看本轮文档/PPT 可直接使用的活动图片 |
+| `/img use <序号或引用...|all>` | 无 | 选择一张或多张图片作为当前活动图片 |
+| `/img note <序号或引用> <备注>` | 无 | 修改图片备注 |
+| `/img clear [序号或引用|all]` | 无 | 清理当前会话图片资源 |
 
 ### `/doc` 用法
 
-主要给群聊用。先上传文件，再决定拿哪几个往下处理。
+`/doc` 用于在会话内管理已上传文件，适合先上传文件、再选择其中一份或多份继续处理。文件按"平台 + 会话 + 用户"隔离，群里其他人的文件不会混进来。具体命令格式可用 `/doc help` 查看。
 
-```
-/doc list
-/doc clear
-/doc clear f1
-/doc use f1 根据这份文件整理成正式汇报
-/doc use f1 f2 根据这些文件整理成正式汇报
-```
+### `/img` 用法
 
-会话里只有一个文件时可以省略文件 ID：
+图片资源池用于把用户上传的图片安全地写入 Word/PPT。模型只能使用 `images/...` 形式的受管引用，不接受本机绝对路径。具体命令格式可用 `/img help` 查看。
 
-```
-/doc use 根据这份文件整理成正式汇报
-```
+说明：
 
-文件按"平台 + 会话 + 用户"隔离，群里其他人的文件不会混进来。
+- `/img add` 成功后，本次注册的图片会自动成为当前活动图片。
+- 文档/PPT 工作流默认只会看到当前活动图片，避免误用历史图片。
+- 备注用于说明图片用途，活动图片集用于限定模型实际可选范围。
+- 支持 PNG/JPEG/WebP；WebP 会转存为 PNG，SVG 不支持。
+- 图片按"平台 + 会话 + 用户"隔离。
 
 ---
 
