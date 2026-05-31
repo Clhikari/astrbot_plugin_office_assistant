@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 
+from .image_file_utils import is_image_file_component
+
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
 
@@ -186,15 +188,24 @@ class MessageBuffer:
         key = self._get_buffer_key(event)
         return key in self._buffers
 
-    async def pop_images(self, event: AstrMessageEvent) -> list[Comp.Image]:
-        """取出当前用户缓冲中的图片，保留文件/文本继续等待聚合完成。"""
+    async def pop_images(self, event: AstrMessageEvent) -> list[Comp.Image | Comp.File]:
+        """取出当前用户缓冲中的图片，保留非图片文件/文本继续等待聚合完成。"""
         key = self._get_buffer_key(event)
         async with self._lock:
             buf = self._buffers.get(key)
-            if buf is None or not buf.images:
+            if buf is None:
                 return []
             images = list(buf.images)
+            image_files = [file for file in buf.files if is_image_file_component(file)]
+            if not images and not image_files:
+                return []
             buf.images.clear()
+            if image_files:
+                image_file_ids = {id(file) for file in image_files}
+                buf.files = [
+                    file for file in buf.files if id(file) not in image_file_ids
+                ]
+                images.extend(image_files)
             if buf.files or buf.texts:
                 return images
             self._buffers.pop(key, None)
