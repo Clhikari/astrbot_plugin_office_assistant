@@ -186,14 +186,21 @@ class MessageBuffer:
         key = self._get_buffer_key(event)
         return key in self._buffers
 
-    async def pop_buffer(self, event: AstrMessageEvent) -> BufferedMessage | None:
-        """取出当前用户的缓冲并取消定时器，用于命令显式消费缓冲内容"""
+    async def pop_images(self, event: AstrMessageEvent) -> list[Comp.Image]:
+        """取出当前用户缓冲中的图片，保留文件/文本继续等待聚合完成。"""
         key = self._get_buffer_key(event)
         async with self._lock:
-            buf = self._buffers.pop(key, None)
-            if buf and buf.timer_task and not buf.timer_task.done():
+            buf = self._buffers.get(key)
+            if buf is None or not buf.images:
+                return []
+            images = list(buf.images)
+            buf.images.clear()
+            if buf.files or buf.texts:
+                return images
+            self._buffers.pop(key, None)
+            if buf.timer_task and not buf.timer_task.done():
                 buf.timer_task.cancel()
-            return buf
+            return images
 
     async def cancel_buffer(self, event: AstrMessageEvent):
         """取消指定用户的缓冲"""

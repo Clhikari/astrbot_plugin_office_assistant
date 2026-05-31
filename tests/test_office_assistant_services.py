@@ -6597,6 +6597,42 @@ async def test_message_buffer_restarts_timer_when_wait_override_changes():
 
 
 @pytest.mark.asyncio
+async def test_message_buffer_pop_images_preserves_files_and_texts():
+    buffer = MessageBuffer(wait_seconds=30)
+    event = _build_event()
+    upload = Comp.File(name="report.docx", file="report.docx")
+    image = Comp.Image(file="avatar.png")
+    event.message_obj.message = [upload, image, Comp.Plain("整理一下")]
+
+    assert await buffer.add_message(event, wait_seconds=30)
+
+    images = await buffer.pop_images(event)
+    key = buffer._get_buffer_key(event)
+    remaining = buffer._buffers[key]
+    assert images == [image]
+    assert remaining.files == [upload]
+    assert remaining.images == []
+    assert remaining.texts == ["整理一下"]
+
+    await buffer.cancel_buffer(event)
+
+
+@pytest.mark.asyncio
+async def test_message_buffer_pop_images_removes_image_only_buffer():
+    buffer = MessageBuffer(wait_seconds=30)
+    event = _build_event()
+    image = Comp.Image(file="avatar.png")
+    event.message_obj.message = [image]
+
+    assert await buffer.add_message(event, wait_seconds=30)
+
+    images = await buffer.pop_images(event)
+    key = buffer._get_buffer_key(event)
+    assert images == [image]
+    assert key not in buffer._buffers
+
+
+@pytest.mark.asyncio
 async def test_error_hook_service_uses_event_session_when_target_not_configured():
     context = MagicMock()
     context.send_message = AsyncMock(return_value=True)
