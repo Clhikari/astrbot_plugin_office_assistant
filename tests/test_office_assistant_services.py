@@ -31,6 +31,7 @@ from astrbot_plugin_office_assistant.domain.document.session_store import (
 )
 from astrbot_plugin_office_assistant.services.office_generator import OfficeGenerator
 from astrbot_plugin_office_assistant.internal_hooks import NoticeBuildContext
+from astrbot_plugin_office_assistant.services.message_buffer import MessageBuffer
 from astrbot_plugin_office_assistant.services.message_buffer import BufferedMessage
 from astrbot_plugin_office_assistant.services import (
     AccessPolicyService,
@@ -2480,6 +2481,42 @@ async def test_request_hook_service_injects_document_follow_up_notice_for_draft(
     assert "继续调用 `add_blocks`" in context.notices[0]
     assert context.system_notices == []
     assert context.system_section_names == []
+
+
+@pytest.mark.asyncio
+async def test_request_hook_service_includes_image_assets_for_document_follow_up():
+    service = _build_request_hook_service(
+        lookup_document_summary=lambda document_id: {
+            "document_id": document_id,
+            "status": "draft",
+            "block_count": 3,
+        },
+        get_session_images=lambda _event: [
+            {
+                "ref": "images/img_20260531_ab12cd34.png",
+                "width": 320,
+                "height": 180,
+                "format": "PNG",
+                "note": "封面图",
+            }
+        ],
+    )
+    context = _build_notice_context(
+        _build_provider_request(
+            '把这张图加到 document_id="doc-1" 里',
+            tool_names=["add_blocks"],
+        ),
+    )
+
+    context = await service.append_document_tool_guide_notice(context)
+
+    assert context.section_names == [
+        SECTION_DYNAMIC_DOCUMENT_FOLLOW_UP,
+        SECTION_SCENE_IMAGE_ASSETS,
+    ]
+    assert "当前 `document_id=doc-1` 仍是 draft" in context.notices[0]
+    assert "`images/img_20260531_ab12cd34.png`" in context.notices[1]
+    assert "封面图" in context.notices[1]
 
 
 @pytest.mark.asyncio
@@ -6270,6 +6307,59 @@ async def test_incoming_message_service_caches_image_file_as_pending():
 
 
 @pytest.mark.asyncio
+async def test_incoming_message_service_caches_image_file_by_path_when_name_missing():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    file_comp = Comp.File(name="", file="C:/tmp/avatar.png")
+    event.message_obj.message = [file_comp]
+
+    await service.handle_file_message(event)
+
+    cache_pending.assert_called_once_with(event, file_comp)
+    assert event._has_pending_images is True
+    message_buffer.is_buffering.assert_not_called()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_service_caches_image_file_by_mime_when_name_generic():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    file_comp = Comp.File(name="file", file="file")
+    object.__setattr__(file_comp, "mime_type", "image/png")
+    event.message_obj.message = [file_comp]
+
+    await service.handle_file_message(event)
+
+    cache_pending.assert_called_once_with(event, file_comp)
+    assert event._has_pending_images is True
+    message_buffer.is_buffering.assert_not_called()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_incoming_message_service_caches_image_component_as_pending():
     message_buffer = MagicMock()
     message_buffer.add_message = AsyncMock(return_value=True)
@@ -6420,6 +6510,29 @@ async def test_incoming_message_service_remembers_plain_text_when_no_buffer_acti
     message_buffer.is_buffering.assert_called_once_with(event)
     message_buffer.add_message.assert_not_awaited()
     event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_message_buffer_restarts_timer_when_wait_override_changes():
+    buffer = MessageBuffer(wait_seconds=30)
+    event = _build_event()
+    event.message_obj.message = [Comp.File(name="report.docx", file="report.docx")]
+
+    assert await buffer.add_message(event, wait_seconds=30)
+    key = buffer._get_buffer_key(event)
+    first_task = buffer._buffers[key].timer_task
+    assert first_task is not None
+
+    follow_up = _build_event()
+    follow_up.message_obj.message = [Comp.Plain("补充说明")]
+    assert await buffer.add_message(follow_up, wait_seconds=5)
+
+    updated = buffer._buffers[key]
+    assert updated.wait_seconds == 5
+    assert updated.timer_task is not first_task
+    assert first_task.done()
+
+    await buffer.cancel_buffer(event)
 
 
 @pytest.mark.asyncio

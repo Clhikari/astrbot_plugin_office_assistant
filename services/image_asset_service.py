@@ -34,6 +34,9 @@ class ImageAssetService:
         self._images_dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self._images_dir / "index.json"
         self._index: list[ImageAssetInfo] = self._load_index()
+        self._by_session_ref: dict[tuple[str, str, str], dict[str, ImageAssetInfo]] = (
+            self._build_lookup(self._index)
+        )
 
     def _load_index(self) -> list[ImageAssetInfo]:
         if self._index_path.exists():
@@ -54,6 +57,24 @@ class ImageAssetService:
         except OSError as exc:
             logger.warning("failed to persist image asset index: %s", exc)
 
+    @staticmethod
+    def _normalize_session_key(
+        session_key: tuple[str, str, str] | list[str],
+    ) -> tuple[str, str, str]:
+        platform_id, sender_id, origin = (list(session_key) + ["", "", ""])[:3]
+        return (str(platform_id), str(sender_id), str(origin))
+
+    @classmethod
+    def _build_lookup(
+        cls,
+        items: list[ImageAssetInfo],
+    ) -> dict[tuple[str, str, str], dict[str, ImageAssetInfo]]:
+        lookup: dict[tuple[str, str, str], dict[str, ImageAssetInfo]] = {}
+        for item in items:
+            session_key = cls._normalize_session_key(item["session_key"])
+            lookup.setdefault(session_key, {})[item["ref"]] = item
+        return lookup
+
     def register_image(
         self,
         source_path: Path,
@@ -62,6 +83,7 @@ class ImageAssetService:
         note: str = "",
         original_name: str = "",
     ) -> ImageAssetInfo:
+        session_key = self._normalize_session_key(session_key)
         source_path = Path(source_path)
         if not source_path.exists():
             raise FileNotFoundError(f"源文件不存在: {source_path}")
@@ -117,12 +139,13 @@ class ImageAssetService:
             "session_key": list(session_key),
         }
         self._index.append(info)
+        self._by_session_ref.setdefault(session_key, {})[ref] = info
         self._save_index()
         return info
 
     def list_images(self, session_key: tuple[str, str, str]) -> list[ImageAssetInfo]:
-        sk = list(session_key)
-        return [item for item in self._index if item["session_key"] == sk]
+        session_key = self._normalize_session_key(session_key)
+        return list(self._by_session_ref.get(session_key, {}).values())
 
     def update_note(
         self,
@@ -131,13 +154,13 @@ class ImageAssetService:
         *,
         session_key: tuple[str, str, str],
     ) -> bool:
-        sk = list(session_key)
-        for item in self._index:
-            if item["ref"] == ref and item["session_key"] == sk:
-                item["note"] = note
-                self._save_index()
-                return True
-        return False
+        session_key = self._normalize_session_key(session_key)
+        item = self._by_session_ref.get(session_key, {}).get(ref)
+        if item is None:
+            return False
+        item["note"] = note
+        self._save_index()
+        return True
 
     def clear_images(
         self,
@@ -145,18 +168,15 @@ class ImageAssetService:
         session_key: tuple[str, str, str],
         ref: str | None = None,
     ) -> int:
-        sk = list(session_key)
-        to_remove: list[ImageAssetInfo] = []
-        kept: list[ImageAssetInfo] = []
-
-        for item in self._index:
-            if item["session_key"] != sk:
-                kept.append(item)
-                continue
-            if ref is None or item["ref"] == ref:
-                to_remove.append(item)
-            else:
-                kept.append(item)
+        session_key = self._normalize_session_key(session_key)
+        session_items = self._by_session_ref.get(session_key, {})
+        if ref is None:
+            to_remove = list(session_items.values())
+        else:
+            item = session_items.get(ref)
+            to_remove = [item] if item is not None else []
+        if not to_remove:
+            return 0
 
         for item in to_remove:
             file_path = self._images_dir.parent / item["ref"]
@@ -166,7 +186,21 @@ class ImageAssetService:
                 except OSError:
                     logger.warning(f"failed to delete image file: {file_path}")
 
-        self._index = kept
+        removed_refs = {item["ref"] for item in to_remove}
+        self._index = [
+            item
+            for item in self._index
+            if not (
+                self._normalize_session_key(item["session_key"]) == session_key
+                and item["ref"] in removed_refs
+            )
+        ]
+        if ref is None:
+            self._by_session_ref.pop(session_key, None)
+        else:
+            session_items.pop(ref, None)
+            if not session_items:
+                self._by_session_ref.pop(session_key, None)
         self._save_index()
         return len(to_remove)
 
@@ -176,16 +210,13 @@ class ImageAssetService:
         *,
         session_key: tuple[str, str, str],
     ) -> Path:
+        session_key = self._normalize_session_key(session_key)
         try:
             ref = validate_image_asset_ref(ref)
         except ValueError as exc:
             raise ValueError(f"无效的图片引用: {ref}。{exc}") from exc
 
-        sk = list(session_key)
-        found = any(
-            item["ref"] == ref and item["session_key"] == sk for item in self._index
-        )
-        if not found:
+        if ref not in self._by_session_ref.get(session_key, {}):
             raise ValueError(
                 f"图片引用 {ref} 不在当前会话的资源池中。请先使用 /img add 注册图片。"
             )

@@ -11,7 +11,7 @@ from astrbot.core.utils.active_event_registry import active_event_registry
 from astrbot.core.platform.message_type import MessageType
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
-from .image_file_utils import is_supported_image_filename
+from .image_file_utils import is_supported_image_reference
 from .message_buffer import BufferedMessage
 from .upload_prompt_service import UploadInfo, UploadPromptService
 
@@ -495,7 +495,9 @@ class UploadSessionService:
                         ) = self._resolve_upload_type(original_name)
                     if src_path and src_path.exists():
                         actual_name = original_name or name
-                        if self.is_image_file(actual_name):
+                        if self.is_image_file(actual_name) or self.is_image_file(
+                            str(src_path)
+                        ):
                             self.cache_pending_image(event, src_path)
                             continue
                         info["source_path"] = str(src_path.resolve())
@@ -606,4 +608,4 @@ class UploadSessionService:
             self._pending_images_by_session.pop(session_key, None)
 
     def is_image_file(self, filename: str) -> bool:
-        return is_supported_image_filename(filename)
+        return is_supported_image_reference(filename)

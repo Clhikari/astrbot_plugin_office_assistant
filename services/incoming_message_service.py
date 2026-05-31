@@ -4,7 +4,10 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
-from .image_file_utils import is_supported_image_filename
+from .image_file_utils import (
+    is_supported_image_mime_type,
+    is_supported_image_reference,
+)
 
 
 class IncomingMessageService:
@@ -43,8 +46,7 @@ class IncomingMessageService:
                 has_image = True
                 continue
             if isinstance(component, Comp.File):
-                name = component.name or ""
-                if name and is_supported_image_filename(name):
+                if self._is_image_file_component(component):
                     has_image = True
                     continue
                 return False
@@ -53,6 +55,18 @@ class IncomingMessageService:
                 if text.startswith("/"):
                     return False
         return has_image
+
+    @staticmethod
+    def _is_image_file_component(component: Comp.File) -> bool:
+        for attr_name in ("name", "file_", "url"):
+            value = getattr(component, attr_name, "") or ""
+            if value and is_supported_image_reference(str(value)):
+                return True
+        for attr_name in ("mime_type", "mimetype", "mime", "content_type"):
+            value = getattr(component, attr_name, "") or ""
+            if value and is_supported_image_mime_type(str(value)):
+                return True
+        return False
 
     async def handle_file_message(self, event) -> None:
         if getattr(event, "_buffered", False):

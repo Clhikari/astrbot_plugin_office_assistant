@@ -195,6 +195,7 @@ class RequestHookService:
             request_text=request_text,
             exposed_tool_names=exposed_tool_names,
         ):
+            self._append_image_assets_context(context)
             return context
 
         self._append_document_tool_guides(
