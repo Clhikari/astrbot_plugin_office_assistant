@@ -1190,6 +1190,75 @@ def test_build_plugin_runtime_returns_temp_workspace_and_services():
                 pass
 
 
+@pytest.mark.asyncio
+async def test_document_toolset_rejects_non_active_image_refs():
+    context = MagicMock()
+    context.get_config.return_value = {
+        "admins_id": ["admin-1"],
+        "file_settings": {"auto_delete_files": False},
+        "permission_settings": {"allow_all_users": True},
+    }
+    runtime = build_plugin_runtime(
+        context=context,
+        config=context.get_config.return_value,
+        plugin_name="astrbot_plugin_office_assistant",
+        handle_exported_document_tool=AsyncMock(),
+        extract_upload_source=AsyncMock(),
+        store_uploaded_file=MagicMock(),
+    )
+
+    try:
+        event = _build_event(sender_id="user-a")
+        session_key = runtime.upload_session_service.get_attachment_session_key(event)
+        old_image = runtime.plugin_data_path / "old.png"
+        new_image = runtime.plugin_data_path / "new.png"
+        _write_valid_png(old_image, color="red")
+        _write_valid_png(new_image, color="blue")
+        old_info = runtime.image_asset_service.register_image(
+            old_image,
+            session_key=session_key,
+            note="旧图",
+            original_name="old.png",
+        )
+        new_info = runtime.image_asset_service.register_image(
+            new_image,
+            session_key=session_key,
+            note="测试",
+            original_name="new.png",
+        )
+        runtime.image_asset_service.set_active_images(
+            [new_info["ref"]],
+            session_key=session_key,
+        )
+
+        tool_by_name = {tool.name: tool for tool in runtime.document_toolset.tools}
+        created = json.loads(
+            await tool_by_name["create_document"].call(
+                SimpleNamespace(context=SimpleNamespace(event=event)),
+                title="Active Image Guard",
+            )
+        )
+        failed = json.loads(
+            await tool_by_name["add_blocks"].call(
+                SimpleNamespace(context=SimpleNamespace(event=event)),
+                document_id=created["document"]["document_id"],
+                blocks=[{"type": "image", "path": old_info["ref"]}],
+            )
+        )
+
+        assert failed["success"] is False
+        assert "不在当前活动图片中" in failed["message"]
+    finally:
+        runtime.executor.shutdown(wait=False)
+        runtime.office_gen.cleanup()
+        runtime.pdf_converter.cleanup()
+        if runtime.temp_dir is not None:
+            try:
+                runtime.temp_dir.cleanup()
+            except PermissionError:
+                pass
+
+
 def test_build_plugin_runtime_ignores_legacy_word_render_settings():
     context = MagicMock()
     context.get_config.return_value = {"admins_id": ["admin-1"]}
@@ -4500,12 +4569,33 @@ def test_prompt_context_service_limits_image_assets_section():
 
     assert section is not None
     assert section.name == SECTION_SCENE_IMAGE_ASSETS
-    assert "另有 2 张较早图片未列出" in section.content
+    assert "另有 2 张活动图片未列出" in section.content
     assert "`images/img_00.png`" not in section.content
     assert "`images/img_01.png`" not in section.content
     assert "`images/img_02.png`" in section.content
     assert long_note not in section.content
     assert "…" in section.content
+
+
+def test_prompt_context_service_marks_image_assets_as_active_scope():
+    service = PromptContextService(allow_external_input_files=False)
+
+    section = service.build_image_assets_section(
+        images=[
+            {
+                "ref": "images/img_active.png",
+                "width": 100,
+                "height": 50,
+                "format": "PNG",
+                "note": "测试",
+            }
+        ]
+    )
+
+    assert section is not None
+    assert "当前活动图片资源" in section.content
+    assert "允许直接使用" in section.content
+    assert "/img use" in section.content
 
 
 def test_upload_prompt_service_builds_instructional_notice_for_readable_files():
@@ -5310,6 +5400,10 @@ def test_command_service_img_add_treats_single_numeric_argument_as_note():
         assert len(images) == 1
         assert images[0]["note"] == "2"
         assert images[0]["original_name"] == "sample.png"
+        active_images = image_asset_service.list_active_images(
+            upload_session_service.get_attachment_session_key(event)
+        )
+        assert [info["ref"] for info in active_images] == [images[0]["ref"]]
 
 
 def test_command_service_img_add_keeps_numeric_selector_for_multiple_images():
@@ -5345,6 +5439,81 @@ def test_command_service_img_add_keeps_numeric_selector_for_multiple_images():
         assert len(images) == 1
         assert images[0]["note"] == ""
         assert images[0]["original_name"] == "second.png"
+        active_images = image_asset_service.list_active_images(
+            upload_session_service.get_attachment_session_key(event)
+        )
+        assert [info["ref"] for info in active_images] == [images[0]["ref"]]
+
+
+def test_command_service_img_use_selects_multiple_active_images():
+    upload_session_service = _build_upload_session_service()
+
+    with _managed_workspace_service(name="command-img-use") as managed:
+        image_asset_service = ImageAssetService(plugin_data_path=managed.workspace_dir)
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
+            plugin_data_path=managed.workspace_dir,
+            upload_session_service=upload_session_service,
+            image_asset_service=image_asset_service,
+        )
+        first_image = managed.workspace_dir / "first.png"
+        second_image = managed.workspace_dir / "second.png"
+        third_image = managed.workspace_dir / "third.png"
+        _write_valid_png(first_image, color="red")
+        _write_valid_png(second_image, color="blue")
+        _write_valid_png(third_image, color="green")
+
+        event = _build_event(sender_id="user-a")
+        service.img_add(
+            event,
+            source_items=[
+                (first_image, "first.png"),
+                (second_image, "second.png"),
+                (third_image, "third.png"),
+            ],
+            selection="all 截图",
+        )
+
+        result = service.img_use(event, "1 3")
+
+        images = image_asset_service.list_images(
+            upload_session_service.get_attachment_session_key(event)
+        )
+        active_images = image_asset_service.list_active_images(
+            upload_session_service.get_attachment_session_key(event)
+        )
+        assert "已设置 2 张当前活动图片" in result
+        assert [info["ref"] for info in active_images] == [
+            images[0]["ref"],
+            images[2]["ref"],
+        ]
+
+
+def test_command_service_img_active_reports_current_active_images():
+    upload_session_service = _build_upload_session_service()
+
+    with _managed_workspace_service(name="command-img-active") as managed:
+        image_asset_service = ImageAssetService(plugin_data_path=managed.workspace_dir)
+        service = _build_command_service(
+            workspace_service=managed.workspace_service,
+            plugin_data_path=managed.workspace_dir,
+            upload_session_service=upload_session_service,
+            image_asset_service=image_asset_service,
+        )
+        image_path = managed.workspace_dir / "sample.png"
+        _write_valid_png(image_path)
+
+        event = _build_event(sender_id="user-a")
+        service.img_add(
+            event,
+            source_items=[(image_path, "sample.png")],
+            selection="测试",
+        )
+
+        result = service.img_active(event)
+
+        assert "当前活动图片（共 1 张）" in result
+        assert "测试" in result
 
 
 @pytest.mark.asyncio

@@ -513,6 +513,8 @@ class FileOperationPlugin(Star):
             "/img 命令 - 管理图片资源池\n"
             "  /img add [备注] — 注册图片到资源池（先发图片再执行，或附带图片发送）\n"
             "  /img list — 查看当前会话已注册的图片\n"
+            "  /img active — 查看本轮文档/PPT 可直接使用的活动图片\n"
+            "  /img use <序号|引用|all> — 选择本轮文档/PPT 可直接使用的图片\n"
             "  /img note <序号> <备注> — 修改图片备注\n"
             "  /img clear [序号] — 清理指定图片（不指定则清理全部）\n"
             "  /img help — 显示此帮助"
@@ -580,6 +582,18 @@ class FileOperationPlugin(Star):
     async def img_list(self, event: AstrMessageEvent):
         """查看当前会话已注册的图片。"""
         result = self._runtime.command_service.img_list(event)
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @img.command("active")
+    async def img_active(self, event: AstrMessageEvent):
+        """查看当前活动图片。"""
+        result = self._runtime.command_service.img_active(event)
+        event.set_result(MessageEventResult().message(result).stop_event())
+
+    @img.command("use")
+    async def img_use(self, event: AstrMessageEvent, selection: GreedyStr = ""):
+        """选择本轮文档/PPT 可直接使用的图片。"""
+        result = self._runtime.command_service.img_use(event, str(selection))
         event.set_result(MessageEventResult().message(result).stop_event())
 
     @img.command("note")
