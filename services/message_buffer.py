@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ class BufferedMessage:
     images: list[Comp.Image] = field(default_factory=list)  # 图片列表
     texts: list[str] = field(default_factory=list)  # 文本内容列表
     timer_task: asyncio.Task | None = None  # 定时器任务
+    wait_seconds: float = 0.0  # 当前缓冲计时窗口
 
 
 class MessageBuffer:
@@ -118,6 +120,22 @@ class MessageBuffer:
                     f"[消息缓冲] 追加消息到缓冲区: {key}, "
                     f"文件数: {len(files)}, 图片数: {len(images)}, 文本数: {len(texts)}"
                 )
+                if (
+                    wait_seconds is not None
+                    and effective_wait != buf.wait_seconds
+                    and buf.timer_task
+                    and not buf.timer_task.done()
+                ):
+                    buf.timer_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await buf.timer_task
+                    buf.wait_seconds = effective_wait
+                    buf.timer_task = asyncio.create_task(
+                        self._wait_and_process(key, effective_wait)
+                    )
+                    logger.debug(
+                        f"[消息缓冲] 已调整缓冲等待时间: {key}, 等待 {effective_wait} 秒"
+                    )
                 return True
 
             # 没有缓冲，开始新的缓冲
@@ -126,6 +144,7 @@ class MessageBuffer:
                 files=files,
                 images=images,
                 texts=texts,
+                wait_seconds=effective_wait,
             )
 
             logger.info(f"[消息缓冲] 开始缓冲: {key}, 等待 {effective_wait} 秒")
