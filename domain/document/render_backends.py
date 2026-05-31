@@ -122,6 +122,13 @@ def build_document_render_payload(document: DocumentModel) -> dict[str, Any]:
     }
 
 
+def _resolve_document_workspace_dir(document: DocumentModel, output_path: Path) -> Path:
+    workspace_dir = str(getattr(document, "_workspace_dir", "") or "").strip()
+    if workspace_dir:
+        return Path(workspace_dir).resolve()
+    return output_path.parent.resolve()
+
+
 def _fixup_block_payload(block_payload: dict[str, Any], block: object) -> None:
     """Recursively ensure ``type`` is present and ``block_id`` is stripped."""
     block_payload.pop("block_id", None)
@@ -182,7 +189,9 @@ class NodeDocumentRenderBackend:
             )
 
         payload = build_document_render_payload(document)
-        payload["workspace_dir"] = str(output_path.parent.resolve())
+        payload["workspace_dir"] = str(
+            _resolve_document_workspace_dir(document, output_path)
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w",

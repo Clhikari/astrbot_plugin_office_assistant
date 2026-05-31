@@ -196,7 +196,7 @@ async def test_before_llm_chat_injects_document_tools_per_request():
 
 
 @pytest.mark.asyncio
-async def test_before_llm_chat_clears_pending_images_after_delay_timeout():
+async def test_before_llm_chat_keeps_pending_images_after_delay_timeout():
     config = _build_config()
     config["file_settings"]["image_llm_delay_seconds"] = 0.01
     async with _managed_plugin(config=config) as managed:
@@ -218,7 +218,9 @@ async def test_before_llm_chat_clears_pending_images_after_delay_timeout():
         await managed.plugin.before_llm_chat(event, req)
 
         assert event._has_pending_images is False
-        assert upload_session_service.get_pending_image_resources(event) == []
+        assert upload_session_service.get_pending_image_resources(event) == [
+            Path("image.png")
+        ]
 
 
 @pytest.mark.asyncio
@@ -249,7 +251,8 @@ async def test_before_llm_chat_timeout_preserves_newer_pending_images():
 
         assert event._has_pending_images is False
         assert upload_session_service.get_pending_image_resources(event) == [
-            newer_resource
+            old_resource,
+            newer_resource,
         ]
 
 

@@ -242,6 +242,7 @@ class DocumentSessionStore:
                     document_style=document_style,
                 ),
             )
+            document._workspace_dir = str(self.workspace_dir.resolve())
             self._documents[document_id] = document
             self._prune_locked()
             return document
