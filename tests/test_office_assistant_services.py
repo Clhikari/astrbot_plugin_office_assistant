@@ -6787,6 +6787,27 @@ async def test_message_buffer_pop_images_preserves_files_and_texts():
 
 
 @pytest.mark.asyncio
+async def test_message_buffer_pop_images_extracts_image_file_components():
+    buffer = MessageBuffer(wait_seconds=30)
+    event = _build_event()
+    upload = Comp.File(name="report.docx", file="report.docx")
+    image_file = Comp.File(name="avatar.jpg", file="avatar.jpg")
+    event.message_obj.message = [upload, image_file, Comp.Plain("整理一下")]
+
+    assert await buffer.add_message(event, wait_seconds=30)
+
+    images = await buffer.pop_images(event)
+    key = buffer._get_buffer_key(event)
+    remaining = buffer._buffers[key]
+    assert images == [image_file]
+    assert remaining.files == [upload]
+    assert remaining.images == []
+    assert remaining.texts == ["整理一下"]
+
+    await buffer.cancel_buffer(event)
+
+
+@pytest.mark.asyncio
 async def test_message_buffer_pop_images_removes_image_only_buffer():
     buffer = MessageBuffer(wait_seconds=30)
     event = _build_event()
