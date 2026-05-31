@@ -279,6 +279,30 @@ async def test_img_add_registers_selected_path_pending_and_preserves_rest():
 
 
 @pytest.mark.asyncio
+async def test_img_add_consumes_buffered_images_before_timeout():
+    async with _managed_plugin() as managed:
+        event = _build_event(
+            message_type=MessageType.FRIEND_MESSAGE, sender_id="user-1"
+        )
+        runtime = managed.plugin._runtime
+        image_path = runtime.plugin_data_path / "buffered-image.png"
+        _write_png(image_path, width=10, height=10)
+        image = Comp.Image.fromFileSystem(str(image_path))
+        buffered = BufferedMessage(event=event, images=[image], texts=[])
+        runtime.message_buffer._buffers[
+            runtime.message_buffer._get_buffer_key(event)
+        ] = buffered
+
+        await managed.plugin.img_add(event, "缓冲图")
+
+        session_key = runtime.upload_session_service.get_attachment_session_key(event)
+        images = runtime.image_asset_service.list_images(session_key)
+        assert len(images) == 1
+        assert images[0]["note"] == "缓冲图"
+        assert runtime.upload_session_service.get_pending_image_resources(event) == []
+
+
+@pytest.mark.asyncio
 async def test_before_llm_chat_keeps_document_id_follow_up_prompt_lightweight():
     async with _managed_plugin() as managed:
         event = _build_event(

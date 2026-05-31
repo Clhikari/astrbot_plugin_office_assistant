@@ -761,6 +761,17 @@ def test_add_blocks_raises_for_missing_image_path(workspace_root: Path):
         )
 
 
+def test_image_input_rejects_non_asset_path():
+    with pytest.raises(Exception, match="images/"):
+        ImageInput(path="outside/image.png")
+
+
+def test_image_input_accepts_asset_ref():
+    image = ImageInput(path="images/img_20260531_ab12cd34.png")
+
+    assert image.path == "images/img_20260531_ab12cd34.png"
+
+
 def test_add_blocks_raises_for_missing_image_slide_path(workspace_root: Path):
     workspace_dir = _make_workspace(workspace_root, "pytest-missing-image-slide-path")
     store = DocumentSessionStore(workspace_dir=workspace_dir)

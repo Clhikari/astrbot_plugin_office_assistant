@@ -58,7 +58,7 @@ class IncomingMessageService:
 
     @staticmethod
     def _is_image_file_component(component: Comp.File) -> bool:
-        for attr_name in ("name", "file_", "url"):
+        for attr_name in ("name", "file", "file_", "url"):
             value = getattr(component, attr_name, "") or ""
             if value and is_supported_image_reference(str(value)):
                 return True
