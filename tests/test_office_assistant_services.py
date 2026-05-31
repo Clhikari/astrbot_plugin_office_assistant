@@ -4913,6 +4913,37 @@ async def test_upload_session_service_caches_file_only_buffered_upload_in_group_
 
 
 @pytest.mark.asyncio
+async def test_upload_session_service_caches_buffered_images_alongside_files():
+    context = MagicMock()
+    event_queue = AsyncMock()
+    context.get_event_queue.return_value = event_queue
+    source_path = Path(__file__).resolve()
+    service = UploadSessionService(
+        context=context,
+        recent_text_ttl_seconds=30,
+        upload_session_ttl_seconds=300,
+        recent_text_max_entries=32,
+        recent_text_cleanup_interval_seconds=10,
+        upload_session_cleanup_interval_seconds=30,
+        extract_upload_source=AsyncMock(return_value=(source_path, "report.docx")),
+        store_uploaded_file=MagicMock(return_value=Path("report_1.docx")),
+        allow_external_input_files=True,
+    )
+    event = _build_event(message_type=MessageType.GROUP_MESSAGE)
+    upload = Comp.File(name="report.docx", file="report.docx")
+    image = Comp.Image(file="avatar.png")
+    buf = BufferedMessage(event=event, files=[upload], images=[image], texts=[])
+
+    await service.on_buffer_complete(buf)
+
+    event_queue.put.assert_not_awaited()
+    assert service.get_pending_image_resources(event) == [image]
+    upload_infos = service.list_session_upload_infos(event)
+    assert len(upload_infos) == 1
+    assert upload_infos[0]["original_name"] == "report.docx"
+
+
+@pytest.mark.asyncio
 async def test_upload_session_service_uses_recent_text_for_file_only_buffered_upload():
     context = MagicMock()
     event_queue = AsyncMock()
@@ -6322,6 +6353,36 @@ async def test_incoming_message_service_caches_image_file_by_path_when_name_miss
     event = _build_event()
     event.stop_event = MagicMock()
     file_comp = Comp.File(name="", file="C:/tmp/avatar.png")
+    event.message_obj.message = [file_comp]
+
+    await service.handle_file_message(event)
+
+    cache_pending.assert_called_once_with(event, file_comp)
+    assert event._has_pending_images is True
+    message_buffer.is_buffering.assert_not_called()
+    event.stop_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_service_caches_image_file_by_file_property():
+    message_buffer = MagicMock()
+    message_buffer.add_message = AsyncMock(return_value=True)
+    message_buffer.is_buffering.return_value = True
+    remember_recent_text = MagicMock()
+    cache_pending = MagicMock()
+    service = IncomingMessageService(
+        message_buffer=message_buffer,
+        remember_recent_text=remember_recent_text,
+        is_group_feature_enabled=lambda _event: True,
+        cache_pending_image_resource=cache_pending,
+    )
+    event = _build_event()
+    event.stop_event = MagicMock()
+    file_comp = MagicMock(spec=Comp.File)
+    file_comp.name = ""
+    file_comp.file = "C:/tmp/avatar.png"
+    file_comp.file_ = ""
+    file_comp.url = ""
     event.message_obj.message = [file_comp]
 
     await service.handle_file_message(event)

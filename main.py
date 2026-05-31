@@ -523,6 +523,13 @@ class FileOperationPlugin(Star):
     @img.command("add")
     async def img_add(self, event: AstrMessageEvent, selection: GreedyStr = ""):
         """注册上传的图片到资源池。"""
+        buffered = await self._runtime.message_buffer.pop_buffer(event)
+        if buffered:
+            for image in buffered.images:
+                self._runtime.upload_session_service.cache_pending_image_resource(
+                    event, image
+                )
+
         inline_images: list = []
         for component in event.message_obj.message:
             if isinstance(component, (Comp.Image, Comp.File)):

@@ -518,6 +518,7 @@ class UploadSessionService:
     async def on_buffer_complete(self, buf: BufferedMessage) -> None:
         event = buf.event
         files = buf.files
+        images = buf.images
         texts = buf.texts
 
         buffered_text_count = len(texts)
@@ -527,14 +528,18 @@ class UploadSessionService:
             logger.warning("[消息缓冲] 事件重入次数过多，停止处理")
             return
 
+        for image in images:
+            self.cache_pending_image_resource(event, image)
+
         if not files:
             return
 
         upload_infos = await self._ensure_upload_infos(event, files)
 
         logger.info(
-            "[消息缓冲] 缓冲完成，文件数: %s, 缓冲文本数: %s",
+            "[消息缓冲] 缓冲完成，文件数: %s, 图片数: %s, 缓冲文本数: %s",
             len(files),
+            len(images),
             buffered_text_count,
         )
 
