@@ -79,7 +79,48 @@ def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: 
     assert payloads[0]["version"] == "v1"
     assert payloads[0]["render_mode"] == "structured"
     assert payloads[0]["document_id"] == document.document_id
+    assert payloads[0]["workspace_dir"] == str(workspace_dir.resolve())
     assert payloads[0]["blocks"][0]["type"] == "paragraph"
+
+
+def test_node_render_backend_uses_document_workspace_for_output_subdir(
+    workspace_root: Path,
+):
+    workspace_dir = _make_workspace(
+        workspace_root,
+        "pytest-node-render-backend-output-dir",
+    )
+    entry_path = workspace_dir / "dist" / "cli.js"
+    entry_path.parent.mkdir(parents=True, exist_ok=True)
+    entry_path.write_text("// fake cli", encoding="utf-8")
+
+    store = DocumentSessionStore(workspace_dir=workspace_dir)
+    document = store.create_document(
+        CreateDocumentRequest(
+            title="Node Backend",
+            output_name="node-backend.docx",
+        )
+    )
+    document.add_block(ParagraphBlock(text="Node payload paragraph"))
+    output_path = workspace_dir / "reports" / "node-output.docx"
+    payloads: list[dict[str, object]] = []
+
+    def _fake_run(command, cwd, check, capture_output, text, encoding):
+        payload_path = Path(command[2])
+        moved_payload_path = payload_path.with_suffix(".moved.json")
+        payload_path.rename(moved_payload_path)
+        payloads.append(json.loads(moved_payload_path.read_text(encoding="utf-8")))
+        output_path.write_bytes(b"node-docx")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch(
+        "astrbot_plugin_office_assistant.domain.document.render_backends.subprocess.run",
+        side_effect=_fake_run,
+    ):
+        NodeDocumentRenderBackend(entry_path=entry_path).render(document, output_path)
+
+    assert payloads[0]["workspace_dir"] == str(workspace_dir.resolve())
+    assert payloads[0]["workspace_dir"] != str(output_path.parent.resolve())
 
 
 def test_node_render_backend_extracts_message_from_json_error(workspace_root: Path):

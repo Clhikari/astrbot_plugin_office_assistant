@@ -257,9 +257,8 @@ class FileOperationPlugin(Star):
                     logger.debug("[文件管理] 图片已被 /img add 消费，跳过 LLM 请求")
                     event.stop_event()
                     return
-                logger.debug("[文件管理] 等待超时，图片未被注册，继续 LLM 请求")
-                self._runtime.upload_session_service.clear_pending_image_resources(
-                    event, remaining_for_event
+                logger.debug(
+                    "[文件管理] 等待超时，图片仍保留在待注册资源池，继续 LLM 请求"
                 )
                 setattr(event, "_has_pending_images", False)
 

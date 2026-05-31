@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from .blocks import (
     DocumentBlock,
@@ -136,6 +136,7 @@ class DocumentMetadata(BaseModel):
 
 class DocumentModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    _workspace_dir: str = PrivateAttr(default="")
 
     document_id: str
     session_id: str = ""
