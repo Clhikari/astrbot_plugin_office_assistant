@@ -222,6 +222,38 @@ class TestImageAssetServiceNoteAndClear:
         image_service.clear_images(session_key=SESSION_A)
         assert not file_path.exists()
 
+    def test_set_active_images_limits_workflow_refs(self, image_service, sample_png):
+        old_info = image_service.register_image(sample_png, session_key=SESSION_A)
+        new_info = image_service.register_image(sample_png, session_key=SESSION_A)
+
+        active = image_service.set_active_images(
+            [new_info["ref"]],
+            session_key=SESSION_A,
+        )
+
+        assert [info["ref"] for info in active] == [new_info["ref"]]
+        assert [info["ref"] for info in image_service.list_images(SESSION_A)] == [
+            old_info["ref"],
+            new_info["ref"],
+        ]
+        assert [
+            info["ref"] for info in image_service.list_active_images(SESSION_A)
+        ] == [new_info["ref"]]
+
+    def test_clear_removes_refs_from_active_set(self, image_service, sample_png):
+        old_info = image_service.register_image(sample_png, session_key=SESSION_A)
+        new_info = image_service.register_image(sample_png, session_key=SESSION_A)
+        image_service.set_active_images(
+            [old_info["ref"], new_info["ref"]],
+            session_key=SESSION_A,
+        )
+
+        image_service.clear_images(session_key=SESSION_A, ref=old_info["ref"])
+
+        assert [
+            info["ref"] for info in image_service.list_active_images(SESSION_A)
+        ] == [new_info["ref"]]
+
 
 class TestImageAssetServicePersistence:
     def test_index_survives_reload(self, tmp_path, sample_png):
@@ -235,6 +267,17 @@ class TestImageAssetServicePersistence:
         assert len(images) == 1
         assert images[0]["ref"] == info["ref"]
         assert images[0]["note"] == "persist"
+
+    def test_active_set_survives_reload(self, tmp_path, sample_png):
+        service1 = ImageAssetService(plugin_data_path=tmp_path)
+        info = service1.register_image(sample_png, session_key=SESSION_A)
+        service1.set_active_images([info["ref"]], session_key=SESSION_A)
+
+        service2 = ImageAssetService(plugin_data_path=tmp_path)
+
+        active_images = service2.list_active_images(SESSION_A)
+        assert len(active_images) == 1
+        assert active_images[0]["ref"] == info["ref"]
 
 
 class TestImageBlockValidation:

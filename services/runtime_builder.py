@@ -133,6 +133,15 @@ def build_plugin_runtime(
             return
         session_key = upload_session_service.get_attachment_session_key(event)
         image_asset_service.resolve_ref(ref, session_key=session_key)
+        active_refs = {
+            image["ref"]
+            for image in image_asset_service.list_active_images(session_key)
+        }
+        if active_refs and ref not in active_refs:
+            raise ValueError(
+                f"图片引用 {ref} 不在当前活动图片中。"
+                "请先使用 /img use 选择要用于本轮文档/PPT 的图片。"
+            )
 
     document_toolset = build_document_toolset(
         workspace_dir=plugin_data_path,
@@ -283,7 +292,7 @@ def _build_request_pipeline_services(
         prompt_context_service=prompt_context_service,
         lookup_document_summary=_build_document_summary_lookup(document_toolset),
         lookup_workbook_summary=_build_workbook_summary_lookup(workbook_toolset),
-        get_session_images=lambda event: image_asset_service.list_images(
+        get_session_images=lambda event: image_asset_service.list_active_images(
             upload_session_service.get_attachment_session_key(event)
         ),
     )

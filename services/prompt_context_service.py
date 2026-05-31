@@ -308,12 +308,12 @@ class PromptContextService:
         omitted_count = max(0, len(images) - MAX_IMAGE_ASSET_PROMPT_ITEMS)
         visible_images = images[-MAX_IMAGE_ASSET_PROMPT_ITEMS:]
         lines = [
-            "\n[System Notice] 当前会话已注册图片资源",
-            "以下图片可在 add_blocks(image) 或 add_slides(image_slide) 中使用：",
+            "\n[System Notice] 当前活动图片资源",
+            "以下是本轮文档/PPT 工作流允许直接使用的图片：",
         ]
         if omitted_count:
             lines.append(
-                f"仅列出最近 {len(visible_images)} 张，另有 {omitted_count} 张较早图片未列出；需要时让用户用 /img list 查看。"
+                f"仅列出最近 {len(visible_images)} 张，另有 {omitted_count} 张活动图片未列出；需要时让用户用 /img active 查看。"
             )
         for i, img in enumerate(visible_images, 1):
             note = str(img.get("note") or "")
@@ -329,7 +329,8 @@ class PromptContextService:
         lines.append(
             "- image block 的 path / image_slide 的 image_path 只能使用上述 `images/...` 引用"
         )
-        lines.append("- 不确定用哪张图时，询问用户")
+        lines.append("- 需要其他历史图片时，询问用户先用 /img use 选择")
+        lines.append("- 不确定用哪张活动图片时，询问用户")
         lines.append("- 不要编造不存在的图片路径")
         return PromptSection(
             name=SECTION_SCENE_IMAGE_ASSETS,

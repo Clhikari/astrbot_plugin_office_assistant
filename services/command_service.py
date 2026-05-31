@@ -392,12 +392,17 @@ class CommandService:
 
         lines = []
         if registered:
+            self._image_asset_service.set_active_images(
+                [info["ref"] for info in registered],
+                session_key=session_key,
+            )
             lines.append(f"已注册 {len(registered)} 张图片：")
             for info in registered:
                 size_str = format_file_size(info["size_bytes"])
                 lines.append(
                     f"  {info['ref']} ({info['width']}x{info['height']}, {size_str})"
                 )
+            lines.append("这批图片已设为当前活动图片，文档/PPT 工作流会优先使用它们。")
         if errors:
             lines.append("注册失败：")
             lines.extend(f"  {e}" for e in errors)
@@ -414,18 +419,64 @@ class CommandService:
         if not images:
             return "当前会话没有已注册的图片。使用 /img add 注册上传的图片。"
 
+        active_refs = {
+            img["ref"]
+            for img in self._image_asset_service.list_active_images(session_key)
+        }
         lines = [f"📷 当前会话图片（共 {len(images)} 张）："]
         for i, info in enumerate(images, 1):
             size_str = format_file_size(info["size_bytes"])
             note_str = f" — {info['note']}" if info["note"] else ""
+            active_mark = " [当前使用]" if info["ref"] in active_refs else ""
             detail_parts = []
             if info.get("original_name"):
                 detail_parts.append(info["original_name"])
             detail_parts.append(f"{info['width']}x{info['height']}")
             detail_parts.append(size_str)
             lines.append(
-                f"  {i}. {info['ref']}\n     {' | '.join(detail_parts)}{note_str}"
+                f"  {i}. {info['ref']}{active_mark}\n"
+                f"     {' | '.join(detail_parts)}{note_str}"
             )
+        lines.append("")
+        lines.append("使用 /img use <序号|引用|all> 选择本轮文档/PPT 可用图片。")
+        return "\n".join(lines)
+
+    def img_active(self, event) -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        session_key = self._upload_session_service.get_attachment_session_key(event)
+        images = self._image_asset_service.list_active_images(session_key)
+        if not images:
+            return "当前没有活动图片。使用 /img add 注册图片，或 /img use 从已注册图片中选择。"
+        return self._format_active_images(images)
+
+    def img_use(self, event, selection: str = "") -> str:
+        access_error = self._require_access(event)
+        if access_error:
+            return access_error
+
+        session_key = self._upload_session_service.get_attachment_session_key(event)
+        images = self._image_asset_service.list_images(session_key)
+        if not images:
+            return "当前会话没有已注册的图片。使用 /img add 注册上传的图片。"
+
+        selection = selection.strip()
+        if not selection:
+            return "用法: /img use <序号|引用|all>。需要多张图片时用空格分隔，例如 /img use 1 3。"
+
+        refs, error = self._resolve_img_refs(selection, images)
+        if error:
+            return error
+        active_images = self._image_asset_service.set_active_images(
+            refs,
+            session_key=session_key,
+        )
+        if not active_images:
+            return "没有选择任何图片。"
+        lines = [f"已设置 {len(active_images)} 张当前活动图片："]
+        lines.extend(self._format_image_info_lines(active_images))
         return "\n".join(lines)
 
     def img_note(self, event, ref: str, note: str) -> str:
@@ -470,6 +521,43 @@ class CommandService:
 
         count = self._image_asset_service.clear_images(session_key=session_key, ref=ref)
         return f"已清理: {ref}" if count else f"清理失败: {ref}"
+
+    def _format_active_images(self, images: list[dict]) -> str:
+        lines = [f"当前活动图片（共 {len(images)} 张）："]
+        lines.extend(self._format_image_info_lines(images))
+        return "\n".join(lines)
+
+    def _format_image_info_lines(self, images: list[dict]) -> list[str]:
+        lines: list[str] = []
+        for i, info in enumerate(images, 1):
+            size_str = format_file_size(info["size_bytes"])
+            note_str = f" — {info['note']}" if info.get("note") else ""
+            detail_parts = []
+            if info.get("original_name"):
+                detail_parts.append(info["original_name"])
+            detail_parts.append(f"{info['width']}x{info['height']}")
+            detail_parts.append(size_str)
+            lines.append(
+                f"  {i}. {info['ref']}\n     {' | '.join(detail_parts)}{note_str}"
+            )
+        return lines
+
+    def _resolve_img_refs(
+        self,
+        selection: str,
+        images: list[dict],
+    ) -> tuple[list[str], str]:
+        if selection.strip() == "all":
+            return [img["ref"] for img in images], ""
+
+        refs: list[str] = []
+        for token in selection.split():
+            ref = self._resolve_img_ref(token, images)
+            if ref is None:
+                return [], f"未找到图片: {token}"
+            if ref not in refs:
+                refs.append(ref)
+        return refs, ""
 
     def _resolve_img_ref(self, ref_or_idx: str, images: list[dict]) -> str | None:
         if ref_or_idx.startswith("images/"):
