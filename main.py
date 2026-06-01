@@ -369,7 +369,7 @@ class FileOperationPlugin(Star):
                 load_input_workbook、save_output_workbook、ensure_readable_sheet、
                 format_table_sheet、format_course_list_sheet、auto_format_workbook、
                 preserve_input_sheet_layout 等辅助函数。
-            input_files(list[string]): 作为输入的 Excel 文件列表。
+            input_files(array[string]): 作为输入的 Excel 文件列表。
             output_name(string): 需要返回文件时的输出文件名。
         """
         effective_input_files = input_files
