@@ -37,6 +37,7 @@ import astrbot.api.message_components as Comp
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.message_type import MessageType
+from astrbot.core.provider.register import llm_tools
 from astrbot.core.provider.entities import ProviderRequest
 from conftest import build_notice_once_callback as _build_notice_once_callback
 from tests._docx_test_helpers import _write_png
@@ -99,6 +100,15 @@ def _tool(name: str) -> FunctionTool:
         parameters={"type": "object", "properties": {}},
         handler=None,
     )
+
+
+def test_execute_excel_script_llm_tool_schema_declares_input_file_items():
+    tool = llm_tools.get_func("execute_excel_script")
+
+    assert tool is not None
+    input_files_schema = tool.parameters["properties"]["input_files"]
+    assert input_files_schema["type"] == "array"
+    assert input_files_schema["items"] == {"type": "string"}
 
 
 def _build_provider_request(
