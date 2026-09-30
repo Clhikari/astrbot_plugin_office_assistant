@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -256,6 +257,29 @@ class TestImageAssetServiceNoteAndClear:
 
 
 class TestImageAssetServicePersistence:
+
+    @pytest.mark.parametrize(
+        "timestamp",
+        [float("nan"), float("inf"), float("-inf")],
+        ids=["nan", "positive-infinity", "negative-infinity"],
+    )
+    def test_nonfinite_timestamps_are_dropped_on_reload(self, tmp_path, sample_png, timestamp):
+        service = ImageAssetService(plugin_data_path=tmp_path)
+        valid = service.register_image(sample_png, session_key=SESSION_A)
+        invalid = dict(valid, ref="images/invalid.png", registered_at=timestamp)
+        index_path = tmp_path / "images" / "index.json"
+        index_path.write_text(json.dumps([valid, invalid]), encoding="utf-8")
+
+        reloaded = ImageAssetService(plugin_data_path=tmp_path)
+        assert reloaded.list_images(SESSION_A) == [valid]
+        assert reloaded.update_note(valid["ref"], "saved again", session_key=SESSION_A)
+        saved = json.loads(
+            index_path.read_text(encoding="utf-8"),
+            parse_constant=lambda value: pytest.fail(f"Non-standard JSON value: {value}"),
+        )
+        assert len(saved) == 1
+        assert saved[0]["ref"] == valid["ref"]
+
     def test_index_survives_reload(self, tmp_path, sample_png):
         service1 = ImageAssetService(plugin_data_path=tmp_path)
         info = service1.register_image(

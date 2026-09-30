@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import time
 import uuid
@@ -52,7 +53,16 @@ class ImageAssetService:
             try:
                 data = json.loads(self._index_path.read_text(encoding="utf-8"))
                 if isinstance(data, list):
-                    return data
+                    items = []
+                    for item in data:
+                        timestamp = item.get("registered_at") if isinstance(item, dict) else None
+                        if type(timestamp) not in {int, float} or (
+                            type(timestamp) is float and not math.isfinite(timestamp)
+                        ):
+                            logger.warning("invalid image asset timestamp, skipping record")
+                            continue
+                        items.append(item)
+                    return items
             except (json.JSONDecodeError, OSError):
                 logger.warning("image asset index corrupted, starting fresh")
         return []
@@ -268,12 +278,11 @@ class ImageAssetService:
             return 0
 
         for item in to_remove:
-            file_path = self._images_dir.parent / item["ref"]
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except OSError:
-                    logger.warning(f"failed to delete image file: {file_path}")
+            try:
+                file_path = self._resolve_asset_path(item["ref"])
+                file_path.unlink(missing_ok=True)
+            except (ValueError, OSError) as exc:
+                logger.warning("failed to delete image file %s: %s", item["ref"], exc)
 
         removed_refs = {item["ref"] for item in to_remove}
         self._index = [
@@ -306,6 +315,20 @@ class ImageAssetService:
         self._save_active_refs()
         return len(to_remove)
 
+    def _resolve_asset_path(self, ref: str) -> Path:
+        """Resolve inside the image pool; final file symlinks are not supported."""
+        ref = validate_image_asset_ref(ref)
+        file_path = self._images_dir.parent / ref
+        try:
+            if file_path.is_symlink():
+                raise ValueError(f"图片引用不能指向符号链接: {ref}")
+            resolved = file_path.resolve()
+            if not resolved.is_relative_to(self._images_dir.resolve()):
+                raise ValueError(f"图片引用超出图片目录: {ref}")
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"无法安全解析图片引用: {ref}") from exc
+        return resolved
+
     def resolve_ref(
         self,
         ref: str,
@@ -323,12 +346,12 @@ class ImageAssetService:
                 f"图片引用 {ref} 不在当前会话的资源池中。请先使用 /img add 注册图片。"
             )
 
-        file_path = self._images_dir.parent / ref
+        file_path = self._resolve_asset_path(ref)
         if not file_path.exists():
             raise FileNotFoundError(
                 f"图片文件不存在: {ref}。可能已被清理，请重新上传。"
             )
-        return file_path.resolve()
+        return file_path
 
     def ref_exists(
         self,
