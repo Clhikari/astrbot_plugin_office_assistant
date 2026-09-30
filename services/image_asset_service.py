@@ -55,17 +55,51 @@ class ImageAssetService:
                 if isinstance(data, list):
                     items = []
                     for item in data:
-                        timestamp = item.get("registered_at") if isinstance(item, dict) else None
-                        if type(timestamp) not in {int, float} or (
-                            type(timestamp) is float and not math.isfinite(timestamp)
-                        ):
-                            logger.warning("invalid image asset timestamp, skipping record")
+                        validated = self._validate_index_item(item)
+                        if validated is None:
+                            logger.warning("invalid image asset record, skipping entry")
                             continue
-                        items.append(item)
+                        items.append(validated)
                     return items
             except (json.JSONDecodeError, OSError):
                 logger.warning("image asset index corrupted, starting fresh")
         return []
+
+    @staticmethod
+    def _validate_index_item(item: object) -> ImageAssetInfo | None:
+        if not isinstance(item, dict):
+            return None
+        if any(not isinstance(item.get(key), str) for key in ("ref", "original_name", "note", "format")):
+            return None
+        if item["format"] not in ALLOWED_FORMATS:
+            return None
+        session_key = item.get("session_key")
+        if not isinstance(session_key, list) or len(session_key) != 3:
+            return None
+        if any(not isinstance(part, str) for part in session_key):
+            return None
+        for key, minimum in (("width", 1), ("height", 1), ("size_bytes", 0)):
+            value = item.get(key)
+            if type(value) is not int or value < minimum:
+                return None
+        timestamp = item.get("registered_at")
+        if type(timestamp) not in {int, float} or (type(timestamp) is float and not math.isfinite(timestamp)):
+            return None
+        try:
+            ref = validate_image_asset_ref(item["ref"])
+        except ValueError:
+            return None
+        return {
+            "ref": ref,
+            "original_name": item["original_name"],
+            "note": item["note"],
+            "width": item["width"],
+            "height": item["height"],
+            "format": item["format"],
+            "size_bytes": item["size_bytes"],
+            "registered_at": timestamp,
+            "session_key": list(session_key),
+        }
 
     def _save_index(self) -> None:
         tmp_path = self._index_path.with_suffix(self._index_path.suffix + ".tmp")

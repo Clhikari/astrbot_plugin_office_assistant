@@ -259,6 +259,62 @@ class TestImageAssetServiceNoteAndClear:
 class TestImageAssetServicePersistence:
 
     @pytest.mark.parametrize(
+        "field,value",
+        [
+            (field, ...)
+            for field in (
+                "ref",
+                "session_key",
+                "original_name",
+                "note",
+                "width",
+                "height",
+                "format",
+                "size_bytes",
+            )
+        ]
+        + [
+            ("ref", []),
+            ("ref", "images/../outside.png"),
+            ("ref", "other/image.png"),
+            ("session_key", None),
+            ("session_key", "abc"),
+            ("session_key", ["p", "u"]),
+            ("session_key", ["p", 7, "o"]),
+            ("original_name", 123),
+            ("note", []),
+            ("format", "SVG"),
+            ("format", []),
+            ("width", True),
+            ("width", 0),
+            ("height", -1),
+            ("height", 1.5),
+            ("size_bytes", -1),
+            ("size_bytes", "12"),
+        ],
+    )
+    def test_malformed_index_records_do_not_break_reload(self, tmp_path, sample_png, field, value):
+        service = ImageAssetService(plugin_data_path=tmp_path)
+        own = service.register_image(sample_png, session_key=SESSION_A)
+        other = service.register_image(sample_png, session_key=SESSION_B)
+        invalid = dict(own, ref="images/invalid.png")
+        if value is Ellipsis:
+            invalid.pop(field)
+        else:
+            invalid[field] = value
+        index_path = tmp_path / "images" / "index.json"
+        index_path.write_text(json.dumps([own, invalid, other]), encoding="utf-8")
+        source_bytes = sample_png.read_bytes()
+
+        reloaded = ImageAssetService(plugin_data_path=tmp_path)
+        assert reloaded.list_images(SESSION_A) == [own]
+        assert reloaded.list_images(SESSION_B) == [other]
+        assert reloaded.resolve_ref(own["ref"], session_key=SESSION_A).read_bytes() == source_bytes
+        assert reloaded.update_note(own["ref"], "still usable", session_key=SESSION_A)
+        saved = json.loads(index_path.read_text(encoding="utf-8"))
+        assert [item["ref"] for item in saved] == [own["ref"], other["ref"]]
+
+    @pytest.mark.parametrize(
         "timestamp",
         [float("nan"), float("inf"), float("-inf")],
         ids=["nan", "positive-infinity", "negative-infinity"],
