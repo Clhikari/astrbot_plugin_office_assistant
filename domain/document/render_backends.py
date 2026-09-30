@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import os
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, Sequence
+from typing import Any, Iterator, Literal, Protocol, Sequence
 
 from astrbot.api import logger
 
@@ -18,6 +21,7 @@ RenderBackendKind = Literal["python", "node"]
 
 _STORE_RENDER_BACKEND_CONFIG_ATTR = "_document_render_backend_config"
 _LEGACY_STORE_RENDER_BACKEND_CONFIG_ATTR = "_legacy_document_render_backend_config"
+DEFAULT_NODE_RENDER_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(slots=True)
@@ -161,7 +165,17 @@ def _fixup_block_payload(block_payload: dict[str, Any], block: object) -> None:
 class NodeDocumentRenderBackend:
     name = "node"
 
-    def __init__(self, entry_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        entry_path: str | Path | None = None,
+        *,
+        timeout_seconds: float = DEFAULT_NODE_RENDER_TIMEOUT_SECONDS,
+    ) -> None:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError(
+                "Node renderer timeout_seconds must be positive and finite"
+            )
+        self._timeout_seconds = timeout_seconds
         self._entry_path = (
             Path(entry_path).resolve()
             if entry_path and str(entry_path).strip()
@@ -180,7 +194,10 @@ class NodeDocumentRenderBackend:
     def is_available(self) -> bool:
         return self._entry_path.exists() and shutil.which("node") is not None
 
-    def render(self, document: DocumentModel, output_path: Path) -> RenderResult:
+    @contextmanager
+    def _payload_file(
+        self, document: DocumentModel, output_path: Path
+    ) -> Iterator[Path]:
         entry_path = self._entry_path
         if not entry_path.exists():
             raise DocumentRenderBackendError(
@@ -193,48 +210,117 @@ class NodeDocumentRenderBackend:
             _resolve_document_workspace_dir(document, output_path)
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".json",
-            encoding="utf-8",
-            delete=False,
-            dir=output_path.parent,
-        ) as payload_file:
-            payload_path = Path(payload_file.name)
-            json.dump(payload, payload_file, ensure_ascii=False)
-            payload_file.flush()
-            os.fsync(payload_file.fileno())
-
-        command = ["node", str(entry_path), str(payload_path), str(output_path)]
-        cwd = entry_path.parent
+        payload_path: Path | None = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".json",
+                encoding="utf-8",
+                delete=False,
+                dir=output_path.parent,
+            ) as payload_file:
+                payload_path = Path(payload_file.name)
+                json.dump(payload, payload_file, ensure_ascii=False)
+                payload_file.flush()
+                os.fsync(payload_file.fileno())
+            yield payload_path
+        finally:
+            if payload_path is not None:
+                payload_path.unlink(missing_ok=True)
+
+    def render(self, document: DocumentModel, output_path: Path) -> RenderResult:
+        with self._payload_file(document, output_path) as payload_path:
+            command = [
+                "node",
+                str(self._entry_path),
+                str(payload_path),
+                str(output_path),
+            ]
             logger.debug(
                 "[office-assistant] invoking js renderer entry=%s payload=%s output=%s",
-                entry_path,
+                self._entry_path,
                 payload_path,
                 output_path,
             )
-            completed = subprocess.run(
-                command,
-                cwd=str(cwd),
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            raise DocumentRenderBackendError(
-                self.name,
-                f"Failed to start js renderer: {exc}",
-            ) from exc
-        finally:
-            payload_path.unlink(missing_ok=True)
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(self._entry_path.parent),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=self._timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise self._timeout_error() from exc
+            except OSError as exc:
+                raise DocumentRenderBackendError(
+                    self.name, f"Failed to start js renderer: {exc}"
+                ) from exc
 
-        if completed.returncode != 0:
+        return self._render_result(
+            output_path, completed.returncode, completed.stdout, completed.stderr
+        )
+
+    async def render_async(
+        self, document: DocumentModel, output_path: Path
+    ) -> RenderResult:
+        with self._payload_file(document, output_path) as payload_path:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "node",
+                    str(self._entry_path),
+                    str(payload_path),
+                    str(output_path),
+                    cwd=str(self._entry_path.parent),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as exc:
+                raise DocumentRenderBackendError(
+                    self.name, f"Failed to start js renderer: {exc}"
+                ) from exc
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self._timeout_seconds
+                )
+            except (TimeoutError, asyncio.CancelledError) as exc:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                # Reap the child before removing its payload or partial output.
+                await process.communicate()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise self._timeout_error() from exc
+
+        return self._render_result(
+            output_path,
+            process.returncode,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
+
+    def _timeout_error(self) -> DocumentRenderBackendError:
+        return DocumentRenderBackendError(
+            self.name, f"JS renderer timed out after {self._timeout_seconds:g} seconds"
+        )
+
+    def _render_result(
+        self,
+        output_path: Path,
+        returncode: int | None,
+        stdout: str,
+        stderr: str,
+    ) -> RenderResult:
+        if returncode != 0:
             detail = _extract_renderer_error_detail(
-                completed.stderr,
-                completed.stdout,
-                completed.returncode,
+                stderr,
+                stdout,
+                returncode if returncode is not None else -1,
             )
             raise DocumentRenderBackendError(
                 self.name,
@@ -292,6 +378,32 @@ def _extract_renderer_error_detail(
     return f"exit code {returncode}"
 
 
+@contextmanager
+def _staged_output_path(output_path: Path) -> Iterator[Path]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, filename = tempfile.mkstemp(
+        prefix=".office-render-", suffix=output_path.suffix, dir=output_path.parent
+    )
+    os.close(descriptor)
+    staged_path = Path(filename)
+    staged_path.unlink()
+    try:
+        yield staged_path
+    finally:
+        staged_path.unlink(missing_ok=True)
+
+
+def _commit_rendered_output(
+    staged_path: Path, output_path: Path, result: RenderResult
+) -> RenderResult:
+    if not staged_path.is_file():
+        raise DocumentRenderBackendError(
+            result.backend_name, f"Renderer completed without output: {staged_path}"
+        )
+    staged_path.replace(output_path)
+    return RenderResult(result.backend_name, output_path)
+
+
 def render_document_with_backends(
     document: DocumentModel,
     output_path: Path,
@@ -305,8 +417,9 @@ def render_document_with_backends(
     last_error: Exception | None = None
     for index, backend in enumerate(render_backends):
         try:
-            output_path.unlink(missing_ok=True)
-            result = backend.render(document, output_path)
+            with _staged_output_path(output_path) as staged_path:
+                result = backend.render(document, staged_path)
+                result = _commit_rendered_output(staged_path, output_path, result)
             logger.debug(
                 "[office-assistant] document render completed document=%s format=%s output=%s backend=%s",
                 document.document_id,
@@ -317,7 +430,6 @@ def render_document_with_backends(
             return result
         except Exception as exc:
             last_error = exc
-            output_path.unlink(missing_ok=True)
             has_fallback = index < len(render_backends) - 1
             logger.warning(
                 "[office-assistant] render backend failed document=%s format=%s backend=%s fallback=%s error=%s",
@@ -333,6 +445,55 @@ def render_document_with_backends(
     raise RuntimeError(
         f"Rendering failed for document format: {document.format}"
     ) from last_error
+
+
+async def _render_backend_async(
+    backend: DocumentRenderBackend, document: DocumentModel, output_path: Path
+) -> RenderResult:
+    render_async = getattr(backend, "render_async", None)
+    if callable(render_async):
+        return await render_async(document, output_path)
+    # Keep custom synchronous backends compatible without blocking the event loop.
+    task = asyncio.create_task(asyncio.to_thread(backend.render, document, output_path))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # A worker thread cannot be cancelled. Wait before cleaning its staging
+        # path, and never publish the result of a cancelled export.
+        try:
+            await task
+        except Exception:
+            pass
+        raise
+
+
+async def render_document_with_backends_async(
+    document: DocumentModel,
+    output_path: Path,
+    render_backends: Sequence[DocumentRenderBackend],
+) -> RenderResult:
+    if not render_backends:
+        raise RuntimeError(
+            f"No render backend configured for document format: {document.format}"
+        )
+    for index, backend in enumerate(render_backends):
+        try:
+            with _staged_output_path(output_path) as staged_path:
+                result = await _render_backend_async(backend, document, staged_path)
+                return _commit_rendered_output(staged_path, output_path, result)
+        except Exception as exc:
+            has_fallback = index < len(render_backends) - 1
+            logger.warning(
+                "[office-assistant] async render backend failed document=%s format=%s backend=%s fallback=%s error=%s",
+                document.document_id,
+                document.format,
+                getattr(backend, "name", backend.__class__.__name__),
+                has_fallback,
+                exc,
+            )
+            if not has_fallback:
+                raise
+    raise RuntimeError(f"Rendering failed for document format: {document.format}")
 
 
 def build_document_render_backends(
@@ -376,5 +537,6 @@ __all__ = [
     "build_document_render_backends",
     "build_document_render_payload",
     "render_document_with_backends",
+    "render_document_with_backends_async",
     "get_render_backend_config",
 ]

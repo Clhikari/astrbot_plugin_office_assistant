@@ -2401,7 +2401,9 @@ async def test_add_blocks_tool_does_not_absorb_bottom_border_heading_before_tabl
 
 
 @pytest.mark.asyncio
-async def test_document_toolset_export_callback_runs(workspace_root: Path):
+async def test_document_toolset_export_callback_runs(
+    workspace_root: Path, agent_tool_context
+):
     pytest.importorskip("docx")
 
     workspace_dir = _make_workspace(workspace_root, "pytest-agent-tools-callback")
@@ -2419,7 +2421,7 @@ async def test_document_toolset_export_callback_runs(workspace_root: Path):
 
     created = json.loads(
         await tool_by_name["create_document"].call(
-            None,
+            agent_tool_context,
             session_id="pytest-session",
             title="Pytest Callback",
             output_name="pytest-callback.docx",
@@ -2427,7 +2429,7 @@ async def test_document_toolset_export_callback_runs(workspace_root: Path):
     )
 
     exported = await tool_by_name["export_document"].call(
-        object(),
+        agent_tool_context,
         document_id=created["document"]["document_id"],
     )
 
@@ -2476,6 +2478,7 @@ async def test_add_blocks_tool_rejects_updates_after_finalize():
 @pytest.mark.asyncio
 async def test_document_toolset_preserves_positional_after_export_callback(
     workspace_root: Path,
+    agent_tool_context,
 ):
     pytest.importorskip("docx")
 
@@ -2493,7 +2496,7 @@ async def test_document_toolset_preserves_positional_after_export_callback(
 
     created = json.loads(
         await tool_by_name["create_document"].call(
-            None,
+            agent_tool_context,
             session_id="pytest-session",
             title="Positional Callback",
             output_name="positional-callback.docx",
@@ -2501,7 +2504,7 @@ async def test_document_toolset_preserves_positional_after_export_callback(
     )
 
     exported = await tool_by_name["export_document"].call(
-        object(),
+        agent_tool_context,
         document_id=created["document"]["document_id"],
     )
 
@@ -2554,6 +2557,7 @@ async def test_export_pipeline_falls_back_to_python_backend(workspace_root: Path
 @pytest.mark.asyncio
 async def test_document_toolset_runs_after_export_hooks_before_delivery_callback(
     workspace_root: Path,
+    agent_tool_context,
 ):
     pytest.importorskip("docx")
 
@@ -2581,7 +2585,7 @@ async def test_document_toolset_runs_after_export_hooks_before_delivery_callback
 
     created = json.loads(
         await tool_by_name["create_document"].call(
-            None,
+            agent_tool_context,
             session_id="pytest-session",
             title="After Export Hook",
             output_name="after-export-hook.docx",
@@ -2589,7 +2593,7 @@ async def test_document_toolset_runs_after_export_hooks_before_delivery_callback
     )
 
     exported = await tool_by_name["export_document"].call(
-        object(),
+        agent_tool_context,
         document_id=created["document"]["document_id"],
     )
 
@@ -2602,6 +2606,7 @@ async def test_document_toolset_runs_after_export_hooks_before_delivery_callback
 @pytest.mark.asyncio
 async def test_export_document_tool_keeps_success_when_callback_fails(
     workspace_root: Path,
+    agent_tool_context,
 ):
     pytest.importorskip("docx")
 
@@ -2618,7 +2623,7 @@ async def test_export_document_tool_keeps_success_when_callback_fails(
 
     created = json.loads(
         await tool_by_name["create_document"].call(
-            None,
+            agent_tool_context,
             session_id="pytest-session",
             title="Pytest Callback Failure",
             output_name="pytest-callback-failure.docx",
@@ -2627,7 +2632,7 @@ async def test_export_document_tool_keeps_success_when_callback_fails(
 
     exported = json.loads(
         await tool_by_name["export_document"].call(
-            object(),
+            agent_tool_context,
             document_id=created["document"]["document_id"],
         )
     )

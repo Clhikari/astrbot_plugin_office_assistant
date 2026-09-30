@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import column_index_from_string
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .models import WorkbookModel
 
@@ -68,7 +68,9 @@ def _apply_worksheet_options(worksheet, worksheet_model, header_row: int = 1) ->
                         ).number_format = fmt
 
     if options.autofilter and worksheet_model.rows:
-        worksheet.auto_filter.ref = worksheet.dimensions
+        last_column = get_column_letter(worksheet.max_column)
+        last_row = max(header_row, worksheet.max_row)
+        worksheet.auto_filter.ref = f"A{header_row}:{last_column}{last_row}"
 
 
 __all__ = ["export_workbook_to_xlsx"]

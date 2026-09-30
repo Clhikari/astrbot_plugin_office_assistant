@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from ..constants import DOC_COMMAND_TRIGGER_EVENT_KEY
 from ..constants import ALL_OFFICE_SUFFIXES
 from ..domain.document.render_backends import NodeDocumentRenderBackend
+from ..domain.export_artifacts import cleanup_owned_export_directory
 from ..utils import format_file_size
 
 if TYPE_CHECKING:
@@ -65,11 +66,18 @@ class CommandService:
         if not valid:
             return f"❌ {error}"
 
+        private_access_error = self._workspace_service.check_private_export_access(
+            event, file_path
+        )
+        if private_access_error:
+            return private_access_error
+
         if not file_path.exists():
             return f"错误：找不到文件 '{display_name}'"
 
         try:
             file_path.unlink(missing_ok=True)
+            cleanup_owned_export_directory(file_path)
             return f"成功：文件 '{display_name}' 已删除。"
         except IsADirectoryError:
             return f"'{display_name}'是目录,拒绝删除"
@@ -124,25 +132,37 @@ class CommandService:
         if access_error:
             return access_error
 
-        files = [
-            file_path
+        files = {
+            file_path.resolve()
             for file_path in self._plugin_data_path.glob("*")
             if file_path.is_file() and file_path.suffix.lower() in ALL_OFFICE_SUFFIXES
-        ]
-        if not files:
+        }
+        files.update(
+            path
+            for path in self._workspace_service.list_exported_paths(event)
+            if path.suffix.lower() in ALL_OFFICE_SUFFIXES
+        )
+        available_files = []
+        for file_path in files:
+            try:
+                available_files.append((file_path, file_path.stat()))
+            except OSError:
+                continue
+        if not available_files:
             result = "文件库当前没有 Office 文件"
             if self._auto_delete:
                 result += "（自动删除模式已开启，文件发送后会自动清理）"
             return result
 
-        files.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        available_files.sort(key=lambda item: item[1].st_mtime, reverse=True)
         lines = ["📂 机器人工作区 Office 文件列表："]
         if self._auto_delete:
             lines.append("⚠️ 自动删除模式已开启")
-        for file_path in files:
-            lines.append(
-                f"- {file_path.name} ({format_file_size(file_path.stat().st_size)})"
-            )
+        for file_path, file_stat in available_files:
+            reference = file_path.relative_to(
+                self._plugin_data_path.resolve()
+            ).as_posix()
+            lines.append(f"- {reference} ({format_file_size(file_stat.st_size)})")
         return "\n".join(lines)
 
     def pdf_status(self, event) -> str:
@@ -373,6 +393,7 @@ class CommandService:
         targets = [(idx + 1, normalized_items[idx]) for idx in target_indices]
 
         registered = []
+        registered_resources = []
         errors = []
         for idx, (path, original_name, _resource) in targets:
             try:
@@ -383,11 +404,12 @@ class CommandService:
                     original_name=original_name,
                 )
                 registered.append(info)
+                registered_resources.append(_resource)
             except (ValueError, FileNotFoundError) as exc:
                 errors.append(f"图片 {idx}: {exc}")
 
         self._upload_session_service.clear_pending_image_resources(
-            event, [resource for _idx, (_path, _name, resource) in targets]
+            event, registered_resources
         )
 
         lines = []

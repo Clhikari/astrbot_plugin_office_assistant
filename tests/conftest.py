@@ -3,6 +3,7 @@ import shutil
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -28,6 +29,17 @@ def _ensure_local_package_alias() -> None:
 
 
 _ensure_local_package_alias()
+
+
+@pytest.fixture
+def agent_tool_context():
+    event = SimpleNamespace(
+        get_platform_id=lambda: "pytest-platform",
+        get_sender_id=lambda: "pytest-user",
+        unified_msg_origin="pytest-private-session",
+        get_extra=lambda key, default=None: default,
+    )
+    return SimpleNamespace(context=SimpleNamespace(event=event))
 
 
 def build_notice_once_callback():

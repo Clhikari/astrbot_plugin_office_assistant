@@ -125,6 +125,10 @@ class FileReadService:
         try:
             resolved_path = target.resolved_path
             suffix = target.suffix
+            if suffix in self._EXCEL_SUFFIXES:
+                async for result in self._iter_workbook_target_results(target):
+                    yield result
+                return
             if suffix in TEXT_SUFFIXES:
                 try:
                     content = await self._workspace_service.read_text_file(
@@ -207,6 +211,12 @@ class FileReadService:
             yield err
             return
 
+        async for result in self._iter_workbook_target_results(target):
+            yield result
+
+    async def _iter_workbook_target_results(
+        self, target: ReadTarget
+    ) -> AsyncGenerator[str, None]:
         try:
             extracted_sheets = await asyncio.to_thread(
                 extract_excel_sheets,
@@ -244,6 +254,12 @@ class FileReadService:
         async for result in self.iter_read_file_tool_results(event, filename):
             if isinstance(result, str):
                 text_parts.append(result)
+            elif isinstance(result, mcp.types.CallToolResult):
+                text_parts.extend(
+                    item.text
+                    for item in result.content
+                    if isinstance(item, mcp.types.TextContent)
+                )
         if not text_parts:
             return None
         return "\n".join(text_parts)

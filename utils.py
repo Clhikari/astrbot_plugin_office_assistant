@@ -44,8 +44,10 @@ def com_application(app_name: str) -> Generator:
     app = None
     try:
         pythoncom.CoInitialize()
-        app = win32com.client.Dispatch(app_name)
-        app.Visible = False
+        # Keep cleanup scoped to an instance created for this operation.
+        app = win32com.client.DispatchEx(app_name)
+        if app_name.casefold() != "powerpoint.application":
+            app.Visible = False
         if hasattr(app, "DisplayAlerts"):
             app.DisplayAlerts = False
         yield app
@@ -321,10 +323,35 @@ def _extract_docx_items(
     *,
     include_images: bool,
 ) -> list[ExtractedWordItem]:
+    items = _extract_docx_container_items(
+        doc.element.body, image_rel_paths, include_images=include_images
+    )
+
+    image_index = 1
+    for item in items:
+        if item.type == WORD_ITEM_IMAGE:
+            item.image_index = image_index
+            image_index += 1
+    return items
+
+
+def _extract_docx_container_items(
+    container,
+    image_rel_paths: dict[str, Path],
+    *,
+    include_images: bool,
+) -> list[ExtractedWordItem]:
     items: list[ExtractedWordItem] = []
 
-    for body_child in doc.element.body.iterchildren():
+    for body_child in container.iterchildren():
         local_name = body_child.tag.rsplit("}", 1)[-1]
+        if local_name == "tbl":
+            items.extend(
+                _extract_docx_table_items(
+                    body_child, image_rel_paths, include_images=include_images
+                )
+            )
+            continue
         if local_name != "p":
             continue
 
@@ -344,11 +371,45 @@ def _extract_docx_items(
         if paragraph_text:
             items.append(ExtractedWordItem(type=WORD_ITEM_TEXT, text=paragraph_text))
 
-    image_index = 1
-    for item in items:
-        if item.type == WORD_ITEM_IMAGE:
-            item.image_index = image_index
-            image_index += 1
+    return items
+
+
+def _extract_docx_table_items(
+    table,
+    image_rel_paths: dict[str, Path],
+    *,
+    include_images: bool,
+) -> list[ExtractedWordItem]:
+    items: list[ExtractedWordItem] = []
+    for row in table.iterchildren():
+        if row.tag.rsplit("}", 1)[-1] != "tr":
+            continue
+        cells = [
+            cell for cell in row.iterchildren() if cell.tag.rsplit("}", 1)[-1] == "tc"
+        ]
+        row_buffer: list[str] = []
+        for column, cell in enumerate(cells):
+            if column:
+                row_buffer.append("\t")
+            cell_items = _extract_docx_container_items(
+                cell, image_rel_paths, include_images=include_images
+            )
+            for index, item in enumerate(cell_items):
+                if item.type == WORD_ITEM_TEXT:
+                    if index:
+                        row_buffer.append("\n")
+                    row_buffer.append(item.text or "")
+                    continue
+                # Preserve inline image order instead of flattening cell.text,
+                # including images and nested tables inside table cells.
+                text = "".join(row_buffer).strip()
+                if text:
+                    items.append(ExtractedWordItem(type=WORD_ITEM_TEXT, text=text))
+                row_buffer.clear()
+                items.append(item)
+        text = "".join(row_buffer).strip()
+        if text:
+            items.append(ExtractedWordItem(type=WORD_ITEM_TEXT, text=text))
     return items
 
 
@@ -784,15 +845,26 @@ def extract_ppt_text(file_path: Path) -> str | None:
         prs = Presentation(file_path)
         texts = []
         for slide in prs.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    texts.append(shape.text)
+            texts.extend(_extract_ppt_shape_texts(slide.shapes))
         return "\n".join(texts)
     except ImportError:
         return None
     except Exception as e:
         logger.warning(f"PPT 文本提取失败: {e}", exc_info=True)
         return None
+
+
+def _extract_ppt_shape_texts(shapes) -> Generator[str, None, None]:
+    for shape in shapes:
+        if getattr(shape, "has_table", False):
+            for row in shape.table.rows:
+                text = "\t".join(cell.text for cell in row.cells)
+                if text.strip():
+                    yield text
+        elif hasattr(shape, "text") and shape.text.strip():
+            yield shape.text
+        elif hasattr(shape, "shapes"):
+            yield from _extract_ppt_shape_texts(shape.shapes)
 
 
 def _extract_ppt_text_win32com(file_path: Path) -> str | None:

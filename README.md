@@ -58,6 +58,8 @@
 - Excel 分三类：`read_workbook` 读已有表，`create_workbook → write_rows → export_workbook` 新建简单表，`execute_excel_script` 处理公式、图表、条件格式和复杂编辑。
 - AstrBot computer runtime 会影响 Excel 脚本：`sandbox` 可显示 `execute_excel_script`；`local` 表示脚本会在机器人本机运行，默认隐藏，需要打开 `allow_local_excel_script`；`none` 不能执行脚本。读表和 workbook 三步链不受影响。
 
+兼容验证（2026-09-12）：本机 AstrBot `4.25.2` 构建与官方 `4.28.0` 均通过 SDK 回归。`4.28.0` 另通过本地 WebChat 上传、权限包装后的工具执行、文件转换、下载及清理验收；尚未覆盖 LLM 自动选工具和外部聊天平台收发。
+
 ---
 
 ## 快速开始
@@ -208,6 +210,8 @@ npm run build
 | `convert_to_pdf` | Office → PDF |
 | `convert_from_pdf` | PDF → Word 或 Excel |
 
+结构化 Word/PPT/Excel 草稿及跟进摘要按“平台 + 用户 + 会话”校验归属。每次导出使用独立目录，保留原文件名，避免同时导出同名文件时发送错内容。关闭自动删除后，可用 `/list_files` 查看当前会话保留的导出文件及相对路径；文件名唯一时可直接按文件名读取，重名时请指定列表中的相对路径。
+
 ### 插件命令
 
 | 命令 | 别名 | 干什么 |
@@ -243,6 +247,7 @@ npm run build
 - 备注用于说明图片用途，活动图片集用于限定模型实际可选范围。
 - 支持 PNG/JPEG/WebP；WebP 会转存为 PNG，SVG 不支持。
 - 图片按"平台 + 会话 + 用户"隔离。
+- 待注册图片会按上传会话 TTL 清理，每个会话最多保留 32 个资源，全局最多 512 个；超过数量时先淘汰最旧资源。TTL 和容量淘汰不会被误判为 `/img add` 已消费图片。
 
 ---
 

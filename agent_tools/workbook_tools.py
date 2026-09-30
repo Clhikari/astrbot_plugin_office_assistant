@@ -24,6 +24,7 @@ from ..domain.workbook.contracts import (
     parse_write_rows_options,
 )
 from ..domain.workbook.session_store import WorkbookSessionStore
+from .ownership import owner_from_context, require_draft_owner
 
 
 def _build_default_store() -> WorkbookSessionStore:
@@ -101,12 +102,14 @@ class CreateWorkbookTool(WorkbookToolBase):
         if blocked_result is not None:
             return blocked_result
         try:
+            owner = owner_from_context(context)
             request = CreateWorkbookRequest(
-                session_id=str(kwargs.get("session_id") or ""),
+                session_id=owner[2] if owner else str(kwargs.get("session_id") or ""),
                 title=str(kwargs.get("title") or ""),
                 filename=str(kwargs.get("filename") or "workbook.xlsx"),
             )
             workbook = self.store.create_workbook(request)
+            workbook._owner_key = owner
         except (ValidationError, ValueError, KeyError, OSError) as exc:
             return _dump_result(
                 ToolResult(
@@ -210,6 +213,9 @@ class WriteRowsTool(WorkbookToolBase):
                 start_row=1 if raw_start_row is None else raw_start_row,
                 options=parse_write_rows_options(raw_options),
             )
+            require_draft_owner(
+                self.store.require_workbook(request.workbook_id), context
+            )
             workbook = self.store.write_rows(request)
         except ValidationError as exc:
             return _dump_result(
@@ -274,6 +280,9 @@ class ExportWorkbookTool(WorkbookToolBase):
             request = ExportWorkbookRequest(
                 workbook_id=str(kwargs.get("workbook_id") or ""),
                 output_name=str(kwargs.get("output_name") or ""),
+            )
+            require_draft_owner(
+                self.store.require_workbook(request.workbook_id), context
             )
             workbook, output_path = await asyncio.to_thread(
                 self.store.export_workbook,

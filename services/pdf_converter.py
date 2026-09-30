@@ -14,10 +14,12 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from astrbot.api import logger
 
@@ -256,9 +258,6 @@ class PDFConverter(ExecutorOwnerMixin):
 
     def _office_to_pdf_docx2pdf(self, input_path: Path) -> Path | None:
         """使用 docx2pdf 转换（仅支持 Word，需要 MS Office）"""
-        import docx2pdf
-        import pythoncom
-
         suffix = input_path.suffix.lower()
         if suffix not in (".doc", ".docx"):
             logger.warning(f"[PDF转换器] docx2pdf 仅支持 Word 文件，当前: {suffix}")
@@ -270,8 +269,10 @@ class PDFConverter(ExecutorOwnerMixin):
                 "docx2pdf 仅支持 Word 文件，Excel/PPT 需要安装 pywin32: pip install pywin32"
             )
 
-        output_path = self.data_path / f"{input_path.stem}.pdf"
-        try:
+        def render(output_path: Path) -> None:
+            import docx2pdf
+            import pythoncom
+
             # Windows COM 需要在当前线程初始化
             pythoncom.CoInitialize()
             try:
@@ -279,10 +280,8 @@ class PDFConverter(ExecutorOwnerMixin):
             finally:
                 pythoncom.CoUninitialize()
 
-            if output_path.exists():
-                logger.info(f"[PDF转换器] docx2pdf 转换成功: {output_path}")
-                return output_path
-            return None
+        try:
+            return self._run_conversion(input_path, ".pdf", render)
         except Exception as e:
             logger.error(f"[PDF转换器] docx2pdf 转换失败: {e}")
             return None
@@ -290,11 +289,10 @@ class PDFConverter(ExecutorOwnerMixin):
     def _office_to_pdf_win32com(self, input_path: Path) -> Path | None:
         """使用 win32com 转换（支持 Word/Excel/PPT，需要 MS Office）"""
         suffix = input_path.suffix.lower()
-        output_path = self.data_path / f"{input_path.stem}.pdf"
         input_abs = str(input_path.resolve())
-        output_abs = str(output_path.resolve())
 
-        try:
+        def render(output_path: Path) -> None:
+            output_abs = str(output_path.resolve())
             if suffix in (".doc", ".docx"):
                 with com_application("Word.Application") as app:
                     doc = app.Documents.Open(input_abs)
@@ -325,35 +323,31 @@ class PDFConverter(ExecutorOwnerMixin):
                 logger.error(f"[PDF转换器] win32com 不支持的格式: {suffix}")
                 return None
 
-            if output_path.exists():
-                logger.info(f"[PDF转换器] win32com 转换成功: {output_path}")
-                return output_path
-            return None
-
+        try:
+            return self._run_conversion(input_path, ".pdf", render)
         except Exception as e:
             logger.error(f"[PDF转换器] win32com 转换失败: {e}")
             return None
 
     def _office_to_pdf_libreoffice(self, input_path: Path, timeout: int) -> Path | None:
         """使用 LibreOffice 转换（跨平台）"""
-        output_dir = self.data_path
 
-        cmd = [
-            self._libreoffice_path,
-            "--headless",
-            "--invisible",
-            "--nologo",
-            "--nofirststartwizard",
-            "--convert-to",
-            "pdf",
-            "--outdir",
-            str(output_dir),
-            str(input_path),
-        ]
+        def render(output_path: Path) -> None:
+            cmd = [
+                self._libreoffice_path,
+                "--headless",
+                "--invisible",
+                "--nologo",
+                "--nofirststartwizard",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(output_path.parent),
+                str(input_path),
+            ]
 
-        logger.debug(f"[PDF转换器] 执行命令: {' '.join(cmd)}")
+            logger.debug(f"[PDF转换器] 执行命令: {' '.join(cmd)}")
 
-        try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -362,18 +356,10 @@ class PDFConverter(ExecutorOwnerMixin):
             )
 
             if result.returncode != 0:
-                logger.error(f"[PDF转换器] LibreOffice 返回错误: {result.stderr}")
-                return None
+                raise RuntimeError(f"LibreOffice 返回错误: {result.stderr}")
 
-            # 构建输出文件路径
-            output_path = output_dir / f"{input_path.stem}.pdf"
-            if output_path.exists():
-                logger.info(f"[PDF转换器] LibreOffice 转换成功: {output_path}")
-                return output_path
-
-            logger.error(f"[PDF转换器] 输出文件未生成: {output_path}")
-            return None
-
+        try:
+            return self._run_conversion(input_path, ".pdf", render)
         except subprocess.TimeoutExpired:
             logger.error(f"[PDF转换器] 转换超时 ({timeout}s)")
             return None
@@ -413,20 +399,16 @@ class PDFConverter(ExecutorOwnerMixin):
 
     def _pdf_to_word_sync(self, input_path: Path) -> Path | None:
         """同步执行 PDF→Word 转换"""
-        output_path = self.data_path / f"{input_path.stem}.docx"
 
-        try:
+        def render(output_path: Path) -> None:
             cv = Converter(str(input_path))
             try:
                 cv.convert(str(output_path))
             finally:
                 cv.close()
 
-            if output_path.exists():
-                logger.info(f"[PDF转换器] PDF→Word 成功: {output_path}")
-                return output_path
-
-            return None
+        try:
+            return self._run_conversion(input_path, ".docx", render)
         except Exception as e:
             logger.error(f"[PDF转换器] pdf2docx 转换错误: {e}")
             return None
@@ -489,9 +471,7 @@ class PDFConverter(ExecutorOwnerMixin):
         """使用 tabula 提取 PDF 表格到 Excel"""
         import pandas as pd
 
-        output_path = self.data_path / f"{input_path.stem}.xlsx"
-
-        try:
+        def render(output_path: Path) -> None:
             # 读取所有页面的表格
             tables = tabula.read_pdf(
                 str(input_path),
@@ -513,11 +493,8 @@ class PDFConverter(ExecutorOwnerMixin):
                     sheet_name = sheet_name[:31]
                     table.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            if output_path.exists():
-                logger.info(f"[PDF转换器] PDF→Excel 成功 (tabula): {output_path}")
-                return output_path
-
-            return None
+        try:
+            return self._run_conversion(input_path, ".xlsx", render)
         except Exception as e:
             logger.error(f"[PDF转换器] tabula 转换错误: {e}")
             raise
@@ -526,9 +503,7 @@ class PDFConverter(ExecutorOwnerMixin):
         """使用 pdfplumber 提取 PDF 表格到 Excel"""
         import pandas as pd
 
-        output_path = self.data_path / f"{input_path.stem}.xlsx"
-
-        try:
+        def render(output_path: Path) -> None:
             all_tables = []
 
             with pdfplumber.open(str(input_path)) as pdf:
@@ -550,24 +525,59 @@ class PDFConverter(ExecutorOwnerMixin):
                     sheet_name = f"页{page_num}_表{i + 1}"[:31]
                     table.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            if output_path.exists():
-                logger.info(f"[PDF转换器] PDF→Excel 成功 (pdfplumber): {output_path}")
-                return output_path
-
-            return None
+        try:
+            return self._run_conversion(input_path, ".xlsx", render)
         except Exception as e:
             logger.error(f"[PDF转换器] pdfplumber 转换错误: {e}")
             raise
 
+    def _run_conversion(
+        self,
+        input_path: Path,
+        extension: str,
+        render: Callable[[Path], None],
+    ) -> Path | None:
+        """隔离本次输出，只将成功生成的非空文件发布到原子预留路径。"""
+        self.data_path.mkdir(parents=True, exist_ok=True)
+        reserved_path = None
+        try:
+            with TemporaryDirectory(
+                prefix=".pdf-conversion-", dir=self.data_path
+            ) as temp:
+                temporary_output = Path(temp) / f"{input_path.stem}{extension}"
+                render(temporary_output)
+                if (
+                    not temporary_output.is_file()
+                    or temporary_output.stat().st_size == 0
+                ):
+                    logger.error(f"[PDF转换器] 未生成非空输出文件: {temporary_output}")
+                    return None
+
+                while True:
+                    candidate = self.get_unique_filename(input_path.stem, extension)
+                    try:
+                        with candidate.open("xb"):
+                            pass
+                    except FileExistsError:
+                        continue
+                    reserved_path = candidate
+                    break
+                temporary_output.replace(reserved_path)
+            logger.info(f"[PDF转换器] 转换成功: {reserved_path}")
+            return reserved_path
+        except BaseException:
+            if reserved_path is not None:
+                with suppress(OSError):
+                    reserved_path.unlink(missing_ok=True)
+            raise
+
     def get_unique_filename(self, base_name: str, extension: str) -> Path:
-        """生成唯一文件名，避免覆盖"""
+        """生成候选文件名；实际写入仍须以排他方式预留路径。"""
         output_path = self.data_path / f"{base_name}{extension}"
-        if not output_path.exists():
+        if not output_path.exists() and not output_path.is_symlink():
             return output_path
 
-        # 添加时间戳
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.data_path / f"{base_name}_{timestamp}{extension}"
+        return self.data_path / f"{base_name}_{uuid4().hex}{extension}"
 
     def cleanup(self):
         """清理资源"""

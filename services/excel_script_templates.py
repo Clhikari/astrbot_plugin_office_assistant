@@ -221,6 +221,8 @@ def build_script_helper_template() -> str:
                 auto_format_workbook(workbook)
             _request_formula_recalculation(workbook)
             _office_assistant_original_workbook_save(workbook, output_path)
+            if auto_format:
+                _office_assistant_mark_output_processed(output_path)
 
 
         def _excel_alignment_with(
@@ -562,19 +564,48 @@ def build_script_helper_template() -> str:
             return workbook
 
 
+        _office_assistant_processed_output_signature = None
+
+
+        def _office_assistant_output_signature(path):
+            try:
+                resolved = Path(path).resolve()
+                stat = resolved.stat()
+                return (str(resolved), stat.st_size, stat.st_mtime_ns)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                return None
+
+
+        def _office_assistant_mark_output_processed(path):
+            global _office_assistant_processed_output_signature
+            _office_assistant_processed_output_signature = (
+                _office_assistant_output_signature(path)
+            )
+
+
         def _office_assistant_postprocess_output_file(path=None):
             target_path = Path(path or output_path) if path or output_path else None
             if target_path is None:
                 return None
             if target_path.suffix.lower() not in {".xlsx", ".xlsm"}:
                 return None
+            signature = _office_assistant_output_signature(target_path)
+            if (
+                signature is not None
+                and signature == _office_assistant_processed_output_signature
+            ):
+                return None
             try:
-                workbook = load_workbook(target_path)
+                workbook = load_workbook(
+                    target_path,
+                    keep_vba=target_path.suffix.lower() == ".xlsm",
+                )
             except Exception:
                 return None
             try:
                 _office_assistant_postprocess_workbook(workbook)
                 _office_assistant_original_workbook_save(workbook, target_path)
+                _office_assistant_mark_output_processed(target_path)
                 return workbook
             finally:
                 workbook.close()
@@ -588,10 +619,12 @@ def build_script_helper_template() -> str:
                 workbook._office_assistant_saving_output = True
                 try:
                     _office_assistant_postprocess_workbook(workbook)
-                    return _office_assistant_original_workbook_save(
+                    result = _office_assistant_original_workbook_save(
                         workbook,
                         filename,
                     )
+                    _office_assistant_mark_output_processed(filename)
+                    return result
                 finally:
                     try:
                         del workbook._office_assistant_saving_output

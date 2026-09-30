@@ -98,6 +98,9 @@ class IncomingMessageService:
             self._remember_recent_text(event)
             return
 
+        for component in event.message_obj.message:
+            if isinstance(component, Comp.Image):
+                self._cache_pending_image_resource(event, component)
         buffered = await self._message_buffer.add_message(event)
         if buffered:
             event.stop_event()

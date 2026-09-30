@@ -1629,6 +1629,16 @@ class TableSlideInput(BaseModel):
     headers: list[str] = Field(min_length=1)
     rows: list[list[str]] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_row_widths(self) -> TableSlideInput:
+        for index, row in enumerate(self.rows, start=1):
+            if len(row) > len(self.headers):
+                raise ValueError(
+                    f"table_slide row {index} has {len(row)} cells but only "
+                    f"{len(self.headers)} headers; add the missing headers or correct the row"
+                )
+        return self
+
 
 class ImageSlideInput(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -137,6 +137,7 @@ class DocumentMetadata(BaseModel):
 class DocumentModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     _workspace_dir: str = PrivateAttr(default="")
+    _owner_key: tuple[str, str, str] | None = PrivateAttr(default=None)
 
     document_id: str
     session_id: str = ""

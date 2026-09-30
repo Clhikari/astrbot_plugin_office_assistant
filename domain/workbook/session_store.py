@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from contextlib import suppress
 from pathlib import Path
+from tempfile import mkdtemp
 from threading import RLock
+from ..export_artifacts import (
+    write_owned_export_metadata,
+    cleanup_owned_export_directory,
+)
 
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
@@ -203,6 +209,12 @@ class WorkbookSessionStore:
         output_path = (output_dir / file_name).resolve()
         if not _is_within_workspace(output_path, workspace_dir):
             raise ValueError("output_path cannot escape the workbook workspace")
+        if workbook._owner_key is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            private_dir = Path(
+                mkdtemp(prefix=".office-export-", dir=output_path.parent)
+            )
+            output_path = private_dir / output_path.name
         workbook.output_path = str(output_path)
         workbook.touch()
         return workbook, output_path
@@ -231,7 +243,14 @@ class WorkbookSessionStore:
             workbook.touch()
         try:
             export_workbook_to_xlsx(workbook, output_path)
+            write_owned_export_metadata(
+                output_path, workbook._owner_key, self.workspace_dir
+            )
         except Exception:
+            if workbook._owner_key is not None:
+                with suppress(OSError):
+                    output_path.unlink(missing_ok=True)
+                cleanup_owned_export_directory(output_path)
             with self._lock:
                 self._reset_failed_export_locked(request.workbook_id)
             raise
@@ -246,6 +265,10 @@ class WorkbookSessionStore:
     def complete_export(self, workbook_id: str) -> WorkbookModel:
         with self._lock:
             workbook = self.require_workbook(workbook_id)
+            if workbook.output_path:
+                write_owned_export_metadata(
+                    Path(workbook.output_path), workbook._owner_key, self.workspace_dir
+                )
             workbook.status = WorkbookStatus.EXPORTED
             workbook.touch()
             self._compact_workbook_after_export_locked(workbook)
