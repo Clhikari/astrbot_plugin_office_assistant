@@ -58,8 +58,6 @@
 - Excel 分三类：`read_workbook` 读已有表，`create_workbook → write_rows → export_workbook` 新建简单表，`execute_excel_script` 处理公式、图表、条件格式和复杂编辑。
 - AstrBot computer runtime 会影响 Excel 脚本：`sandbox` 可显示 `execute_excel_script`；`local` 表示脚本会在机器人本机运行，默认隐藏，需要打开 `allow_local_excel_script`；`none` 不能执行脚本。读表和 workbook 三步链不受影响。
 
-兼容验证（2026-09-12）：本机 AstrBot `4.25.2` 构建与官方 `4.28.0` 均通过 SDK 回归。`4.28.0` 另通过本地 WebChat 上传、权限包装后的工具执行、文件转换、下载及清理验收；尚未覆盖 LLM 自动选工具和外部聊天平台收发。
-
 ---
 
 ## 快速开始
