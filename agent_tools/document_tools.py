@@ -17,6 +17,7 @@ from ..domain.document.render_backends import (
     get_render_backend_config,
 )
 from ..domain.document.session_store import DocumentSessionStore
+from .ownership import owner_from_context, require_draft_owner
 from ..domain.document.contracts import (
     AddBlocksRequest,
     BlockColumnsInput,
@@ -468,10 +469,11 @@ class CreateDocumentTool(DocumentToolBase):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         normalized_kwargs = normalize_create_document_kwargs(kwargs)
-        session_id = kwargs.get("session_id")
-        if not session_id and context is not None:
-            event = getattr(getattr(context, "context", None), "event", None)
-            session_id = getattr(event, "unified_msg_origin", "")
+        try:
+            owner = owner_from_context(context)
+        except ValueError as exc:
+            return _dump_result(ToolResult(success=False, message=str(exc)))
+        session_id = owner[2] if owner else kwargs.get("session_id")
         request = CreateDocumentRequest(
             session_id=str(session_id or ""),
             format=str(normalized_kwargs.get("format") or "word"),
@@ -491,6 +493,7 @@ class CreateDocumentTool(DocumentToolBase):
             document_style=dict(normalized_kwargs.get("document_style") or {}),
         )
         document = self.store.create_document(request)
+        document._owner_key = owner
         next_step = (
             "下一步只能调用 add_slides 添加幻灯片内容"
             if document.format == "ppt"
@@ -954,6 +957,11 @@ class AddBlocksTool(DocumentToolBase):
                 )
             )
         document_id = str(kwargs.get("document_id") or "")
+        try:
+            if document_id:
+                require_draft_owner(self.store.require_document(document_id), context)
+        except (ValueError, KeyError) as exc:
+            return _dump_result(ToolResult(success=False, message=str(exc)))
         if document_id:
             doc = self.store.get_document(document_id)
             if doc and doc.format == "ppt":
@@ -1089,6 +1097,11 @@ class AddSlidesTool(DocumentToolBase):
     ) -> ToolExecResult:
         document_id = str(kwargs.get("document_id") or "")
         raw_slides = kwargs.get("slides") or []
+        try:
+            if document_id:
+                require_draft_owner(self.store.require_document(document_id), context)
+        except (ValueError, KeyError) as exc:
+            return _dump_result(ToolResult(success=False, message=str(exc)))
         result = execute_add_slides(
             self.store,
             document_id,
@@ -1132,6 +1145,9 @@ class FinalizeDocumentTool(DocumentToolBase):
         try:
             request = FinalizeDocumentRequest(
                 document_id=str(kwargs.get("document_id") or "")
+            )
+            require_draft_owner(
+                self.store.require_document(request.document_id), context
             )
             document = self.store.finalize_document(request)
         except Exception as exc:
@@ -1191,6 +1207,7 @@ class ExportDocumentTool(DocumentToolBase):
                 output_name=str(kwargs.get("output_name") or ""),
             )
             document_for_routing = self.store.require_document(request.document_id)
+            require_draft_owner(document_for_routing, context)
             resolved_render_backends = (
                 build_document_render_backends(
                     document_for_routing.format,

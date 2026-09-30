@@ -57,7 +57,7 @@ def test_node_render_backend_serializes_payload_and_invokes_cli(workspace_root: 
     output_path = workspace_dir / "node-output.docx"
     payloads: list[dict[str, object]] = []
 
-    def _fake_run(command, cwd, check, capture_output, text, encoding):
+    def _fake_run(command, cwd, check, capture_output, text, encoding, timeout):
         payload_path = Path(command[2])
         moved_payload_path = payload_path.with_suffix(".moved.json")
         payload_path.rename(moved_payload_path)
@@ -105,7 +105,7 @@ def test_node_render_backend_uses_document_workspace_for_output_subdir(
     output_path = workspace_dir / "reports" / "node-output.docx"
     payloads: list[dict[str, object]] = []
 
-    def _fake_run(command, cwd, check, capture_output, text, encoding):
+    def _fake_run(command, cwd, check, capture_output, text, encoding, timeout):
         payload_path = Path(command[2])
         moved_payload_path = payload_path.with_suffix(".moved.json")
         payload_path.rename(moved_payload_path)

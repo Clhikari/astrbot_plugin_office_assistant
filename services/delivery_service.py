@@ -8,6 +8,8 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.message_event_result import MessageChain
 
+from ..domain.export_artifacts import cleanup_owned_export_directory
+
 
 class DeliveryService:
     def __init__(
@@ -61,8 +63,14 @@ class DeliveryService:
         if not preview_path or not preview_path.exists():
             return
 
-        await event.send(MessageChain([Comp.Image(file=str(preview_path.resolve()))]))
-        await self._delete_file_if_needed(preview_path, "预览文件")
+        try:
+            await event.send(
+                MessageChain([Comp.Image(file=str(preview_path.resolve()))])
+            )
+        except Exception as exc:
+            logger.warning(f"[文件管理] 预览图发送失败，正式文件已发送: {exc}")
+        finally:
+            await self._delete_file_if_needed(preview_path, "预览文件")
 
     async def _send_output_file(
         self,
@@ -81,6 +89,7 @@ class DeliveryService:
 
         try:
             file_path.unlink()
+            cleanup_owned_export_directory(file_path)
         except Exception as exc:
             logger.warning(f"[文件管理] 自动删除{label}失败: {exc}")
 
@@ -94,11 +103,16 @@ class DeliveryService:
         file_path: Path,
         success_message: str = "✅ 文件已处理成功",
     ) -> None:
-        preview_path = await self._generate_preview(file_path)
-        await self._send_success_message(event, file_path, success_message)
-        await self._send_preview_if_available(event, preview_path)
         await self._send_output_file(event, file_path)
-        await self._delete_file_if_needed(file_path, "文件")
+        try:
+            try:
+                await self._send_success_message(event, file_path, success_message)
+            except Exception as exc:
+                logger.warning(f"[文件管理] 成功提示发送失败，正式文件已发送: {exc}")
+            preview_path = await self._generate_preview(file_path)
+            await self._send_preview_if_available(event, preview_path)
+        finally:
+            await self._delete_file_if_needed(file_path, "文件")
 
     async def send_exported_document(
         self,
@@ -119,11 +133,9 @@ class DeliveryService:
         exported_message: str,
     ) -> str | None:
         file_path = Path(output_path)
-        if not file_path.exists():
-            return self._missing_export_message(file_path)
-
-        return await self.send_exported_document(
-            context.context.event,
-            file_path,
-            exported_message,
+        if not file_path.is_file():
+            raise FileNotFoundError(self._missing_export_message(file_path))
+        await self.send_file_with_preview(
+            context.context.event, file_path, exported_message
         )
+        return f"Document exported and sent to the user: {file_path.name}"

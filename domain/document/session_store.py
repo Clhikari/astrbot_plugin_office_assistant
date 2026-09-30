@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
+import tempfile
 from threading import RLock
 
 from astrbot.api import logger
+from ..export_artifacts import write_owned_export_metadata
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from ...document_core.macros import summary_card_defaults_from_config
@@ -170,6 +173,7 @@ class DocumentSessionStore:
     ) -> None:
         self._lock = RLock()
         self._documents: dict[str, DocumentModel] = {}
+        self._exporting_documents: set[str] = set()
         self._next_document_id = 1
         self.workspace_dir = workspace_dir or _default_workspace_dir()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -191,7 +195,8 @@ class DocumentSessionStore:
         expired_ids = [
             document_id
             for document_id, document in self._documents.items()
-            if document.metadata.updated_at + self._ttl < now
+            if document_id not in self._exporting_documents
+            and document.metadata.updated_at + self._ttl < now
         ]
         for document_id in expired_ids:
             self._documents.pop(document_id, None)
@@ -205,7 +210,11 @@ class DocumentSessionStore:
             return
 
         oldest_documents = sorted(
-            self._documents.items(),
+            (
+                item
+                for item in self._documents.items()
+                if item[0] not in self._exporting_documents
+            ),
             key=lambda item: item[1].metadata.updated_at,
         )
         for document_id, _ in oldest_documents[:excess]:
@@ -261,6 +270,7 @@ class DocumentSessionStore:
     def add_blocks(self, request: AddBlocksRequest) -> DocumentModel:
         with self._lock:
             document = self.require_document(request.document_id)
+            self._require_not_exporting_locked(request.document_id)
             if document.status != DocumentStatus.DRAFT:
                 raise ValueError(
                     "add_blocks is only allowed while the document status is draft"
@@ -314,8 +324,10 @@ class DocumentSessionStore:
                 source="agent_tool_or_mcp",
             ),
         )
-        for block in normalized_blocks:
-            runtime_block = self._build_runtime_block(block, document)
+        runtime_blocks = [
+            self._build_runtime_block(block, document) for block in normalized_blocks
+        ]
+        for runtime_block in runtime_blocks:
             document.add_block(runtime_block)
 
     @staticmethod
@@ -934,9 +946,27 @@ class DocumentSessionStore:
     def finalize_document(self, request: FinalizeDocumentRequest) -> DocumentModel:
         with self._lock:
             document = self.require_document(request.document_id)
+            self._require_not_exporting_locked(request.document_id)
             document.status = DocumentStatus.FINALIZED
             document.touch()
             return document
+
+    def _require_not_exporting_locked(self, document_id: str) -> None:
+        if document_id in self._exporting_documents:
+            raise ValueError(f"Document export is in progress: {document_id}")
+
+    @contextmanager
+    def export_snapshot(self, document_id: str) -> Iterator[DocumentModel]:
+        with self._lock:
+            document = self.require_document(document_id)
+            self._require_not_exporting_locked(document_id)
+            snapshot = document.model_copy(deep=True)
+            self._exporting_documents.add(document_id)
+        try:
+            yield snapshot
+        finally:
+            with self._lock:
+                self._exporting_documents.discard(document_id)
 
     def build_prompt_summary(self, document_id: str) -> dict[str, object]:
         with self._lock:
@@ -1009,14 +1039,28 @@ class DocumentSessionStore:
             output_path = (output_dir / file_name).resolve()
             if not _is_within_workspace(output_path, workspace_dir):
                 raise ValueError("output_path cannot escape the document workspace")
-            document.output_path = str(output_path)
-            document.touch()
+            if document._owner_key is not None:
+                # Delivery runs after rendering and can overlap the next export.
+                # Keep every owned export immutable at its own path, including
+                # repeated exports of the same document with the same basename.
+                private_dir = Path(
+                    tempfile.mkdtemp(prefix=".office-export-", dir=output_dir)
+                )
+                output_path = private_dir / file_name
             return document, output_path
 
-    def complete_export(self, document_id: str) -> DocumentModel:
+    def complete_export(
+        self, document_id: str, output_path: Path | None = None
+    ) -> DocumentModel:
         with self._lock:
             document = self.require_document(document_id)
+            if output_path is not None:
+                write_owned_export_metadata(
+                    output_path, document._owner_key, self.workspace_dir
+                )
             document.status = DocumentStatus.EXPORTED
+            if output_path is not None:
+                document.output_path = str(output_path)
             document.touch()
             return document
 

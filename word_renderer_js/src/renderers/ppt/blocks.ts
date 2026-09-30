@@ -147,9 +147,12 @@ function renderTableSlide(
   }
 
   const headerLength = headers.length;
-  const normalizedRows = rows.map((row) => {
-    if (row.length >= headerLength) {
-      return row.slice(0, headerLength);
+  const normalizedRows = rows.map((row, rowIndex) => {
+    if (row.length > headerLength) {
+      throw new RenderCliError(
+        PPT_ERROR_CODES.TABLE_ROW_TOO_WIDE,
+        `table_slide row ${rowIndex + 1} has ${row.length} cells but only ${headerLength} headers; add the missing headers or correct the row`,
+      );
     }
     return [...row, ...Array(headerLength - row.length).fill("")];
   });

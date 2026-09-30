@@ -56,6 +56,7 @@ class FollowUpNoticeHelper:
             section = self._build_follow_up_section(
                 request_text=request_text,
                 strategy=rule.strategy,
+                event=context.event,
             )
             if section is None:
                 continue

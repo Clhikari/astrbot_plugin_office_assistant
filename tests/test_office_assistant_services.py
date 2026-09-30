@@ -1779,15 +1779,15 @@ async def test_post_export_hook_service_sends_preview_reply_and_deletes_files():
     assert result == f"文档已导出并发送给用户：{file_path.name}"
     assert event.send.await_count == 3
 
-    success_chain = event.send.await_args_list[0].args[0]
+    success_chain = event.send.await_args_list[1].args[0]
     assert "✅ 文档已导出" in success_chain.chain[0].text
     assert any(isinstance(component, Comp.At) for component in success_chain.chain)
 
-    preview_chain = event.send.await_args_list[1].args[0]
+    preview_chain = event.send.await_args_list[2].args[0]
     assert isinstance(preview_chain.chain[0], Comp.Image)
     assert preview_chain.chain[0].file == str(preview_path.resolve())
 
-    file_chain = event.send.await_args_list[2].args[0]
+    file_chain = event.send.await_args_list[0].args[0]
     assert isinstance(file_chain.chain[0], Comp.File)
     assert file_chain.chain[0].name == file_path.name
 
@@ -7091,15 +7091,16 @@ async def test_file_tool_service_streams_docx_images_as_tool_results():
             )
         ]
 
-    assert isinstance(results[0], str)
-    assert "文档正文" in results[0]
-    assert "[插图1]" in results[0]
-    assert len(results) == 2
-    assert isinstance(results[1], mcp.types.CallToolResult)
-    assert isinstance(results[1].content[0], mcp.types.ImageContent)
-    assert results[1].content[0].mimeType == "image/png"
-    assert results[1].content[0].data
-    assert "图片后的说明" in results[0]
+    assert len(results) == 1
+    assert isinstance(results[0], mcp.types.CallToolResult)
+    assert isinstance(results[0].content[0], mcp.types.TextContent)
+    text = results[0].content[0].text
+    assert "文档正文" in text
+    assert "[插图1]" in text
+    assert "图片后的说明" in text
+    assert isinstance(results[0].content[1], mcp.types.ImageContent)
+    assert results[0].content[1].mimeType == "image/png"
+    assert results[0].content[1].data
 
 
 @pytest.mark.asyncio
@@ -7174,15 +7175,16 @@ async def test_file_tool_service_skips_unreadable_docx_image_bytes(
             )
         ]
 
-    assert len(results) == 2
-    assert isinstance(results[0], str)
-    assert "文档正文" in results[0]
-    assert "[插图1]" in results[0]
-    assert "[插图2]" in results[0]
-    assert "收尾说明" in results[0]
-    assert isinstance(results[1], mcp.types.CallToolResult)
-    assert len(results[1].content) == 1
-    assert isinstance(results[1].content[0], mcp.types.ImageContent)
+    assert len(results) == 1
+    assert isinstance(results[0], mcp.types.CallToolResult)
+    assert len(results[0].content) == 2
+    assert isinstance(results[0].content[0], mcp.types.TextContent)
+    text = results[0].content[0].text
+    assert "文档正文" in text
+    assert "[插图1]" in text
+    assert "[插图2]" in text
+    assert "收尾说明" in text
+    assert isinstance(results[0].content[1], mcp.types.ImageContent)
 
 
 @pytest.mark.asyncio
@@ -7230,12 +7232,15 @@ async def test_file_tool_service_uses_item_image_index_for_skip_reasons():
             )
         ]
 
-    assert isinstance(results[0], str)
-    assert "[插图2]" in results[0]
-    assert "[插图1]（未注入模型上下文" in results[0]
-    assert "超过 20.00 B 限制" in results[0]
-    assert isinstance(results[1], mcp.types.CallToolResult)
-    assert len(results[1].content) == 1
+    assert len(results) == 1
+    assert isinstance(results[0], mcp.types.CallToolResult)
+    assert len(results[0].content) == 2
+    assert isinstance(results[0].content[0], mcp.types.TextContent)
+    text = results[0].content[0].text
+    assert "[插图2]" in text
+    assert "[插图1]（未注入模型上下文" in text
+    assert "超过 20.00 B 限制" in text
+    assert isinstance(results[0].content[1], mcp.types.ImageContent)
 
 
 @pytest.mark.asyncio
@@ -7286,18 +7291,21 @@ async def test_file_tool_service_limits_inline_docx_images():
             )
         ]
 
-    assert isinstance(results[0], str)
-    assert "文档正文" in results[0]
-    assert "[插图1]" in results[0]
-    assert "插图2" in results[0]
-    assert "超过 20.00 B 限制" in results[0]
-    assert "插图4" in results[0]
-    assert "超过单文档最多 2 张限制" in results[0]
-    assert "收尾说明" in results[0]
-    assert isinstance(results[1], mcp.types.CallToolResult)
-    assert len(results[1].content) == 2
-    assert all(isinstance(item, mcp.types.ImageContent) for item in results[1].content)
-    assert len(results) == 2
+    assert len(results) == 1
+    assert isinstance(results[0], mcp.types.CallToolResult)
+    assert len(results[0].content) == 3
+    assert isinstance(results[0].content[0], mcp.types.TextContent)
+    text = results[0].content[0].text
+    assert "文档正文" in text
+    assert "[插图1]" in text
+    assert "插图2" in text
+    assert "超过 20.00 B 限制" in text
+    assert "插图4" in text
+    assert "超过单文档最多 2 张限制" in text
+    assert "收尾说明" in text
+    assert all(
+        isinstance(item, mcp.types.ImageContent) for item in results[0].content[1:]
+    )
 
 
 @pytest.mark.asyncio
@@ -7461,12 +7469,14 @@ async def test_file_tool_service_returns_error_when_stat_fails():
 
 
 @pytest.mark.asyncio
-async def test_file_tool_service_offloads_office_text_extraction_to_thread():
+@pytest.mark.parametrize("suffix", [".pptx", ".xlsx"])
+async def test_file_tool_service_offloads_office_text_extraction_to_thread(suffix):
     event = _build_event()
     workspace_service = MagicMock()
-    resolved_path = Path("report.xlsx")
+    filename = f"report{suffix}"
+    resolved_path = Path(filename)
     workspace_service.pre_check.return_value = (True, resolved_path, None)
-    workspace_service.display_name.return_value = "report.xlsx"
+    workspace_service.display_name.return_value = filename
     workspace_service.get_max_file_size.return_value = 1024 * 1024
     workspace_service.format_file_result.return_value = "formatted"
     service = FileReadService(
@@ -7486,6 +7496,8 @@ async def test_file_tool_service_offloads_office_text_extraction_to_thread():
             return SimpleNamespace(st_size=16)
         if func is workspace_service.extract_office_text:
             return "sheet text"
+        if getattr(func, "__name__", "") == "extract_excel_sheets":
+            return [SimpleNamespace(name="Data", text="sheet text")]
         raise AssertionError(f"unexpected function: {func}")
 
     with patch(
@@ -7494,12 +7506,14 @@ async def test_file_tool_service_offloads_office_text_extraction_to_thread():
     ) as to_thread:
         results = [
             result
-            async for result in service.iter_read_file_tool_results(
-                event, "report.xlsx"
-            )
+            async for result in service.iter_read_file_tool_results(event, filename)
         ]
 
-    assert results == ["formatted"]
+    if suffix == ".xlsx":
+        assert len(results) == 1
+        assert "[Sheet: Data]\nsheet text" in results[0]
+    else:
+        assert results == ["formatted"]
     assert to_thread.await_count == 2
 
 

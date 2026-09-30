@@ -3,11 +3,13 @@ import tempfile
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from ..agent_tools import build_document_toolset
+from ..agent_tools.ownership import owner_from_context, require_draft_owner
 
 # workbook toolset may be introduced incrementally
 try:
@@ -26,6 +28,7 @@ from ..constants import (
     OFFICE_LIBS,
 )
 from ..domain.document.render_backends import DocumentRenderBackendConfig
+from ..domain.export_artifacts import list_owned_export_paths
 from .message_buffer import MessageBuffer
 from .office_generator import OfficeGenerator
 from .pdf_converter import PDFConverter
@@ -153,6 +156,10 @@ def build_plugin_runtime(
     workbook_toolset = _build_workbook_toolset(
         workspace_dir=plugin_data_path,
         after_export=handle_exported_document_tool,
+    )
+    _register_structured_tools(context, document_toolset, workbook_toolset)
+    workspace_service.set_exported_paths_lookup(
+        _build_exported_paths_lookup(workspace_dir=plugin_data_path)
     )
     request_pipeline_services = _build_request_pipeline_services(
         astrbot_context=context,
@@ -290,8 +297,12 @@ def _build_request_pipeline_services(
         consume_session_notice_once=upload_session_service.consume_session_notice_once,
         allow_external_input_files=settings.allow_external_input_files,
         prompt_context_service=prompt_context_service,
-        lookup_document_summary=_build_document_summary_lookup(document_toolset),
-        lookup_workbook_summary=_build_workbook_summary_lookup(workbook_toolset),
+        lookup_document_summary_for_event=_build_document_summary_lookup(
+            document_toolset, require_owner=True
+        ),
+        lookup_workbook_summary_for_event=_build_workbook_summary_lookup(
+            workbook_toolset, require_owner=True
+        ),
         get_session_images=lambda event: image_asset_service.list_active_images(
             upload_session_service.get_attachment_session_key(event)
         ),
@@ -299,6 +310,11 @@ def _build_request_pipeline_services(
     llm_request_policy = LLMRequestPolicy(
         document_toolset=document_toolset,
         workbook_toolset=workbook_toolset,
+        tool_manager=(
+            astrbot_context.get_llm_tool_manager()
+            if callable(getattr(astrbot_context, "get_llm_tool_manager", None))
+            else None
+        ),
         require_at_in_group=settings.require_at_in_group,
         is_group_feature_enabled=access_policy_service.is_group_feature_enabled,
         check_permission=access_policy_service.check_permission,
@@ -313,7 +329,52 @@ def _build_request_pipeline_services(
     )
 
 
-def _build_document_summary_lookup(document_toolset):
+def _register_structured_tools(context, *toolsets) -> None:
+    add_tools = getattr(context, "add_llm_tools", None)
+    if callable(add_tools):
+        tools = [
+            tool
+            for toolset in toolsets
+            if toolset is not None
+            for tool in toolset.tools
+        ]
+        add_tools(*tools)
+
+
+def _build_exported_paths_lookup(*, workspace_dir):
+    def lookup(event):
+        try:
+            owner = owner_from_context(
+                SimpleNamespace(context=SimpleNamespace(event=event))
+            )
+        except ValueError:
+            return []
+        if owner is None:
+            return []
+        return list_owned_export_paths(workspace_dir, owner)
+
+    return lookup
+
+
+def _build_owned_summary_lookup(store, build_prompt_summary, require_method_name):
+    require_draft = getattr(store, require_method_name, None)
+    if not callable(require_draft):
+        return None
+
+    def lookup(identifier, event):
+        try:
+            draft = require_draft(identifier)
+            require_draft_owner(
+                draft, SimpleNamespace(context=SimpleNamespace(event=event))
+            )
+            return build_prompt_summary(identifier)
+        except (KeyError, ValueError):
+            return None
+
+    return lookup
+
+
+def _build_document_summary_lookup(document_toolset, *, require_owner=False):
     document_store = getattr(document_toolset, "document_store", None)
     build_prompt_summary = getattr(document_store, "build_prompt_summary", None)
     if not callable(build_prompt_summary):
@@ -321,6 +382,10 @@ def _build_document_summary_lookup(document_toolset):
             "[文件管理] document_store.build_prompt_summary 不可用，文档跟进提示将退化为普通工具指南"
         )
         return None
+    if require_owner:
+        return _build_owned_summary_lookup(
+            document_store, build_prompt_summary, "require_document"
+        )
     return build_prompt_summary
 
 
@@ -340,7 +405,7 @@ def _build_workbook_toolset(*, workspace_dir: Path, after_export):
         return None
 
 
-def _build_workbook_summary_lookup(workbook_toolset):
+def _build_workbook_summary_lookup(workbook_toolset, *, require_owner=False):
     if workbook_toolset is None:
         return None
     workbook_store = getattr(workbook_toolset, "workbook_store", None)
@@ -350,6 +415,10 @@ def _build_workbook_summary_lookup(workbook_toolset):
             "[文件管理] workbook_store.build_prompt_summary 不可用，工作簿跟进提示将退化为普通工具指南"
         )
         return None
+    if require_owner:
+        return _build_owned_summary_lookup(
+            workbook_store, build_prompt_summary, "require_workbook"
+        )
     return build_prompt_summary
 
 

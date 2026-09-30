@@ -1,7 +1,12 @@
 import copy
+import shutil
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from urllib.parse import urlparse
+from urllib.request import url2pathname
+from uuid import uuid4
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
@@ -11,7 +16,7 @@ from astrbot.core.utils.active_event_registry import active_event_registry
 from astrbot.core.platform.message_type import MessageType
 
 from ..constants import ALL_OFFICE_SUFFIXES, PDF_SUFFIX, TEXT_SUFFIXES
-from .image_file_utils import is_supported_image_reference
+from .image_file_utils import is_image_file_component, is_supported_image_reference
 from .message_buffer import BufferedMessage
 from .upload_prompt_service import UploadInfo, UploadPromptService
 
@@ -19,6 +24,10 @@ EVENT_UPLOAD_CACHE_ATTR = "_office_assistant_uploaded_files"
 
 
 class UploadSessionService:
+    # Keep pending components bounded, including adapters carrying inline image data.
+    _MAX_PENDING_IMAGES_PER_SESSION = 32
+    _MAX_PENDING_IMAGES_TOTAL = 512
+
     def __init__(
         self,
         *,
@@ -60,6 +69,11 @@ class UploadSessionService:
         self._pending_images_by_session: dict[
             tuple[str, str, str], list[tuple[object, float]]
         ] = {}
+        self._consumed_pending_images: dict[
+            tuple[tuple[str, str, str], int], float
+        ] = {}
+        self._pending_image_snapshots: dict[tuple[tuple[str, str, str], int], Path] = {}
+        self._pending_image_temp_dir: TemporaryDirectory | None = None
 
     def get_attachment_session_key(
         self, event: AstrMessageEvent
@@ -127,6 +141,12 @@ class UploadSessionService:
         for session_key in expired_notice_keys:
             self._session_notice_state_by_session.pop(session_key, None)
 
+        for session_key in list(self._pending_images_by_session):
+            self._prune_pending_images(session_key, now)
+        for resource_key, ts in list(self._consumed_pending_images.items()):
+            if ts <= expire_before:
+                self._consumed_pending_images.pop(resource_key, None)
+
         self._session_uploads_last_cleanup_ts = now
 
     def consume_session_notice_once(
@@ -166,6 +186,7 @@ class UploadSessionService:
         return True
 
     def _cleanup_recent_text_cache(self, now: float, *, force: bool = False) -> None:
+        self._cleanup_session_upload_cache(now, force=force)
         if (
             not force
             and now - self._recent_text_last_cleanup_ts
@@ -495,8 +516,10 @@ class UploadSessionService:
                         ) = self._resolve_upload_type(original_name)
                     if src_path and src_path.exists():
                         actual_name = original_name or name
-                        if self.is_image_file(actual_name) or self.is_image_file(
-                            str(src_path)
+                        if (
+                            is_image_file_component(file_component)
+                            or self.is_image_file(actual_name)
+                            or self.is_image_file(str(src_path))
                         ):
                             self.cache_pending_image(event, src_path)
                             continue
@@ -562,6 +585,73 @@ class UploadSessionService:
 
     # ── Pending image cache for /img add ──
 
+    def _snapshot_pending_image(self, session_key, resource: object) -> None:
+        if isinstance(resource, Path):
+            source_path = resource
+        elif isinstance(resource, (Comp.Image, Comp.File)):
+            source = resource.url or getattr(resource, "file_", None) or resource.file
+            if not source:
+                return
+            if source.startswith(("http://", "https://", "data:", "base64://")):
+                return
+            if source.startswith("file:"):
+                parsed = urlparse(source)
+                source = url2pathname(
+                    f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+                )
+            source_path = Path(source)
+        else:
+            return
+
+        snapshot = None
+        try:
+            if not source_path.is_file():
+                return
+            if self._pending_image_temp_dir is None:
+                self._pending_image_temp_dir = TemporaryDirectory(
+                    prefix="office_pending_images_"
+                )
+            snapshot = Path(self._pending_image_temp_dir.name) / (
+                uuid4().hex + source_path.suffix
+            )
+            shutil.copyfile(source_path, snapshot)
+            self._pending_image_snapshots[(session_key, id(resource))] = snapshot
+        except OSError as exc:
+            if snapshot is not None:
+                try:
+                    snapshot.unlink(missing_ok=True)
+                except OSError:
+                    # The owning TemporaryDirectory retries cleanup at shutdown.
+                    pass
+            logger.warning("[img] 保存待注册图片副本失败: %s", exc)
+
+    def _delete_pending_image_snapshots(self, session_key, resources) -> None:
+        for resource in resources:
+            snapshot = self._pending_image_snapshots.pop(
+                (session_key, id(resource)), None
+            )
+            if snapshot is not None:
+                try:
+                    snapshot.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("[img] 清理待注册图片副本失败: %s", exc)
+
+    def get_pending_image_snapshot(
+        self, event: AstrMessageEvent, resource: object
+    ) -> Path | None:
+        now = time.time()
+        session_key = self.get_attachment_session_key(event)
+        self._prune_pending_images(session_key, now)
+        return self._pending_image_snapshots.get((session_key, id(resource)))
+
+    def cleanup(self) -> None:
+        self._pending_images_by_session.clear()
+        self._pending_image_snapshots.clear()
+        self._consumed_pending_images.clear()
+        if self._pending_image_temp_dir is not None:
+            self._pending_image_temp_dir.cleanup()
+            self._pending_image_temp_dir = None
+
     def cache_pending_image(self, event: AstrMessageEvent, source_path: Path) -> None:
         self.cache_pending_image_resource(event, source_path)
 
@@ -569,19 +659,62 @@ class UploadSessionService:
         self, event: AstrMessageEvent, resource: object
     ) -> None:
         """Cache a Path or Comp.Image component for later registration via /img add."""
+        now = time.time()
+        self._cleanup_session_upload_cache(now)
         session_key = self.get_attachment_session_key(event)
-        entries = self._pending_images_by_session.setdefault(session_key, [])
-        entries.append((resource, time.time()))
+        self._consumed_pending_images.pop((session_key, id(resource)), None)
+        entries = self._prune_pending_images(session_key, now)
+        if any(existing is resource for existing, _ in entries):
+            return
+        # Framework-owned media may be deleted as soon as this event ends.
+        self._snapshot_pending_image(session_key, resource)
+        entries.append((resource, now))
+        self._delete_pending_image_snapshots(
+            session_key,
+            [r for r, _ in entries[: -self._MAX_PENDING_IMAGES_PER_SESSION]],
+        )
+        self._pending_images_by_session[session_key] = entries[
+            -self._MAX_PENDING_IMAGES_PER_SESSION :
+        ]
+        self._limit_pending_images()
 
     def get_pending_image_resources(self, event: AstrMessageEvent) -> list[object]:
-        session_key = self.get_attachment_session_key(event)
         now = time.time()
+        self._cleanup_session_upload_cache(now)
+        session_key = self.get_attachment_session_key(event)
+        return [r for r, _ in self._prune_pending_images(session_key, now)]
+
+    def _prune_pending_images(
+        self, session_key: tuple[str, str, str], now: float
+    ) -> list[tuple[object, float]]:
         entries = self._pending_images_by_session.get(session_key, [])
+        self._delete_pending_image_snapshots(
+            session_key,
+            [r for r, ts in entries if now - ts >= self._upload_session_ttl_seconds],
+        )
         valid = [
             (r, ts) for r, ts in entries if now - ts < self._upload_session_ttl_seconds
         ]
-        self._pending_images_by_session[session_key] = valid
-        return [r for r, _ in valid]
+        if valid:
+            self._pending_images_by_session[session_key] = valid
+        else:
+            self._pending_images_by_session.pop(session_key, None)
+        return valid
+
+    def _limit_pending_images(self) -> None:
+        overflow = (
+            sum(len(items) for items in self._pending_images_by_session.values())
+            - self._MAX_PENDING_IMAGES_TOTAL
+        )
+        for _ in range(overflow):
+            session_key, entries = min(
+                self._pending_images_by_session.items(),
+                key=lambda item: item[1][0][1],
+            )
+            resource, _ = entries.pop(0)
+            self._delete_pending_image_snapshots(session_key, [resource])
+            if not entries:
+                self._pending_images_by_session.pop(session_key, None)
 
     def get_pending_images(self, event: AstrMessageEvent) -> list[Path]:
         return [
@@ -589,19 +722,32 @@ class UploadSessionService:
         ]
 
     def clear_pending_images(self, event: AstrMessageEvent) -> None:
+        now = time.time()
+        self._cleanup_session_upload_cache(now)
         session_key = self.get_attachment_session_key(event)
-        self._pending_images_by_session.pop(session_key, None)
+        self._prune_pending_images(session_key, now)
+        entries = self._pending_images_by_session.pop(session_key, [])
+        self._record_consumed_pending_images(session_key, [r for r, _ in entries])
+        self._delete_pending_image_snapshots(session_key, [r for r, _ in entries])
 
     def clear_pending_image_resources(
         self, event: AstrMessageEvent, resources: Iterable[object]
     ) -> None:
+        now = time.time()
+        self._cleanup_session_upload_cache(now)
         session_key = self.get_attachment_session_key(event)
         resource_ids = {id(resource) for resource in resources}
         if not resource_ids:
             return
-        entries = self._pending_images_by_session.get(session_key)
+        entries = self._prune_pending_images(session_key, now)
         if not entries:
             return
+        self._record_consumed_pending_images(
+            session_key, [r for r, _ in entries if id(r) in resource_ids]
+        )
+        self._delete_pending_image_snapshots(
+            session_key, [r for r, _ in entries if id(r) in resource_ids]
+        )
         kept = [
             (resource, ts)
             for resource, ts in entries
@@ -611,6 +757,32 @@ class UploadSessionService:
             self._pending_images_by_session[session_key] = kept
         else:
             self._pending_images_by_session.pop(session_key, None)
+
+    def _record_consumed_pending_images(
+        self, session_key: tuple[str, str, str], resources: Iterable[object]
+    ) -> None:
+        now = time.time()
+        for resource in resources:
+            resource_key = (session_key, id(resource))
+            self._consumed_pending_images.pop(resource_key, None)
+            self._consumed_pending_images[resource_key] = now
+        while len(self._consumed_pending_images) > self._MAX_PENDING_IMAGES_TOTAL:
+            self._consumed_pending_images.pop(next(iter(self._consumed_pending_images)))
+
+    def were_pending_image_resources_consumed(
+        self, event: AstrMessageEvent, resources: Iterable[object]
+    ) -> bool:
+        """Distinguish explicit registration/clearing from TTL or capacity eviction."""
+        now = time.time()
+        self._cleanup_session_upload_cache(now)
+        session_key = self.get_attachment_session_key(event)
+        resource_ids = {id(resource) for resource in resources}
+        return bool(resource_ids) and all(
+            (ts := self._consumed_pending_images.get((session_key, resource_id)))
+            is not None
+            and now - ts < self._upload_session_ttl_seconds
+            for resource_id in resource_ids
+        )
 
     def is_image_file(self, filename: str) -> bool:
         return is_supported_image_reference(filename)

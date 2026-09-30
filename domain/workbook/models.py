@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 def _utc_now() -> datetime:
@@ -61,6 +61,7 @@ class WorkbookMetadata(BaseModel):
 
 class WorkbookModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    _owner_key: tuple[str, str, str] | None = PrivateAttr(default=None)
 
     workbook_id: str
     session_id: str = ""

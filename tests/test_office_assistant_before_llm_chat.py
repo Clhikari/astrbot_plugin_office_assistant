@@ -10,9 +10,6 @@ from astrbot_plugin_office_assistant.constants import DOC_COMMAND_TRIGGER_EVENT_
 from astrbot_plugin_office_assistant.domain.document.contracts import (
     CreateDocumentRequest,
 )
-from astrbot_plugin_office_assistant.domain.workbook.contracts import (
-    CreateWorkbookRequest,
-)
 from astrbot_plugin_office_assistant.internal_hooks import (
     NoticeBuildContext,
     ToolExposureContext,
@@ -39,6 +36,8 @@ from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider.register import llm_tools
 from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.provider.func_tool_manager import FunctionToolManager
+from astrbot.core.star.context import Context
 from conftest import build_notice_once_callback as _build_notice_once_callback
 from tests._docx_test_helpers import _write_png
 
@@ -130,6 +129,13 @@ def _build_provider_request(
 @contextlib.asynccontextmanager
 async def _managed_plugin(*, context=None, config=None):
     effective_context = context or MagicMock()
+    if isinstance(effective_context, MagicMock):
+        tool_manager = FunctionToolManager()
+        effective_context.provider_manager = SimpleNamespace(llm_tools=tool_manager)
+        effective_context.get_llm_tool_manager.return_value = tool_manager
+        effective_context.add_llm_tools.side_effect = (
+            lambda *tools: Context.add_llm_tools(effective_context, *tools)
+        )
     plugin = FileOperationPlugin(
         context=effective_context,
         config=config or _build_config(),
@@ -410,12 +416,15 @@ async def test_before_llm_chat_keeps_workbook_id_follow_up_prompt_lightweight():
             '继续补充 workbook_id="wb-1" 的数据',
             tool_names=["existing_tool", "create_workbook"],
         )
-        workbook_store = managed.plugin._runtime.workbook_toolset.workbook_store
-        workbook = workbook_store.create_workbook(
-            CreateWorkbookRequest(filename="sales-summary.xlsx")
+        workbook_toolset = managed.plugin._runtime.workbook_toolset
+        created = json.loads(
+            await workbook_toolset.get_tool("create_workbook").call(
+                SimpleNamespace(context=SimpleNamespace(event=event)),
+                filename="sales-summary.xlsx",
+            )
         )
-
-        req.prompt = f'继续补充 workbook_id="{workbook.workbook_id}" 的数据'
+        workbook_id = created["workbook"]["workbook_id"]
+        req.prompt = f'继续补充 workbook_id="{workbook_id}" 的数据'
 
         await managed.plugin.before_llm_chat(event, req)
 

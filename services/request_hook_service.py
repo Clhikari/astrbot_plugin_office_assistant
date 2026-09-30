@@ -132,6 +132,14 @@ class RequestHookService:
         | None = None,
         lookup_workbook_summary: Callable[[str], dict[str, object] | None]
         | None = None,
+        lookup_document_summary_for_event: Callable[
+            [str, AstrMessageEvent], dict[str, object] | None
+        ]
+        | None = None,
+        lookup_workbook_summary_for_event: Callable[
+            [str, AstrMessageEvent], dict[str, object] | None
+        ]
+        | None = None,
         get_session_images: Callable[[AstrMessageEvent], list[dict]] | None = None,
     ) -> None:
         self._astrbot_context = astrbot_context
@@ -143,6 +151,8 @@ class RequestHookService:
         self._consume_session_notice_once = consume_session_notice_once
         self._lookup_document_summary = lookup_document_summary
         self._lookup_workbook_summary = lookup_workbook_summary
+        self._lookup_document_summary_for_event = lookup_document_summary_for_event
+        self._lookup_workbook_summary_for_event = lookup_workbook_summary_for_event
         self._get_session_images = get_session_images
         self.prompt_context_service = prompt_context_service or PromptContextService(
             allow_external_input_files=allow_external_input_files
@@ -503,20 +513,24 @@ class RequestHookService:
         self,
         *,
         request_text: str,
+        event: AstrMessageEvent | None = None,
     ) -> PromptSection | None:
         return self._build_follow_up_section(
             request_text=request_text,
             strategy=self._DOCUMENT_FOLLOW_UP_STRATEGY,
+            event=event,
         )
 
     def _build_workbook_follow_up_section(
         self,
         *,
         request_text: str,
+        event: AstrMessageEvent | None = None,
     ) -> PromptSection | None:
         return self._build_follow_up_section(
             request_text=request_text,
             strategy=self._WORKBOOK_FOLLOW_UP_STRATEGY,
+            event=event,
         )
 
     def _build_follow_up_section(
@@ -524,6 +538,7 @@ class RequestHookService:
         *,
         request_text: str,
         strategy: FollowUpNoticeStrategy,
+        event: AstrMessageEvent | None = None,
     ) -> PromptSection | None:
         identifier_value = self._extract_identifier(
             request_text=request_text,
@@ -533,11 +548,17 @@ class RequestHookService:
             return None
 
         lookup_summary = getattr(self, strategy.lookup_attr_name)
-        if lookup_summary is None:
+        lookup_summary_for_event = getattr(
+            self, f"{strategy.lookup_attr_name}_for_event"
+        )
+        if lookup_summary is None and lookup_summary_for_event is None:
             return None
 
         try:
-            summary = lookup_summary(identifier_value)
+            if lookup_summary_for_event is not None:
+                summary = lookup_summary_for_event(identifier_value, event)
+            else:
+                summary = lookup_summary(identifier_value)
         except KeyError:
             summary = None
         except Exception as exc:

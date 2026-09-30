@@ -161,6 +161,12 @@ class FileOperationPlugin(Star):
         if getattr(rt, "message_buffer", None):
             rt.message_buffer.set_complete_callback(None)
 
+        if getattr(rt, "upload_session_service", None):
+            try:
+                rt.upload_session_service.cleanup()
+            except OSError as exc:
+                logger.warning("[文件管理] 清理待注册图片失败: %s", exc)
+
         if rt.office_gen:
             rt.office_gen.cleanup()
             logger.debug("[文件管理] Office生成器已清理")
@@ -242,23 +248,15 @@ class FileOperationPlugin(Star):
             if pending_for_event and wait > 0:
                 logger.debug("[文件管理] 图片消息等待 %.1f 秒，看是否有 /img add", wait)
                 await asyncio.sleep(wait)
-                current_pending = (
-                    self._runtime.upload_session_service.get_pending_image_resources(
-                        event
-                    )
+                consumed = self._runtime.upload_session_service.were_pending_image_resources_consumed(
+                    event, pending_for_event
                 )
-                event_resource_ids = {id(resource) for resource in pending_for_event}
-                remaining_for_event = [
-                    resource
-                    for resource in current_pending
-                    if id(resource) in event_resource_ids
-                ]
-                if not remaining_for_event:
+                if consumed:
                     logger.debug("[文件管理] 图片已被 /img add 消费，跳过 LLM 请求")
                     event.stop_event()
                     return
                 logger.debug(
-                    "[文件管理] 等待超时，图片仍保留在待注册资源池，继续 LLM 请求"
+                    "[文件管理] 等待结束，本条图片消息未被完全消费，继续 LLM 请求"
                 )
                 setattr(event, "_has_pending_images", False)
 
@@ -547,7 +545,19 @@ class FileOperationPlugin(Star):
         source_items: list[tuple[Path, str, object]] = []
         for resource in all_resources:
             try:
-                if isinstance(resource, Path):
+                snapshot = (
+                    self._runtime.upload_session_service.get_pending_image_snapshot(
+                        event, resource
+                    )
+                )
+                if snapshot is not None:
+                    original_name = (
+                        resource.name
+                        if isinstance(resource, Path)
+                        else getattr(resource, "name", "")
+                    )
+                    source_items.append((snapshot, original_name or "", resource))
+                elif isinstance(resource, Path):
                     source_items.append((resource, resource.name, resource))
                 elif isinstance(resource, Comp.Image):
                     file_path = await resource.convert_to_file_path()

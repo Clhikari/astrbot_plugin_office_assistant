@@ -47,6 +47,7 @@ class LLMRequestPolicy:
         *,
         document_toolset,
         workbook_toolset=None,
+        tool_manager=None,
         require_at_in_group: bool,
         is_group_feature_enabled: Callable[[AstrMessageEvent], bool],
         check_permission: Callable[[AstrMessageEvent], bool],
@@ -58,6 +59,7 @@ class LLMRequestPolicy:
     ) -> None:
         self._document_toolset = document_toolset
         self._workbook_toolset = workbook_toolset
+        self._tool_manager = tool_manager
         self._structured_toolsets = [
             toolset
             for toolset in (document_toolset, workbook_toolset)
@@ -257,6 +259,16 @@ class LLMRequestPolicy:
         )
 
     async def apply(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        structured_names = {
+            tool.name
+            for toolset in self._structured_toolsets
+            for tool in getattr(toolset, "tools", [])
+        }
+        # Registered tools may already be present from AstrBot's default tool set.
+        # Apply this plugin's exposure policy before adding authorized instances.
+        if req.func_tool is not None:
+            for name in structured_names:
+                req.func_tool.remove_tool(name)
         is_group = event.message_obj.type == MessageType.GROUP_MESSAGE
         is_friend = event.message_obj.type == MessageType.FRIEND_MESSAGE
         decision = self._resolve_exposure_decision(
@@ -292,10 +304,19 @@ class LLMRequestPolicy:
             self._append_tools_denied_notice(req)
             return
 
-        if decision.should_expose and req.func_tool:
+        if decision.should_expose and req.func_tool is not None:
+            registered_tools = (
+                self._tool_manager.get_full_tool_set()
+                if self._tool_manager is not None
+                else None
+            )
             for toolset in self._structured_toolsets:
                 for tool in getattr(toolset, "tools", []):
-                    req.func_tool.add_tool(tool)
+                    if registered_tools is not None:
+                        # Keep SDK permission guards and the current active state.
+                        tool = registered_tools.get_tool(tool.name)
+                    if tool is not None and getattr(tool, "active", True):
+                        req.func_tool.add_tool(tool)
 
         await self._run_before_expose_tools(
             ToolExposureContext(

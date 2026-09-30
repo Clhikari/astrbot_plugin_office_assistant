@@ -179,13 +179,23 @@ class WordReadService:
                 selected_image_paths.append(item.image_path)
 
             final_text = "\n".join(part.strip() for part in text_chunks if part.strip())
-            if final_text:
-                yield self._workspace_service.format_file_result(
+            formatted_text = (
+                self._workspace_service.format_file_result(
                     display_name, suffix, file_size, final_text
                 )
+                if final_text
+                else None
+            )
             image_result = self._build_image_tool_result(selected_image_paths)
             if image_result is not None:
+                # SDK permission guards retain only the final yielded result.
+                if formatted_text:
+                    image_result.content.insert(
+                        0, mcp.types.TextContent(type="text", text=formatted_text)
+                    )
                 yield image_result
+            elif formatted_text:
+                yield formatted_text
             return
 
         formatted = self._workspace_service.format_word_content(extracted)

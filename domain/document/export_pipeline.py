@@ -16,7 +16,7 @@ from .hooks import (
     run_before_export_hooks,
 )
 from .render_backends import DocumentRenderBackend
-from .render_backends import render_document_with_backends
+from .render_backends import render_document_with_backends_async
 from .session_store import DocumentSessionStore
 
 
@@ -29,7 +29,40 @@ async def export_document_via_pipeline(
     after_export_hooks: list[AfterExportHook] | None = None,
     source: str,
 ) -> tuple[DocumentModel, Path]:
-    document, output_path = store.prepare_export_path(request)
+    with store.export_snapshot(request.document_id) as document:
+        _, output_path = store.prepare_export_path(request)
+        try:
+            return await _export_document_snapshot(
+                store=store,
+                document=document,
+                output_path=output_path,
+                render_backends=render_backends,
+                request=request,
+                before_export_hooks=before_export_hooks,
+                after_export_hooks=after_export_hooks,
+                source=source,
+            )
+        finally:
+            if document._owner_key is not None:
+                # Only the newly allocated private directory may be removed,
+                # and only when empty (failed/cancelled or moved by a hook).
+                try:
+                    output_path.parent.rmdir()
+                except OSError:
+                    pass
+
+
+async def _export_document_snapshot(
+    *,
+    store: DocumentSessionStore,
+    document: DocumentModel,
+    output_path: Path,
+    render_backends: Sequence[DocumentRenderBackend],
+    request: ExportDocumentRequest,
+    before_export_hooks: list[BeforeExportHook] | None,
+    after_export_hooks: list[AfterExportHook] | None,
+    source: str,
+) -> tuple[DocumentModel, Path]:
     logger.debug(
         "[office-assistant] export pipeline prepared document=%s source=%s output=%s",
         document.document_id,
@@ -51,7 +84,7 @@ async def export_document_via_pipeline(
             export_context.document.document_id,
             export_context.output_path,
         )
-    result = render_document_with_backends(
+    result = await render_document_with_backends_async(
         export_context.document,
         export_context.output_path,
         render_backends,
@@ -62,7 +95,7 @@ async def export_document_via_pipeline(
         export_context.output_path,
         result.backend_name,
     )
-    document = store.complete_export(request.document_id)
+    document = store.complete_export(request.document_id, export_context.output_path)
     after_context = AfterExportContext(
         document=document,
         output_path=export_context.output_path,
@@ -78,8 +111,7 @@ async def export_document_via_pipeline(
             after_context.document.document_id,
             after_context.output_path,
         )
-    document.output_path = str(after_context.output_path)
-    document.touch()
+    document = store.complete_export(request.document_id, after_context.output_path)
     logger.debug(
         "[office-assistant] export pipeline finished document=%s output=%s",
         document.document_id,

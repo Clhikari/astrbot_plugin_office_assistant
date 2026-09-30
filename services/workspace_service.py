@@ -1,6 +1,6 @@
 import asyncio
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 try:
@@ -15,6 +15,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..constants import DEFAULT_CHUNK_SIZE, OfficeType
+from ..domain.export_artifacts import EXPORT_DIRECTORY_PREFIX
 from ..utils import (
     ExtractedWordContent,
     extract_excel_text,
@@ -36,15 +37,63 @@ class WorkspaceService:
         office_libs: dict,
         max_file_size: int,
         feature_settings: Mapping[str, bool] | None = None,
+        exported_paths_lookup: Callable[[AstrMessageEvent], Iterable[Path]]
+        | None = None,
     ) -> None:
         self.plugin_data_path = plugin_data_path
         self._executor = executor
         self._office_libs = office_libs
         self._max_file_size = max_file_size
         self._feature_settings = dict(feature_settings or {})
+        self._exported_paths_lookup = exported_paths_lookup
 
     def get_max_file_size(self) -> int:
         return self._max_file_size
+
+    def set_exported_paths_lookup(
+        self, lookup: Callable[[AstrMessageEvent], Iterable[Path]] | None
+    ) -> None:
+        self._exported_paths_lookup = lookup
+
+    def list_exported_paths(self, event: AstrMessageEvent) -> list[Path]:
+        if self._exported_paths_lookup is None:
+            return []
+        base = self.plugin_data_path.resolve()
+        try:
+            paths = {
+                Path(path).resolve() for path in self._exported_paths_lookup(event)
+            }
+            return sorted(
+                path for path in paths if path.is_relative_to(base) and path.is_file()
+            )
+        except Exception as exc:
+            logger.warning(f"[文件管理] 查询当前会话导出文件失败: {exc}")
+            return []
+
+    def check_private_export_access(
+        self, event: AstrMessageEvent, file_path: Path
+    ) -> str | None:
+        base = self.plugin_data_path.resolve()
+        file_path = file_path.resolve()
+        if not file_path.is_relative_to(base):
+            return None
+        relative = file_path.relative_to(base)
+        if not any(
+            part.startswith(EXPORT_DIRECTORY_PREFIX) for part in relative.parts[:-1]
+        ):
+            return None
+        if file_path not in self.list_exported_paths(event):
+            return "错误：权限不足，该导出文件不属于当前用户会话"
+        return None
+
+    @staticmethod
+    def _is_bare_basename(filename: str) -> bool:
+        return (
+            bool(filename)
+            and filename not in {".", ".."}
+            and not any(char in filename for char in "/\\:")
+            and not Path(filename).anchor
+        )
 
     def validate_path(
         self, filename: str, *, allow_external: bool = False
@@ -256,6 +305,36 @@ class WorkspaceService:
         )
         if not valid:
             return False, None, f"错误：{error}"
+
+        if (
+            require_exists
+            and not file_path.exists()
+            and self._is_bare_basename(filename)
+        ):
+            matches = [
+                path
+                for path in self.list_exported_paths(event)
+                if Path(path.name) == Path(filename)
+            ]
+            if len(matches) == 1:
+                file_path = matches[0]
+            elif len(matches) > 1:
+                choices = "\n".join(
+                    f"- {path.relative_to(self.plugin_data_path.resolve()).as_posix()}"
+                    for path in matches
+                )
+                return (
+                    False,
+                    None,
+                    (
+                        f"错误：当前会话有多个名为 '{display_name}' 的导出文件，"
+                        f"请指定工作区相对路径：\n{choices}"
+                    ),
+                )
+
+        private_access_error = self.check_private_export_access(event, file_path)
+        if private_access_error:
+            return False, None, private_access_error
 
         if require_exists and not file_path.exists():
             return (
